@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -180,4 +181,117 @@ func enumChange(a, b profile.FieldProfile) (Detail, bool) {
 		Message: "enum " + strings.Join(parts, " "),
 		Old:     joinSet(sa), New: joinSet(sb),
 	}, true
+}
+
+func index(p profile.ProfileResult) map[string]profile.FieldProfile {
+	m := make(map[string]profile.FieldProfile, len(p.Fields))
+	for _, f := range p.Fields {
+		m[f.Path] = f
+	}
+	return m
+}
+
+// classify produces zero or one Change for a path. a/b are nil when the path is
+// absent from that side.
+func classify(path string, a, b *profile.FieldProfile) (Change, bool) {
+	switch {
+	case a != nil && b == nil:
+		br := guaranteed(*a)
+		msg := "removed (was optional)"
+		if br {
+			msg = "removed (was always-present)"
+		}
+		return Change{Path: path, Kind: Removed, Breaking: br,
+			Details: []Detail{{Reason: ReasonPresence, Breaking: br, Message: msg, Old: pct(a.PresenceRate), New: "-"}}}, true
+	case a == nil && b != nil:
+		return Change{Path: path, Kind: Added, Breaking: false,
+			Details: []Detail{{Reason: ReasonPresence, Breaking: false, Message: "new field", Old: "-", New: pct(b.PresenceRate)}}}, true
+	default:
+		var details []Detail
+		if d, ok := typeChange(*a, *b); ok {
+			details = append(details, d)
+		}
+		if d, ok := presenceChange(*a, *b); ok {
+			details = append(details, d)
+		}
+		if d, ok := enumChange(*a, *b); ok {
+			details = append(details, d)
+		}
+		if len(details) == 0 {
+			return Change{}, false
+		}
+		br := false
+		for _, d := range details {
+			if d.Breaking {
+				br = true
+			}
+		}
+		return Change{Path: path, Kind: Changed, Breaking: br, Details: details}, true
+	}
+}
+
+// Diff compares two profiles into a DiffResult. Breaking is judged from the
+// perspective of a consumer built for old data meeting new data.
+func Diff(old, new profile.ProfileResult) DiffResult {
+	ia, ib := index(old), index(new)
+	seen := map[string]bool{}
+	var paths []string
+	for p := range ia {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	for p := range ib {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+
+	res := DiffResult{Old: old.Source, New: new.Source, Compared: len(paths)}
+	for _, p := range paths {
+		var a, b *profile.FieldProfile
+		if f, ok := ia[p]; ok {
+			a = &f
+		}
+		if f, ok := ib[p]; ok {
+			b = &f
+		}
+		ch, ok := classify(p, a, b)
+		if !ok {
+			continue
+		}
+		res.Changes = append(res.Changes, ch)
+		switch ch.Kind {
+		case Added:
+			res.Added++
+		case Removed:
+			res.Removed++
+		case Changed:
+			res.Changed++
+		}
+		if ch.Breaking {
+			res.Breaking++
+		}
+	}
+	res.Caveats = caveats(old, new)
+	return res
+}
+
+// caveats warns when the two profiles may not be soundly comparable.
+func caveats(old, new profile.ProfileResult) []string {
+	var cs []string
+	if old.Skipped > 0 || new.Skipped > 0 {
+		cs = append(cs, fmt.Sprintf("skipped lines (old=%d, new=%d): removed/dropped-type signals may be parse artifacts", old.Skipped, new.Skipped))
+	}
+	lo, hi := old.Records, new.Records
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	if lo > 0 && hi >= lo*100 {
+		cs = append(cs, fmt.Sprintf("record counts differ widely (old=%d, new=%d): set differences may reflect sample size, not a real change", old.Records, new.Records))
+	}
+	return cs
 }

@@ -96,3 +96,73 @@ func TestEnumSuppressedWhenIncomplete(t *testing.T) {
 		t.Fatal("enum change must be suppressed when a side is not a proven complete set")
 	}
 }
+
+func result(src string, fields ...profile.FieldProfile) profile.ProfileResult {
+	return profile.ProfileResult{Source: src, Records: 10, Fields: fields}
+}
+
+func changeFor(d DiffResult, path string) (Change, bool) {
+	for _, c := range d.Changes {
+		if c.Path == path {
+			return c, true
+		}
+	}
+	return Change{}, false
+}
+
+func TestDiffRemovedAddedChanged(t *testing.T) {
+	old := result("old",
+		fp("id", func(f *profile.FieldProfile) { f.TypeDist[profile.KindInt] = 1 }),
+		fp("email", func(f *profile.FieldProfile) { f.TypeDist[profile.KindString] = 1 }),
+	)
+	new := result("new",
+		fp("id", func(f *profile.FieldProfile) { f.TypeDist[profile.KindInt] = 0.5; f.TypeDist[profile.KindString] = 0.5 }),
+		fp("nickname", func(f *profile.FieldProfile) { f.TypeDist[profile.KindString] = 1 }),
+	)
+	d := Diff(old, new)
+	if d.Removed != 1 || d.Added != 1 || d.Changed != 1 {
+		t.Fatalf("counts: removed=%d added=%d changed=%d, want 1/1/1", d.Removed, d.Added, d.Changed)
+	}
+	email, _ := changeFor(d, "email")
+	if email.Kind != Removed || !email.Breaking {
+		t.Errorf("email = %+v, want removed+breaking (was always-present)", email)
+	}
+	nick, _ := changeFor(d, "nickname")
+	if nick.Kind != Added || nick.Breaking {
+		t.Errorf("nickname = %+v, want added+safe", nick)
+	}
+	id, _ := changeFor(d, "id")
+	if id.Kind != Changed || !id.Breaking {
+		t.Errorf("id = %+v, want changed+breaking (type added)", id)
+	}
+	if d.Breaking != 2 {
+		t.Errorf("breaking = %d, want 2 (email + id)", d.Breaking)
+	}
+}
+
+func TestDiffOptionalFieldRemovalIsSafe(t *testing.T) {
+	old := result("old", fp("opt", func(f *profile.FieldProfile) { f.PresenceRate = 0.4; f.TypeDist[profile.KindString] = 1 }))
+	new := result("new", fp("keep", func(f *profile.FieldProfile) { f.TypeDist[profile.KindString] = 1 }))
+	d := Diff(old, new)
+	opt, _ := changeFor(d, "opt")
+	if opt.Kind != Removed || opt.Breaking {
+		t.Errorf("optional removal must be non-breaking, got %+v", opt)
+	}
+}
+
+func TestDiffNoChangeOnIdenticalProfiles(t *testing.T) {
+	p := result("same", fp("id", func(f *profile.FieldProfile) { f.TypeDist[profile.KindInt] = 1 }))
+	d := Diff(p, p)
+	if len(d.Changes) != 0 || d.Breaking != 0 {
+		t.Errorf("identical profiles must diff clean, got %+v", d)
+	}
+}
+
+func TestDiffCaveats(t *testing.T) {
+	old := profile.ProfileResult{Source: "old", Records: 5, Skipped: 3}
+	new := profile.ProfileResult{Source: "new", Records: 5000}
+	d := Diff(old, new)
+	if len(d.Caveats) < 2 {
+		t.Errorf("expected skipped + count-mismatch caveats, got %v", d.Caveats)
+	}
+}
