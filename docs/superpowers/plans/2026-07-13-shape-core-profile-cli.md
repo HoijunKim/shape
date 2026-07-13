@@ -618,10 +618,6 @@ func (a *fieldAccumulator) AddValue(o Observation) {
 		}
 		a.haveLen = true
 		a.addCount(o.Str)
-	case KindBool:
-		if o.Num != 0 { // unused for bool; keep key explicit
-		}
-		a.addCount(boolKey(o))
 	}
 }
 
@@ -686,16 +682,9 @@ func topValues(counts map[string]int, k int) []ValueCount {
 func numKey(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
-
-func boolKey(o Observation) string {
-	if o.Num != 0 {
-		return "true"
-	}
-	return "bool"
-}
 ```
 
-Note: the `KindBool` value is not carried on `Observation` as a boolean, so bool top-values are coarse in v1. That is acceptable; string/number fields (the common profiling targets) are exact. Do not add a bool field to `Observation` for this - YAGNI.
+Note: bool fields get a type distribution and presence but no top-value counts in v1 (the common profiling targets are string/number fields, which are exact). Do not add a bool field to `Observation` for this - YAGNI.
 
 - [ ] **Step 4: Run test to verify it passes**
 
