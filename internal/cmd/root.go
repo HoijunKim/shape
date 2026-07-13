@@ -15,6 +15,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.SetVersionTemplate("shape version {{.Version}}\n")
+	root.AddCommand(newProfileCmd())
 	return root
 }
 
