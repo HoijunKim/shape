@@ -53,3 +53,14 @@ func TestFlattenRootScalar(t *testing.T) {
 		t.Errorf("root scalar kind = %s, want int", got["$"])
 	}
 }
+
+func TestFlattenRootArray(t *testing.T) {
+	got := map[string]JSONKind{}
+	Flatten(decode(t, `[1,2,3]`), func(o Observation) { got[o.Path] = o.Kind })
+	if got["$"] != KindArray {
+		t.Errorf("root array container kind at $ = %s, want array", got["$"])
+	}
+	if got["[]"] != KindInt {
+		t.Errorf("root array element kind at [] = %s, want int", got["[]"])
+	}
+}

@@ -15,6 +15,8 @@ type Observation struct {
 }
 
 // Flatten walks a decoded record and emits an Observation per path node.
+// If the record itself is an array, its container observation is emitted
+// at path "$" and its elements are emitted under path "[]".
 func Flatten(record any, emit func(Observation)) {
 	walk("", record, emit)
 }
