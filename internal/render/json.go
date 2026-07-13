@@ -18,14 +18,17 @@ func JSON(w io.Writer, res profile.ProfileResult) error {
 		Max           *float64           `json:"max,omitempty"`
 		DistinctCount int                `json:"distinct_count"`
 		DistinctExact bool               `json:"distinct_exact"`
+		StrLenMin     *int               `json:"str_len_min,omitempty"`
+		StrLenMax     *int               `json:"str_len_max,omitempty"`
 		Drift         bool               `json:"drift"`
 		Top           []map[string]any   `json:"top_values,omitempty"`
 	}
 	out := struct {
+		Source  string  `json:"source,omitempty"`
 		Records int     `json:"records"`
 		Skipped int     `json:"skipped"`
 		Fields  []field `json:"fields"`
-	}{Records: res.Records, Skipped: res.Skipped}
+	}{Source: res.Source, Records: res.Records, Skipped: res.Skipped}
 
 	for _, f := range res.Fields {
 		types := map[string]float64{}
@@ -40,6 +43,7 @@ func JSON(w io.Writer, res profile.ProfileResult) error {
 			Path: f.Path, Presence: f.PresenceRate, Types: types,
 			NullRate: f.NullRate, Min: f.Min, Max: f.Max,
 			DistinctCount: f.DistinctCount, DistinctExact: f.DistinctExact,
+			StrLenMin: f.StrLenMin, StrLenMax: f.StrLenMax,
 			Drift: profile.IsTypeDrift(f), Top: top,
 		})
 	}

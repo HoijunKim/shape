@@ -10,6 +10,9 @@ import (
 
 // Table writes a human-readable profile table to w.
 func Table(w io.Writer, res profile.ProfileResult) {
+	if res.Source != "" {
+		fmt.Fprintf(w, "source: %s\n", res.Source)
+	}
 	fmt.Fprintf(w, "records: %d", res.Records)
 	if res.Skipped > 0 {
 		fmt.Fprintf(w, "  skipped: %d", res.Skipped)
@@ -37,12 +40,12 @@ func typesLabel(f profile.FieldProfile) string {
 	best := ""
 	var bestFrac float64
 	for k, frac := range f.TypeDist {
-		if frac > bestFrac {
+		if frac > bestFrac || (frac == bestFrac && (best == "" || string(k) < best)) {
 			bestFrac, best = frac, string(k)
 		}
 	}
 	if len(f.TypeDist) > 1 {
-		return fmt.Sprintf("%s..", best)
+		return best + ".."
 	}
 	return best
 }

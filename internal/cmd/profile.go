@@ -69,7 +69,7 @@ func openSource(src string) (io.Reader, []byte, func(), error) {
 	}
 	f, err := os.Open(src)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open %s: %w", src, err)
+		return nil, nil, nil, err
 	}
 	peek := make([]byte, 512)
 	n, _ := f.Read(peek)

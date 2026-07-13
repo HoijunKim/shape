@@ -138,6 +138,10 @@ func (s *Stream) nextWhole() (any, error) {
 
 // decodeSingleAfterToken reconstructs a single non-array document whose first
 // token has already been consumed.
+// Implementation note: WholeMode covers the common cases (top-level array,
+// single object). UseNumber() is a per-decoder setting inherited by nested
+// Decode calls, so numbers at every depth are preserved as json.Number.
+// NDJSON line values likewise preserve json.Number via the per-line decoder.
 func (s *Stream) decodeSingleAfterToken(tok json.Token) (any, error) {
 	s.done = true
 	switch t := tok.(type) {

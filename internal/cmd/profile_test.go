@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -38,5 +39,21 @@ func TestProfileJSONFromFile(t *testing.T) {
 	}
 	if parsed["records"].(float64) != 3 {
 		t.Errorf("records = %v, want 3", parsed["records"])
+	}
+}
+
+func TestProfileFromStdin(t *testing.T) {
+	f, err := os.Open("testdata/sample.ndjson")
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	defer f.Close()
+	old := os.Stdin
+	os.Stdin = f
+	defer func() { os.Stdin = old }()
+
+	out := runProfile(t, "-")
+	if !strings.Contains(out, "records: 3") {
+		t.Errorf("expected 3 records from stdin:\n%s", out)
 	}
 }

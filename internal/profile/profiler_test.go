@@ -61,3 +61,12 @@ func TestIsTypeDrift(t *testing.T) {
 		t.Errorf("int + float should count as one number type, not drift")
 	}
 }
+
+func TestProfilerSkipped(t *testing.T) {
+	p := NewProfiler()
+	p.AddSkipped(2)
+	p.AddSkipped(3)
+	if got := p.Result().Skipped; got != 5 {
+		t.Errorf("Skipped = %d, want 5", got)
+	}
+}
