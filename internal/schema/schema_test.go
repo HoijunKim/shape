@@ -168,3 +168,45 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+func TestSchemaNullableEnum(t *testing.T) {
+	// 2 distinct string values + null -> enum incl. null, type [string,null].
+	s := build(t,
+		`{"status":"open"}`,
+		`{"status":"closed"}`,
+		`{"status":null}`,
+		`{"status":"open"}`,
+	)
+	st := props(t, s)["status"].(map[string]any)
+	ty, ok := st["type"].([]any)
+	if !ok || len(ty) != 2 || ty[0] != "string" || ty[1] != "null" {
+		t.Errorf("status type = %v, want [string null]", st["type"])
+	}
+	en, ok := st["enum"].([]any)
+	if !ok {
+		t.Fatalf("status enum missing: %v", st)
+	}
+	var hasNull, hasOpen, hasClosed bool
+	for _, v := range en {
+		switch v {
+		case nil:
+			hasNull = true
+		case "open":
+			hasOpen = true
+		case "closed":
+			hasClosed = true
+		}
+	}
+	if !hasNull || !hasOpen || !hasClosed {
+		t.Errorf("enum = %v, want open, closed, and null", en)
+	}
+}
+
+func TestSchemaNoEnumSingleValue(t *testing.T) {
+	// one distinct value is a const-like over-claim, not an enum.
+	s := build(t, `{"k":"x"}`, `{"k":"x"}`)
+	k := props(t, s)["k"].(map[string]any)
+	if _, has := k["enum"]; has {
+		t.Errorf("single-value field must not get enum, got %v", k["enum"])
+	}
+}

@@ -120,9 +120,10 @@ func buildBranch(t string, n *node, records int, sole bool) map[string]any {
 }
 
 // enumOK reports whether the profiler retained the field's COMPLETE distinct
-// value set, so an enum can be listed soundly.
+// value set and it has at least two members (a single distinct value is a
+// const-like over-claim from the sample, not a useful enum).
 func enumOK(fp *profile.FieldProfile) bool {
-	return fp.DistinctExact && fp.DistinctCount > 0 &&
+	return fp.DistinctExact && fp.DistinctCount >= 2 &&
 		fp.DistinctCount == len(fp.TopValues)
 }
 
