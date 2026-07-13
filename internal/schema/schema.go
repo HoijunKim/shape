@@ -88,10 +88,20 @@ func buildBranch(t string, n *node, records int, sole bool) map[string]any {
 	switch t {
 	case "object":
 		ps := map[string]any{}
+		var required []string
+		selfPresent := presentCount(n, records)
 		for _, k := range sortedKeys(n.props) {
-			ps[k] = nodeToSchema(n.props[k], records)
+			child := n.props[k]
+			ps[k] = nodeToSchema(child, records)
+			if !n.underArr && records > 0 && presentCount(child, records) >= selfPresent {
+				required = append(required, k)
+			}
 		}
-		return map[string]any{"type": "object", "properties": ps}
+		b := map[string]any{"type": "object", "properties": ps}
+		if len(required) > 0 {
+			b["required"] = required // already in sorted-key order
+		}
+		return b
 	case "array":
 		b := map[string]any{"type": "array"}
 		if n.elem != nil {
@@ -144,6 +154,15 @@ func combine(branches []map[string]any, nullable bool) map[string]any {
 		return branches[0]
 	}
 	return map[string]any{"anyOf": branches}
+}
+
+// presentCount rounds a node's observed presence to a record count. The
+// synthetic root object (nil profile) is present in every record.
+func presentCount(n *node, records int) int {
+	if n.profile == nil {
+		return records
+	}
+	return int(n.profile.PresenceRate*float64(records) + 0.5)
 }
 
 func sortedKeys(m map[string]*node) []string {

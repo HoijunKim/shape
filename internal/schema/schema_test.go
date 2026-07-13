@@ -94,3 +94,53 @@ func TestSchemaEmptyArrayNoItems(t *testing.T) {
 		t.Errorf("empty array must not emit items, got %v", tags["items"])
 	}
 }
+
+func TestSchemaRequiredParentConditional(t *testing.T) {
+	// id present in all 3; email present in 2 of 3 -> only id required.
+	s := build(t,
+		`{"id":1,"email":"a@b.c"}`,
+		`{"id":2,"email":null}`,
+		`{"id":3}`,
+	)
+	req := toStrings(s["required"])
+	if !contains(req, "id") {
+		t.Errorf("required = %v, want id", req)
+	}
+	if contains(req, "email") {
+		t.Errorf("required = %v, must not contain email (present 2 of 3)", req)
+	}
+}
+
+func TestSchemaRequiredSuppressedInArray(t *testing.T) {
+	// item objects live under items[]; their fields must never be required.
+	s := build(t, `{"items":[{"sku":"a"},{"sku":"b"}]}`)
+	items := props(t, s)["items"].(map[string]any)
+	elem := items["items"].(map[string]any)
+	if _, has := elem["required"]; has {
+		t.Errorf("array-element object must not carry required, got %v", elem["required"])
+	}
+}
+
+func toStrings(v any) []string {
+	out := []string{}
+	if arr, ok := v.([]string); ok {
+		return arr
+	}
+	if arr, ok := v.([]any); ok {
+		for _, x := range arr {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
