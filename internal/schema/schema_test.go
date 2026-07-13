@@ -121,6 +121,30 @@ func TestSchemaRequiredSuppressedInArray(t *testing.T) {
 	}
 }
 
+func TestSchemaEnumClosedSet(t *testing.T) {
+	// status has 2 distinct values across 4 records -> closed set -> enum.
+	s := build(t,
+		`{"status":"open"}`,
+		`{"status":"closed"}`,
+		`{"status":"open"}`,
+		`{"status":"closed"}`,
+	)
+	st := props(t, s)["status"].(map[string]any)
+	en := toStrings(st["enum"])
+	if len(en) != 2 || en[0] != "closed" || en[1] != "open" {
+		t.Errorf("enum = %v, want [closed open] sorted", st["enum"])
+	}
+}
+
+func TestSchemaNoEnumOnDrift(t *testing.T) {
+	// id drifts int/string -> never an enum.
+	s := build(t, `{"id":1}`, `{"id":"two"}`)
+	id := props(t, s)["id"].(map[string]any)
+	if _, has := id["enum"]; has {
+		t.Errorf("drifting field must not get enum, got %v", id["enum"])
+	}
+}
+
 func toStrings(v any) []string {
 	out := []string{}
 	if arr, ok := v.([]string); ok {

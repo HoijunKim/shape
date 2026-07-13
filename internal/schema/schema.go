@@ -108,14 +108,44 @@ func buildBranch(t string, n *node, records int, sole bool) map[string]any {
 			b["items"] = nodeToSchema(n.elem, records)
 		}
 		return b
+	case "string":
+		b := map[string]any{"type": "string"}
+		if sole && n.profile != nil && enumOK(n.profile) {
+			b["enum"] = enumValues(n.profile)
+		}
+		return b
 	default:
 		return map[string]any{"type": t}
 	}
 }
 
+// enumOK reports whether the profiler retained the field's COMPLETE distinct
+// value set, so an enum can be listed soundly.
+func enumOK(fp *profile.FieldProfile) bool {
+	return fp.DistinctExact && fp.DistinctCount > 0 &&
+		fp.DistinctCount == len(fp.TopValues)
+}
+
+// enumValues returns the sorted distinct string values as schema enum members.
+func enumValues(fp *profile.FieldProfile) []any {
+	vals := make([]string, 0, len(fp.TopValues))
+	for _, v := range fp.TopValues {
+		vals = append(vals, v.Value)
+	}
+	sort.Strings(vals)
+	out := make([]any, len(vals))
+	for i, v := range vals {
+		out[i] = v
+	}
+	return out
+}
+
 // combine merges concrete-type branches and an optional null into one schema.
-// Bare {"type": X} branches collapse into a single type array; anything richer
-// (object/array/enum) is kept as its own branch under anyOf.
+// Bare {"type": X} branches collapse into a single type array. A single
+// enum-bearing branch collapses alongside them too: null is added to the enum
+// members whenever null is one of the collapsed types, so the schema does not
+// reject the null values that justified the type union. Anything richer
+// (object/array) is kept as its own branch under anyOf.
 func combine(branches []map[string]any, nullable bool) map[string]any {
 	if nullable {
 		branches = append(branches, map[string]any{"type": "null"})
@@ -124,20 +154,39 @@ func combine(branches []map[string]any, nullable bool) map[string]any {
 		return map[string]any{}
 	}
 	types := make([]string, 0, len(branches))
+	var enum []any
 	allSimple := true
 	for _, b := range branches {
-		if len(b) == 1 {
-			if t, ok := b["type"].(string); ok {
-				types = append(types, t)
-				continue
-			}
+		t, hasType := b["type"].(string)
+		if !hasType {
+			allSimple = false
+			break
 		}
-		allSimple = false
-		break
+		want := 1
+		if e, ok := b["enum"].([]any); ok && enum == nil {
+			enum = e
+			want = 2
+		}
+		if len(b) != want {
+			allSimple = false
+			break
+		}
+		types = append(types, t)
 	}
 	if allSimple {
+		if enum != nil {
+			for _, t := range types {
+				if t == "null" {
+					enum = append(enum, nil)
+				}
+			}
+		}
 		if len(types) == 1 {
-			return map[string]any{"type": types[0]}
+			out := map[string]any{"type": types[0]}
+			if enum != nil {
+				out["enum"] = enum
+			}
+			return out
 		}
 		set := map[string]bool{}
 		for _, t := range types {
@@ -148,7 +197,11 @@ func combine(branches []map[string]any, nullable bool) map[string]any {
 		for i, t := range ordered {
 			arr[i] = t
 		}
-		return map[string]any{"type": arr}
+		out := map[string]any{"type": arr}
+		if enum != nil {
+			out["enum"] = enum
+		}
+		return out
 	}
 	if len(branches) == 1 {
 		return branches[0]
