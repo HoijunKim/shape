@@ -1,6 +1,8 @@
 package diff
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/profile"
@@ -164,5 +166,60 @@ func TestDiffCaveats(t *testing.T) {
 	d := Diff(old, new)
 	if len(d.Caveats) < 2 {
 		t.Errorf("expected skipped + count-mismatch caveats, got %v", d.Caveats)
+	}
+}
+
+func TestDiffEmptyBaselineCaveat(t *testing.T) {
+	old := profile.ProfileResult{Source: "old", Records: 0}
+	new := result("new", fp("id", func(f *profile.FieldProfile) { f.TypeDist[profile.KindInt] = 1 }))
+	d := Diff(old, new)
+	found := false
+	for _, c := range d.Caveats {
+		if strings.Contains(c, "0 records") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("empty baseline must emit a caveat, got %v", d.Caveats)
+	}
+}
+
+func TestDiffNumericFieldNoEnumChange(t *testing.T) {
+	// A numeric low-cardinality field whose value set rotates is NOT an enum
+	// and must not produce any change (both sides are "number").
+	mk := func(src string, vals ...int64) profile.ProfileResult {
+		f := fp("n", func(f *profile.FieldProfile) {
+			f.TypeDist[profile.KindInt] = 1
+			f.DistinctExact = true
+			f.DistinctCount = len(vals)
+			for _, v := range vals {
+				f.TopValues = append(f.TopValues, profile.ValueCount{Value: strconv.FormatInt(v, 10), Count: 1})
+			}
+		})
+		return result(src, f)
+	}
+	d := Diff(mk("old", 1, 2), mk("new", 3, 4))
+	if ch, ok := changeFor(d, "n"); ok {
+		t.Errorf("numeric field with rotated values must not diff (no enum), got %+v", ch)
+	}
+}
+
+func TestDiffEnumTruncatedNotFlagged(t *testing.T) {
+	// 11 distinct string values exceed the TopValues cap (10), so DistinctCount
+	// != len(TopValues) and no enum verdict may be made.
+	mk := func(src string, n int) profile.ProfileResult {
+		f := fp("s", func(f *profile.FieldProfile) {
+			f.TypeDist[profile.KindString] = 1
+			f.DistinctExact = true
+			f.DistinctCount = n
+			for i := 0; i < n && i < 10; i++ {
+				f.TopValues = append(f.TopValues, profile.ValueCount{Value: strconv.Itoa(i), Count: 1})
+			}
+		})
+		return result(src, f)
+	}
+	d := Diff(mk("old", 11), mk("new", 11))
+	if _, ok := changeFor(d, "s"); ok {
+		t.Errorf("11-distinct field exceeds the TopValues cap; must not produce an enum change")
 	}
 }

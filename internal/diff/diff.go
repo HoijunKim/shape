@@ -146,9 +146,32 @@ func presenceChange(a, b profile.FieldProfile) (Detail, bool) {
 	}
 }
 
-// completeEnum reports whether the profiler proved a complete small (>=2) value set.
+// completeEnum reports whether the profiler proved a complete small value set.
+// The profiler caps TopValues at 10 (accumulator.topValues), so
+// DistinctCount == len(TopValues) can only hold for 2..10 distinct values;
+// enum-member changes on fields with more than 10 distinct values are
+// intentionally not asserted (fail-safe: no false breaks from large/free-text
+// fields). If that cap changes, this window changes with it.
 func completeEnum(fp profile.FieldProfile) bool {
 	return fp.DistinctExact && fp.DistinctCount >= 2 && fp.DistinctCount == len(fp.TopValues)
+}
+
+// pureString reports whether the field's only non-null value type is string, so
+// its value set is a real categorical/enum (not a numeric or mixed-type field
+// that merely happens to have few distinct values).
+func pureString(fp profile.FieldProfile) bool {
+	hasString, only := false, true
+	for k, frac := range fp.TypeDist {
+		if frac <= 0 || k == profile.KindNull {
+			continue
+		}
+		if k == profile.KindString {
+			hasString = true
+		} else {
+			only = false
+		}
+	}
+	return hasString && only
 }
 
 func valueSet(fp profile.FieldProfile) map[string]bool {
@@ -160,7 +183,7 @@ func valueSet(fp profile.FieldProfile) map[string]bool {
 }
 
 func enumChange(a, b profile.FieldProfile) (Detail, bool) {
-	if !(completeEnum(a) && completeEnum(b)) {
+	if !(completeEnum(a) && completeEnum(b) && pureString(a) && pureString(b)) {
 		return Detail{}, false
 	}
 	sa, sb := valueSet(a), valueSet(b)
@@ -290,7 +313,10 @@ func caveats(old, new profile.ProfileResult) []string {
 	if lo > hi {
 		lo, hi = hi, lo
 	}
-	if lo > 0 && hi >= lo*100 {
+	switch {
+	case lo == 0 && hi > 0:
+		cs = append(cs, fmt.Sprintf("one side has 0 records (old=%d, new=%d): the comparison may be meaningless", old.Records, new.Records))
+	case lo > 0 && hi >= lo*100:
 		cs = append(cs, fmt.Sprintf("record counts differ widely (old=%d, new=%d): set differences may reflect sample size, not a real change", old.Records, new.Records))
 	}
 	return cs
