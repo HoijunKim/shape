@@ -176,6 +176,10 @@ func combine(branches []map[string]any, nullable bool) map[string]any {
 	}
 	if allSimple {
 		if enum != nil {
+			// Fold null into the enum members: a nullable enum must list null or
+			// null could never validate. Only one string branch can carry an
+			// enum (the sole-type gate) and combine appends at most one "null"
+			// branch, so nil is added exactly once.
 			for _, t := range types {
 				if t == "null" {
 					enum = append(enum, nil)

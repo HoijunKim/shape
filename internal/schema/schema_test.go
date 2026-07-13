@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -208,5 +209,20 @@ func TestSchemaNoEnumSingleValue(t *testing.T) {
 	k := props(t, s)["k"].(map[string]any)
 	if _, has := k["enum"]; has {
 		t.Errorf("single-value field must not get enum, got %v", k["enum"])
+	}
+}
+
+func TestSchemaNoEnumWhenTruncated(t *testing.T) {
+	// More distinct values than the profiler's top-values cap (10): the full
+	// distinct set was NOT retained, so no enum may be emitted (would be an
+	// incomplete closed set). Guarded by DistinctCount == len(TopValues).
+	recs := make([]string, 0, 15)
+	for i := 0; i < 15; i++ {
+		recs = append(recs, fmt.Sprintf(`{"k":"v%d"}`, i))
+	}
+	s := build(t, recs...)
+	k := props(t, s)["k"].(map[string]any)
+	if _, has := k["enum"]; has {
+		t.Errorf("field with 15 distinct values (> top-10 cap) must not get enum, got %v", k["enum"])
 	}
 }
