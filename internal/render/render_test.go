@@ -35,6 +35,24 @@ func TestTableMarksDrift(t *testing.T) {
 	}
 }
 
+func TestTableApproximateDistinctMarker(t *testing.T) {
+	res := profile.ProfileResult{
+		Records: 100000,
+		Fields: []profile.FieldProfile{
+			{Path: "id", PresenceRate: 1, TypeDist: map[profile.JSONKind]float64{profile.KindString: 1}, DistinctCount: 98765, DistinctExact: false},
+		},
+	}
+	var b bytes.Buffer
+	Table(&b, res)
+	out := b.String()
+	if !strings.Contains(out, "~98765") {
+		t.Errorf("approximate distinct should render as ~98765, got:\n%s", out)
+	}
+	if strings.Contains(out, "98765+") {
+		t.Errorf("must not use the misleading '+' suffix for an estimate:\n%s", out)
+	}
+}
+
 func TestJSONStableShape(t *testing.T) {
 	var b bytes.Buffer
 	if err := JSON(&b, sample()); err != nil {

@@ -28,7 +28,7 @@ func Table(w io.Writer, res profile.ProfileResult) {
 		}
 		distinct := fmt.Sprintf("%d", f.DistinctCount)
 		if !f.DistinctExact {
-			distinct += "+"
+			distinct = "~" + distinct // approximate estimate (HyperLogLog)
 		}
 		fmt.Fprintf(tw, "%s\t%.0f%%\t%s\t%.0f%%\t%s\t%s\n",
 			f.Path, f.PresenceRate*100, typesLabel(f), f.NullRate*100, distinct, drift)
