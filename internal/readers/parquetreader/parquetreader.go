@@ -12,6 +12,8 @@ import (
 
 var _ readers.RecordStream = (*stream)(nil)
 
+const batchSize = 256
+
 func init() {
 	readers.Register(readers.FormatParquet, open)
 }
@@ -37,7 +39,7 @@ func open(s readers.Source) (readers.RecordStream, func() error, error) {
 		return nil, nil, fmt.Errorf("open parquet %s: %w", s.Path, err)
 	}
 	gr := parquet.NewGenericReader[any](pf)
-	st := &stream{gr: gr, buf: make([]any, 256)}
+	st := &stream{gr: gr, buf: make([]any, batchSize)}
 	cleanup := func() error {
 		return errors.Join(gr.Close(), f.Close())
 	}
@@ -74,6 +76,9 @@ func (s *stream) Next() (any, error) {
 				continue
 			}
 			return nil, err
+		}
+		if n == 0 {
+			s.done = true // defensive: a (0, nil) read would otherwise spin
 		}
 	}
 }

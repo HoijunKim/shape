@@ -123,3 +123,43 @@ func TestParquetNestedConversion(t *testing.T) {
 		t.Errorf("tags list conversion wrong: %v (%T)", m["tags"], m["tags"])
 	}
 }
+
+func TestParquetMultiBatch(t *testing.T) {
+	const n = 1000 // > batchSize (256) -> multiple Read calls + a final partial batch
+	rows := make([]fixtureRow, n)
+	for i := range rows {
+		rows[i] = fixtureRow{ID: int64(i), Name: "x", Active: true}
+	}
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[fixtureRow](&buf)
+	if _, err := w.Write(rows); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	path := t.TempDir() + "/multi.parquet"
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	s, cleanup, err := readers.Open(readers.FormatParquet, readers.Source{Path: path})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer cleanup()
+	count := 0
+	for {
+		_, err := s.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("next: %v", err)
+		}
+		count++
+	}
+	if count != n {
+		t.Errorf("read %d rows, want %d (multi-batch must not drop the last batch)", count, n)
+	}
+}
