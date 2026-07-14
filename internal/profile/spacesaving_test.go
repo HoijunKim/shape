@@ -39,6 +39,9 @@ func TestSpaceSavingDeterministicEviction(t *testing.T) {
 	if _, ok := s.counters["c"]; !ok {
 		t.Error("new key 'c' should be present after eviction")
 	}
+	if c := s.counters["c"]; c.count != 2 || c.err != 1 {
+		t.Errorf("reused slot for c: count=%d err=%d, want count=2 err=1", c.count, c.err)
+	}
 }
 
 func TestSpaceSavingTopOrdering(t *testing.T) {

@@ -93,3 +93,18 @@ func TestAccumulatorPromotedKeepsHeavyHitter(t *testing.T) {
 		t.Errorf("DistinctCount %d must not be below len(TopValues) %d", fp.DistinctCount, len(fp.TopValues))
 	}
 }
+
+func TestAccumulatorPromotedUniformNoFalseTop(t *testing.T) {
+	a := newFieldAccumulator("id", 16)
+	for i := 0; i < 200; i++ { // all unique -> promotes, no real heavy hitter
+		a.AddValue(Observation{Path: "id", Kind: KindString, Str: fmt.Sprintf("u-%d", i)})
+		a.MarkPresent()
+	}
+	fp := a.Result(200)
+	if fp.DistinctExact {
+		t.Fatal("should have promoted")
+	}
+	if len(fp.TopValues) != 0 {
+		t.Errorf("a uniform field has no repeated heavy hitters; TopValues must be empty, got %v", fp.TopValues)
+	}
+}

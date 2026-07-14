@@ -152,7 +152,7 @@ func (a *fieldAccumulator) Result(totalRecords int) FieldProfile {
 		fp.StrLenMin, fp.StrLenMax = &mn, &mx
 	}
 	if a.promoted {
-		top := a.ss.top(10)
+		top := a.ss.heavyTop(10)
 		est := a.hll.estimate()
 		if est < len(top) {
 			est = len(top) // never report fewer distinct than the top values shown

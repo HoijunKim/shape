@@ -69,3 +69,27 @@ func (s *spaceSaving) top(k int) []ValueCount {
 	}
 	return vs
 }
+
+// heavyTop returns the top-k values whose GUARANTEED frequency (count - err) is
+// at least 2. On a promoted (approximate) field this drops eviction noise and
+// once-seen values, so top values are reported only for genuine repeated heavy
+// hitters rather than insertion-order artifacts.
+func (s *spaceSaving) heavyTop(k int) []ValueCount {
+	vs := make([]ValueCount, 0, len(s.counters))
+	for _, c := range s.counters {
+		if c.count-c.err <= 1 {
+			continue
+		}
+		vs = append(vs, ValueCount{Value: c.value, Count: c.count})
+	}
+	sort.Slice(vs, func(i, j int) bool {
+		if vs[i].Count != vs[j].Count {
+			return vs[i].Count > vs[j].Count
+		}
+		return vs[i].Value < vs[j].Value
+	})
+	if len(vs) > k {
+		vs = vs[:k]
+	}
+	return vs
+}
