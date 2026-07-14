@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"log"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -13,7 +14,7 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
-	_ = wails.Run(&options.App{
+	if err := wails.Run(&options.App{
 		Title:  "shape",
 		Width:  1100,
 		Height: 760,
@@ -25,5 +26,7 @@ func main() {
 			EnableFileDrop: true,
 		},
 		Bind: []any{app},
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 }

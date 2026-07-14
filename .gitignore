@@ -9,3 +9,4 @@ gui/frontend/dist/*
 gui/frontend/node_modules/
 gui/frontend/wailsjs/
 gui/frontend/package.json.md5
+gui/frontend/.vscode/
