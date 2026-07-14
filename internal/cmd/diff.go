@@ -69,7 +69,7 @@ func newDiffCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&failOn, "fail-on", "breaking", "exit 1 on: breaking|any|none")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
-	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson|csv")
+	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson|csv|parquet")
 	cmd.Flags().BoolVar(&csvRaw, "csv-raw", false, "read CSV cells as raw strings (no type inference)")
 	return cmd
 }

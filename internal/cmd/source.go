@@ -9,8 +9,9 @@ import (
 
 	"github.com/hoijun-kim/shape/internal/profile"
 	"github.com/hoijun-kim/shape/internal/readers"
-	_ "github.com/hoijun-kim/shape/internal/readers/csvreader"  // register csv
-	_ "github.com/hoijun-kim/shape/internal/readers/jsonreader" // register json
+	_ "github.com/hoijun-kim/shape/internal/readers/csvreader"     // register csv
+	_ "github.com/hoijun-kim/shape/internal/readers/jsonreader"    // register json
+	_ "github.com/hoijun-kim/shape/internal/readers/parquetreader" // register parquet
 )
 
 // profileSource opens src (file path or "-"), detects the format, streams the

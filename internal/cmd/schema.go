@@ -35,7 +35,7 @@ func newSchemaCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&out, "out", "o", "", "write the schema to a file instead of stdout")
-	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson|csv")
+	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson|csv|parquet")
 	cmd.Flags().BoolVar(&csvRaw, "csv-raw", false, "read CSV cells as raw strings (no type inference)")
 	return cmd
 }
