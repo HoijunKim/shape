@@ -1,6 +1,7 @@
 .superpowers/
 shape
 shape.exe
+gui.exe
 *.out
 dist/
 
