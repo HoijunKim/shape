@@ -1,0 +1,51 @@
+version: 2
+
+project_name: shape
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: shape
+    main: .
+    binary: shape
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/hoijun-kim/shape/internal/cmd.Version={{ .Version }}
+
+archives:
+  - id: shape
+    ids: [shape]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+homebrew_casks:
+  - name: shape
+    ids: [shape]
+    binaries:
+      - shape
+    repository:
+      owner: hoijun-kim
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/hoijun-kim/shape"
+    description: "See the real shape of your structured data files"
+    license: "MIT"
+
+release:
+  github:
+    owner: hoijun-kim
+    name: shape
+
+changelog:
+  use: github

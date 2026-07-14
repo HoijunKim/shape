@@ -2,6 +2,7 @@
 shape
 shape.exe
 *.out
+dist/
 
 gui/build/bin/
 gui/frontend/dist/*
