@@ -1,0 +1,53 @@
+name: 'shape diff'
+description: 'Fail CI when data-shape changes break consumers of the old snapshot'
+branding:
+  icon: 'git-commit'
+  color: 'blue'
+inputs:
+  old:
+    description: 'Path to the old (baseline) data file'
+    required: true
+  new:
+    description: 'Path to the new data file'
+    required: true
+  fail-on:
+    description: 'breaking | any | none'
+    required: false
+    default: 'breaking'
+  version:
+    description: 'shape release version tag (e.g. v1.2.0) or "latest"'
+    required: false
+    default: 'latest'
+runs:
+  using: composite
+  steps:
+    - name: Install shape and diff
+      shell: bash
+      env:
+        SHAPE_VERSION: ${{ inputs.version }}
+        SHAPE_OLD: ${{ inputs.old }}
+        SHAPE_NEW: ${{ inputs.new }}
+        SHAPE_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64|amd64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+        esac
+        repo="hoijun-kim/shape"
+        if [ "$SHAPE_VERSION" = "latest" ]; then
+          base="https://github.com/$repo/releases/latest/download"
+          ver="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's#.*/tag/##')"
+        else
+          base="https://github.com/$repo/releases/download/$SHAPE_VERSION"
+          ver="$SHAPE_VERSION"
+        fi
+        v="${ver#v}"
+        url="$base/shape_${v}_${os}_${arch}.tar.gz"
+        echo "downloading $url"
+        curl -fsSL "$url" | tar -xz shape
+        chmod +x shape
+        ./shape diff --fail-on "$SHAPE_FAIL_ON" "$SHAPE_OLD" "$SHAPE_NEW"
