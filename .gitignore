@@ -2,3 +2,9 @@
 shape
 shape.exe
 *.out
+
+gui/build/bin/
+gui/frontend/dist/*
+!gui/frontend/dist/.gitkeep
+gui/frontend/node_modules/
+gui/frontend/wailsjs/
