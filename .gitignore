@@ -8,3 +8,4 @@ gui/frontend/dist/*
 !gui/frontend/dist/.gitkeep
 gui/frontend/node_modules/
 gui/frontend/wailsjs/
+gui/frontend/package.json.md5
