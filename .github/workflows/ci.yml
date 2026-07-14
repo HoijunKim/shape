@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: go vet ./...
+      - run: go test ./... -count=1
+      - name: CLI builds cgo-free
+        run: CGO_ENABLED=0 go build -o /dev/null .
+  gui-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - name: Generate bindings (before the frontend build)
+        run: wails generate module
+        working-directory: gui
+      - name: Build frontend
+        run: npm ci && npm run build && npm run check
+        working-directory: gui/frontend
+      - name: Build the desktop app
+        run: wails build
+        working-directory: gui
