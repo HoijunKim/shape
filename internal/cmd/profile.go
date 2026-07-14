@@ -13,7 +13,7 @@ func newProfileCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "profile <file|->",
-		Short: "Profile the shape of a JSON or NDJSON input",
+		Short: "Profile the shape of a JSON, NDJSON, CSV, Parquet, or SQLite input",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := profileSource(args[0], format, csvRaw, table)

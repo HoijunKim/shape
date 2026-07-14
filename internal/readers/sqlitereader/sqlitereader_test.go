@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/readers"
@@ -96,5 +97,36 @@ func TestSQLiteMultiTableRequiresChoice(t *testing.T) {
 func TestSQLiteRejectsStdin(t *testing.T) {
 	if _, _, err := readers.Open(readers.FormatSQLite, readers.Source{Path: ""}); err == nil {
 		t.Error("sqlite from stdin (empty path) must error")
+	}
+}
+
+func TestSQLiteReadOnlyPathWithHash(t *testing.T) {
+	// A path with '#' must not corrupt the read-only URI. Create the fixture via
+	// a plain (literal) path, then read it through the reader's file: URI.
+	dir := t.TempDir()
+	path := dir + "/track#1.sqlite"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := db.Exec("CREATE TABLE t(x INTEGER)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO t VALUES (1),(2)"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	db.Close()
+
+	s, cleanup, err := readers.Open(readers.FormatSQLite, readers.Source{Path: path})
+	if err != nil {
+		t.Fatalf("open path with '#': %v", err)
+	}
+	defer cleanup()
+	if got := len(drain(t, s)); got != 2 {
+		t.Errorf("rows = %d, want 2 from a '#'-containing path", got)
+	}
+	// No stray truncated-path file should have been created.
+	if _, err := os.Stat(dir + "/track"); err == nil {
+		t.Error("a stray 'track' file was created - the URI was not encoded / not read-only")
 	}
 }

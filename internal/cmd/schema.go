@@ -16,7 +16,7 @@ func newSchemaCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "schema <file|->",
-		Short: "Infer a JSON Schema (Draft 2020-12) from a JSON or NDJSON input",
+		Short: "Infer a JSON Schema (Draft 2020-12) from a JSON, NDJSON, CSV, Parquet, or SQLite input",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := profileSource(args[0], format, csvRaw, table)

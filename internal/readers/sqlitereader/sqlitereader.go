@@ -22,7 +22,7 @@ func open(s readers.Source) (readers.RecordStream, func() error, error) {
 	if s.Path == "" {
 		return nil, nil, fmt.Errorf("sqlite cannot be read from stdin; provide a file path")
 	}
-	db, err := sql.Open("sqlite", "file:"+s.Path+"?mode=ro&immutable=1")
+	db, err := sql.Open("sqlite", readonlyURI(s.Path))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -35,6 +35,11 @@ func open(s readers.Source) (readers.RecordStream, func() error, error) {
 	// stable); fall back to unordered for WITHOUT ROWID tables / views.
 	rows, err := db.Query("SELECT * FROM " + quoteIdent(table) + " ORDER BY _rowid_")
 	if err != nil {
+		if !strings.Contains(err.Error(), "_rowid_") {
+			db.Close()
+			return nil, nil, fmt.Errorf("query %s: %w", table, err)
+		}
+		// WITHOUT ROWID table or view: no _rowid_, read unordered.
 		rows, err = db.Query("SELECT * FROM " + quoteIdent(table))
 		if err != nil {
 			db.Close()
@@ -92,6 +97,15 @@ func chooseTable(db *sql.DB, want string) (string, error) {
 // quoteIdent safely quotes a SQLite identifier (doubles embedded quotes).
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// readonlyURI builds a read-only SQLite file URI, percent-encoding the URI-
+// special characters so a path containing '#', '%', or '?' cannot corrupt the
+// query string (which would silently drop mode=ro). '%' is encoded first so the
+// single-pass replacer does not double-encode.
+func readonlyURI(path string) string {
+	enc := strings.NewReplacer("%", "%25", "#", "%23", "?", "%3f").Replace(path)
+	return "file:" + enc + "?mode=ro&immutable=1"
 }
 
 type stream struct {
