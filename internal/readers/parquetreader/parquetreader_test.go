@@ -72,3 +72,54 @@ func TestParquetRejectsStdin(t *testing.T) {
 		t.Error("parquet from stdin (empty path) must error")
 	}
 }
+
+type addrRow struct {
+	City string `parquet:"city"`
+	Zip  int32  `parquet:"zip"`
+}
+
+type nestedRow struct {
+	ID   int64    `parquet:"id"`
+	Addr addrRow  `parquet:"addr"`
+	Tags []string `parquet:"tags"`
+}
+
+func TestParquetNestedConversion(t *testing.T) {
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[nestedRow](&buf)
+	if _, err := w.Write([]nestedRow{
+		{ID: 1, Addr: addrRow{City: "Seoul", Zip: 100}, Tags: []string{"a", "b"}},
+	}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	path := t.TempDir() + "/nested.parquet"
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	s, cleanup, err := readers.Open(readers.FormatParquet, readers.Source{Path: path})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer cleanup()
+	rec, err := s.Next()
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	m := rec.(map[string]any)
+
+	addr, ok := m["addr"].(map[string]any)
+	if !ok {
+		t.Fatalf("addr should be a nested map, got %T", m["addr"])
+	}
+	if addr["city"] != "Seoul" || addr["zip"] != json.Number("100") { // int32 -> json.Number via convertDeep
+		t.Errorf("nested addr conversion wrong: %v", addr)
+	}
+	tags, ok := m["tags"].([]any)
+	if !ok || len(tags) != 2 || tags[0] != "a" || tags[1] != "b" {
+		t.Errorf("tags list conversion wrong: %v (%T)", m["tags"], m["tags"])
+	}
+}

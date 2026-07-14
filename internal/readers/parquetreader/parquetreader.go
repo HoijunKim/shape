@@ -1,6 +1,7 @@
 package parquetreader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,8 +39,7 @@ func open(s readers.Source) (readers.RecordStream, func() error, error) {
 	gr := parquet.NewGenericReader[any](pf)
 	st := &stream{gr: gr, buf: make([]any, 256)}
 	cleanup := func() error {
-		gr.Close()
-		return f.Close()
+		return errors.Join(gr.Close(), f.Close())
 	}
 	return st, cleanup, nil
 }
