@@ -12,11 +12,12 @@ import (
 	_ "github.com/hoijun-kim/shape/internal/readers/csvreader"     // register csv
 	_ "github.com/hoijun-kim/shape/internal/readers/jsonreader"    // register json
 	_ "github.com/hoijun-kim/shape/internal/readers/parquetreader" // register parquet
+	_ "github.com/hoijun-kim/shape/internal/readers/sqlitereader"  // register sqlite
 )
 
 // profileSource opens src (file path or "-"), detects the format, streams the
 // records through the matching reader, and returns the assembled profile.
-func profileSource(src, format string, csvRaw bool) (profile.ProfileResult, error) {
+func profileSource(src, format string, csvRaw bool, table string) (profile.ProfileResult, error) {
 	source, closeSrc, err := openSource(src)
 	if err != nil {
 		return profile.ProfileResult{}, err
@@ -24,6 +25,7 @@ func profileSource(src, format string, csvRaw bool) (profile.ProfileResult, erro
 	defer closeSrc()
 	source.RawFormat = format
 	source.CSVRaw = csvRaw
+	source.Table = table
 
 	f := readers.DetectFormat(src, format, source.Peek)
 	stream, closeStream, err := readers.Open(f, source)
