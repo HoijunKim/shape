@@ -8,19 +8,29 @@ import (
 	"os"
 
 	"github.com/hoijun-kim/shape/internal/profile"
-	"github.com/hoijun-kim/shape/internal/readers/jsonreader"
+	"github.com/hoijun-kim/shape/internal/readers"
+	_ "github.com/hoijun-kim/shape/internal/readers/csvreader"  // register csv
+	_ "github.com/hoijun-kim/shape/internal/readers/jsonreader" // register json
 )
 
-// profileSource opens src (a file path or "-"), detects the format, streams the
-// records, and returns the assembled profile with Source set.
-func profileSource(src, format string) (profile.ProfileResult, error) {
-	r, peek, closeFn, err := openSource(src)
+// profileSource opens src (file path or "-"), detects the format, streams the
+// records through the matching reader, and returns the assembled profile.
+func profileSource(src, format string, csvRaw bool) (profile.ProfileResult, error) {
+	source, closeSrc, err := openSource(src)
 	if err != nil {
 		return profile.ProfileResult{}, err
 	}
-	defer closeFn()
+	defer closeSrc()
+	source.RawFormat = format
+	source.CSVRaw = csvRaw
 
-	stream := jsonreader.New(r, jsonreader.DetectMode(src, format, peek))
+	f := readers.DetectFormat(src, format, source.Peek)
+	stream, closeStream, err := readers.Open(f, source)
+	if err != nil {
+		return profile.ProfileResult{}, err
+	}
+	defer closeStream()
+
 	p := profile.NewProfiler()
 	for {
 		rec, err := stream.Next()
@@ -38,26 +48,25 @@ func profileSource(src, format string) (profile.ProfileResult, error) {
 	return res, nil
 }
 
-// openSource opens a file path or stdin ("-"), returning the reader, a peek of
-// the first bytes (for format detection), and a close function.
-func openSource(src string) (io.Reader, []byte, func(), error) {
+// openSource opens a file path or stdin ("-") into a readers.Source with a peek.
+func openSource(src string) (readers.Source, func() error, error) {
 	if src == "-" {
 		buf := make([]byte, 512)
 		n, _ := io.ReadFull(os.Stdin, buf)
 		peek := buf[:n]
 		combined := io.MultiReader(bytes.NewReader(peek), os.Stdin)
-		return combined, peek, func() {}, nil
+		return readers.Source{Path: "", Reader: combined, Peek: peek}, func() error { return nil }, nil
 	}
-	f, err := os.Open(src)
+	fh, err := os.Open(src)
 	if err != nil {
-		return nil, nil, nil, err
+		return readers.Source{}, nil, err
 	}
 	peek := make([]byte, 512)
-	n, _ := f.Read(peek)
+	n, _ := fh.Read(peek)
 	peek = peek[:n]
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		f.Close()
-		return nil, nil, nil, err
+	if _, err := fh.Seek(0, io.SeekStart); err != nil {
+		fh.Close()
+		return readers.Source{}, nil, err
 	}
-	return f, peek, func() { f.Close() }, nil
+	return readers.Source{Path: src, Reader: fh, Peek: peek}, func() error { return fh.Close() }, nil
 }

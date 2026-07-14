@@ -18,6 +18,7 @@ func (e failErr) ExitCode() int { return 1 }
 func newDiffCmd() *cobra.Command {
 	var failOn, format string
 	var asJSON bool
+	var csvRaw bool
 
 	cmd := &cobra.Command{
 		Use:   "diff <old> <new>",
@@ -30,11 +31,11 @@ func newDiffCmd() *cobra.Command {
 				return fmt.Errorf("invalid --fail-on %q (want breaking|any|none)", failOn)
 			}
 
-			a, err := profileSource(args[0], format)
+			a, err := profileSource(args[0], format, csvRaw)
 			if err != nil {
 				return err
 			}
-			b, err := profileSource(args[1], format)
+			b, err := profileSource(args[1], format, csvRaw)
 			if err != nil {
 				return err
 			}
@@ -68,6 +69,7 @@ func newDiffCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&failOn, "fail-on", "breaking", "exit 1 on: breaking|any|none")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON")
-	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson")
+	cmd.Flags().StringVar(&format, "format", "auto", "input format: auto|json|ndjson|csv")
+	cmd.Flags().BoolVar(&csvRaw, "csv-raw", false, "read CSV cells as raw strings (no type inference)")
 	return cmd
 }
