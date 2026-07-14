@@ -75,3 +75,15 @@ func TestCSVEmptyFile(t *testing.T) {
 		t.Errorf("empty file should yield no rows, got %d", len(got))
 	}
 }
+
+func TestTSVDelimiter(t *testing.T) {
+	data := "id\tname\n1\talice\n"
+	s, _, err := readers.Open(readers.FormatCSV, readers.Source{Path: "x.tsv", Reader: strings.NewReader(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := drain(t, s)
+	if len(rows) != 1 || rows[0]["name"] != "alice" || rows[0]["id"] != json.Number("1") {
+		t.Errorf("tsv not parsed with tab delimiter: %v", rows)
+	}
+}

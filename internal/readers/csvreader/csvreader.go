@@ -18,7 +18,12 @@ func init() {
 }
 
 func open(s readers.Source) (readers.RecordStream, func() error, error) {
-	return newStream(s.Reader, s.CSVRaw), func() error { return nil }, nil
+	comma := ','
+	l := strings.ToLower(s.Path)
+	if strings.HasSuffix(l, ".tsv") || strings.HasSuffix(l, ".tab") {
+		comma = '\t'
+	}
+	return newStream(s.Reader, s.CSVRaw, comma), func() error { return nil }, nil
 }
 
 type stream struct {
@@ -29,8 +34,9 @@ type stream struct {
 	skipped int
 }
 
-func newStream(rd io.Reader, raw bool) *stream {
+func newStream(rd io.Reader, raw bool, comma rune) *stream {
 	c := csv.NewReader(rd)
+	c.Comma = comma
 	c.FieldsPerRecord = -1 // tolerate ragged rows
 	return &stream{r: c, raw: raw}
 }
@@ -46,6 +52,9 @@ func (s *stream) Next() (any, error) {
 	}
 	rec, err := s.r.Read()
 	if err != nil {
+		// A CSV parse error (e.g. an unterminated quote) desyncs the whole
+		// stream; unlike NDJSON we cannot reliably resync per line, so surface
+		// the error and abort rather than silently skip.
 		return nil, err
 	}
 	row := make(map[string]any, len(s.header))
@@ -111,6 +120,9 @@ func isIntLiteral(s string) bool {
 // isFloatLiteral accepts a real decimal/scientific float (must contain '.' or
 // an exponent, and not be NaN/Inf).
 func isFloatLiteral(s string) bool {
+	if strings.Contains(s, "_") {
+		return false
+	}
 	if !strings.ContainsAny(s, ".eE") {
 		return false
 	}
