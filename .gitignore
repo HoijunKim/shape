@@ -11,3 +11,7 @@ gui/frontend/node_modules/
 gui/frontend/wailsjs/
 gui/frontend/package.json.md5
 gui/frontend/.vscode/
+
+npm/bin/shape
+npm/bin/shape.exe
+npm/node_modules/

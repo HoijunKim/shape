@@ -1,0 +1,12 @@
+{
+  "name": "@hoijun-kim/shape",
+  "version": "0.0.0",
+  "description": "See the real shape of your structured data files (JSON/NDJSON/CSV/Parquet/SQLite): profile, infer a JSON Schema, and diff snapshots for breaking changes.",
+  "bin": { "shape": "bin/shape.js" },
+  "scripts": { "postinstall": "node install.js" },
+  "os": ["linux", "darwin", "win32"],
+  "cpu": ["x64", "arm64"],
+  "repository": { "type": "git", "url": "https://github.com/hoijun-kim/shape" },
+  "license": "MIT",
+  "files": ["bin/", "install.js"]
+}
