@@ -2,8 +2,11 @@ package profile
 
 import "sort"
 
-// DefaultDistinctCap bounds exact distinct/top-value tracking per field.
-const DefaultDistinctCap = 50000
+// DefaultExactCap is the number of distinct values a field tracks exactly before
+// promoting to bounded sketches. It stays above 2.5*2^hllPrecision (10240) so the
+// HLL only estimates cardinalities in its unbiased regime, and far above the
+// top-K cap of 10 so small enums are never promoted.
+const DefaultExactCap = 16384
 
 // ProfileResult is the profile of a whole input.
 type ProfileResult struct {
@@ -24,7 +27,7 @@ type Profiler struct {
 
 // NewProfiler returns a Profiler using the default distinct cap.
 func NewProfiler() *Profiler {
-	return &Profiler{accs: map[string]*fieldAccumulator{}, cap: DefaultDistinctCap}
+	return &Profiler{accs: map[string]*fieldAccumulator{}, cap: DefaultExactCap}
 }
 
 // AddSkipped records malformed inputs skipped by a reader.

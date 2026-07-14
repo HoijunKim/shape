@@ -1,6 +1,10 @@
 package profile
 
-import "testing"
+import (
+	"fmt"
+	"math"
+	"testing"
+)
 
 func fieldByPath(res ProfileResult, path string) (FieldProfile, bool) {
 	for _, f := range res.Fields {
@@ -68,5 +72,26 @@ func TestProfilerSkipped(t *testing.T) {
 	p.AddSkipped(3)
 	if got := p.Result().Skipped; got != 5 {
 		t.Errorf("Skipped = %d, want 5", got)
+	}
+}
+
+func TestProfilerPromotesHighCardinality(t *testing.T) {
+	p := NewProfiler()
+	const n = 20000 // > DefaultExactCap (16384)
+	for i := 0; i < n; i++ {
+		p.AddRecord(map[string]any{"id": fmt.Sprintf("id-%d", i), "kind": "x"})
+	}
+	res := p.Result()
+	id, _ := fieldByPath(res, "id")
+	if id.DistinctExact {
+		t.Errorf("id (%d distinct > exactCap) should be approximate", n)
+	}
+	rel := math.Abs(float64(id.DistinctCount-n)) / float64(n)
+	if rel > 0.05 {
+		t.Errorf("id distinct estimate %d for %d, rel-error %.4f > 0.05", id.DistinctCount, n, rel)
+	}
+	kind, _ := fieldByPath(res, "kind")
+	if !kind.DistinctExact || kind.DistinctCount != 1 {
+		t.Errorf("low-cardinality kind must stay exact, got exact=%v count=%d", kind.DistinctExact, kind.DistinctCount)
 	}
 }
