@@ -37,6 +37,7 @@ type Source struct {
 	Peek      []byte
 	RawFormat string
 	CSVRaw    bool
+	Table     string
 }
 
 // Factory builds a RecordStream and its cleanup for a Source.
