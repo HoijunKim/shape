@@ -34,7 +34,14 @@ func categorical(fp profile.FieldProfile) *Categorical {
 		n = TopK
 	}
 
-	total := fp.Observations
+	// fp.Observations includes null observations, but fp.TopValues/DistinctCount
+	// do not (the accumulator counts nulls into obs but never into addCount).
+	// Use the non-null count as the percentage denominator so bar percentages
+	// (and the Other bucket) don't fold null mass into the categorical shares.
+	total := int(math.Round(float64(fp.Observations) * (1 - fp.NullRate)))
+	if total <= 0 {
+		return nil
+	}
 	maxCount := fp.TopValues[0].Count
 
 	bars := make([]CategoryBar, n)
@@ -83,10 +90,15 @@ func highCard(fp profile.FieldProfile) *HighCardString {
 		sample = append(sample, vc.Value)
 	}
 
+	// fp.Observations includes null observations, but fp.DistinctCount does not
+	// (the accumulator counts nulls into obs but never into addCount), so the
+	// non-null count is the correct denominator here too.
+	nonNull := int(math.Round(float64(fp.Observations) * (1 - fp.NullRate)))
+
 	hc := &HighCardString{
 		Distinct:     fp.DistinctCount,
 		DistinctText: fmtDistinct(fp.DistinctCount, fp.DistinctExact),
-		UniqueRatio:  clamp(safeDiv(float64(fp.DistinctCount), float64(fp.Observations)), 0, 1),
+		UniqueRatio:  clamp(safeDiv(float64(fp.DistinctCount), float64(nonNull)), 0, 1),
 		Sample:       sample,
 	}
 

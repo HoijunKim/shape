@@ -265,6 +265,64 @@ func TestHighCardUniqueRatio(t *testing.T) {
 
 func intp(i int) *int { return &i }
 
+func TestCategoricalExcludesNullFromTotal(t *testing.T) {
+	// 100 observations, 20% null -> 80 non-null; 3 non-null values covering all 80.
+	// Counts (40/20/20) land on exact 50/25/25 percentages so independent
+	// per-bar rounding can't introduce an apportionment artifact unrelated to
+	// the null-exclusion fix under test (e.g. 50/80=62.5% and 10/80=12.5% both
+	// round away from zero, oversumming to 101 regardless of the denominator).
+	fp := profile.FieldProfile{
+		Observations: 100, NullRate: 0.20, DistinctExact: true, DistinctCount: 3,
+		TypeDist:  map[profile.JSONKind]float64{profile.KindString: 0.8, profile.KindNull: 0.2},
+		TopValues: []profile.ValueCount{{Value: "a", Count: 40}, {Value: "b", Count: 20}, {Value: "c", Count: 20}},
+	}
+	c := categorical(fp)
+	if c.Total != 80 {
+		t.Errorf("Total = %d, want 80 (non-null observations, nulls excluded)", c.Total)
+	}
+	// not truncated (3 distinct == 3 bars): percents must sum to 100 with no gap.
+	sum := 0
+	for _, b := range c.Bars {
+		sum += b.Percent
+	}
+	if sum != 100 {
+		t.Errorf("bar percents sum = %d, want 100 (no null gap)", sum)
+	}
+	if c.Truncated || c.Other != nil {
+		t.Errorf("should not be truncated: truncated=%v other=%v", c.Truncated, c.Other)
+	}
+}
+
+func TestCategoricalOtherExcludesNull(t *testing.T) {
+	// 100 obs, 20% null -> 80 non-null, DistinctCount 5 but only 3 top values -> truncated.
+	fp := profile.FieldProfile{
+		Observations: 100, NullRate: 0.20, DistinctExact: true, DistinctCount: 5,
+		TypeDist:  map[profile.JSONKind]float64{profile.KindString: 0.8, profile.KindNull: 0.2},
+		TopValues: []profile.ValueCount{{Value: "a", Count: 40}, {Value: "b", Count: 20}, {Value: "c", Count: 10}},
+	}
+	c := categorical(fp)
+	if c.Other == nil {
+		t.Fatal("expected Other bucket when truncated")
+	}
+	// Other = non-null (80) - shown (70) = 10; must NOT include the 20 nulls.
+	if c.Other.Count != 10 {
+		t.Errorf("Other.Count = %d, want 10 (80 non-null - 70 shown; nulls excluded)", c.Other.Count)
+	}
+}
+
+func TestHighCardUniqueRatioExcludesNull(t *testing.T) {
+	// 100 obs, 20% null -> 80 non-null; 80 distinct non-null -> ratio 1.0, not 0.8.
+	fp := profile.FieldProfile{
+		Observations: 100, NullRate: 0.20, DistinctExact: true, DistinctCount: 80,
+		TypeDist:  map[profile.JSONKind]float64{profile.KindString: 0.8, profile.KindNull: 0.2},
+		TopValues: []profile.ValueCount{{Value: "x", Count: 1}},
+	}
+	h := highCard(fp)
+	if h.UniqueRatio < 0.999 {
+		t.Errorf("UniqueRatio = %v, want ~1.0 (80 distinct / 80 non-null)", h.UniqueRatio)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // arrayBreakdown
 // ---------------------------------------------------------------------------
