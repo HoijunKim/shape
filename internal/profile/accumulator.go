@@ -26,6 +26,9 @@ type FieldProfile struct {
 	TypeDist      map[JSONKind]float64
 	NullRate      float64
 	Min, Max      *float64
+	Histogram     []HistBin
+	Median        *float64
+	P95           *float64
 	DistinctCount int
 	DistinctExact bool
 	TopValues     []ValueCount
@@ -41,6 +44,7 @@ type fieldAccumulator struct {
 	obs        int
 	haveNum    bool
 	min, max   float64
+	hist       *numHistogram
 	haveLen    bool
 	lenMin     int
 	lenMax     int
@@ -74,6 +78,10 @@ func (a *fieldAccumulator) AddValue(o Observation) {
 			a.max = o.Num
 		}
 		a.haveNum = true
+		if a.hist == nil {
+			a.hist = newNumHistogram(histMaxBins)
+		}
+		a.hist.add(o.Num)
 		a.addCount(numKey(o.Num))
 	case KindString:
 		l := len(o.Str)
@@ -146,6 +154,12 @@ func (a *fieldAccumulator) Result(totalRecords int) FieldProfile {
 	if a.haveNum {
 		mn, mx := a.min, a.max
 		fp.Min, fp.Max = &mn, &mx
+	}
+	if a.hist != nil && a.hist.total > 0 {
+		fp.Histogram = a.hist.snapshot()
+		med := a.hist.quantile(0.5)
+		p95 := a.hist.quantile(0.95)
+		fp.Median, fp.P95 = &med, &p95
 	}
 	if a.haveLen {
 		mn, mx := a.lenMin, a.lenMax

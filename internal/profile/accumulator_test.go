@@ -108,3 +108,36 @@ func TestAccumulatorPromotedUniformNoFalseTop(t *testing.T) {
 		t.Errorf("a uniform field has no repeated heavy hitters; TopValues must be empty, got %v", fp.TopValues)
 	}
 }
+
+func TestAccumulatorNumericHistogram(t *testing.T) {
+	a := newFieldAccumulator("n", DefaultExactCap)
+	for i := 0; i < 1000; i++ {
+		a.AddValue(Observation{Path: "n", Kind: KindInt, Num: float64(i)})
+		a.MarkPresent()
+	}
+	fp := a.Result(1000)
+
+	if len(fp.Histogram) == 0 {
+		t.Fatal("Histogram is empty for a numeric field")
+	}
+	if len(fp.Histogram) > histMaxBins {
+		t.Errorf("Histogram has %d bins, want <= %d", len(fp.Histogram), histMaxBins)
+	}
+	if fp.Median == nil || *fp.Median < 450 || *fp.Median > 550 {
+		t.Errorf("Median = %v, want ~499.5 (+/-50)", fp.Median)
+	}
+	if fp.P95 == nil || *fp.P95 < 900 || *fp.P95 > 990 {
+		t.Errorf("P95 = %v, want ~949 (+/-50)", fp.P95)
+	}
+}
+
+func TestAccumulatorNonNumericHasNoHistogram(t *testing.T) {
+	a := newFieldAccumulator("s", DefaultExactCap)
+	a.AddValue(Observation{Path: "s", Kind: KindString, Str: "x"})
+	a.MarkPresent()
+	fp := a.Result(1)
+	if fp.Histogram != nil || fp.Median != nil || fp.P95 != nil {
+		t.Errorf("string field got histogram data: bins=%v median=%v p95=%v",
+			fp.Histogram, fp.Median, fp.P95)
+	}
+}
