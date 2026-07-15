@@ -1,6 +1,9 @@
 package profile
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // histMaxBins bounds the streaming histogram's bin count per numeric field.
 // Like hll and spaceSaving, this keeps a numeric field's memory bounded no
@@ -71,4 +74,38 @@ func (h *numHistogram) snapshot() []HistBin {
 	out := make([]HistBin, len(h.bins))
 	copy(out, h.bins)
 	return out
+}
+
+// quantile returns an approximate q-quantile (q in 0..1) of the observed
+// values, interpolating linearly across the cumulative counts positioned at bin
+// centroids (each bin's mass is treated as centered on its centroid). Returns
+// NaN when empty; clamps q<=0 to the smallest centroid and q>=1 to the largest.
+func (h *numHistogram) quantile(q float64) float64 {
+	if len(h.bins) == 0 {
+		return math.NaN()
+	}
+	if len(h.bins) == 1 || q <= 0 {
+		return h.bins[0].Value
+	}
+	if q >= 1 {
+		return h.bins[len(h.bins)-1].Value
+	}
+	target := q * float64(h.total)
+	cum := 0.0 // running count strictly before the current bin
+	prevCenter := 0.0
+	prevVal := h.bins[0].Value
+	for i, b := range h.bins {
+		center := cum + float64(b.Count)/2
+		if center >= target {
+			if i == 0 {
+				return b.Value
+			}
+			frac := (target - prevCenter) / (center - prevCenter)
+			return prevVal + frac*(b.Value-prevVal)
+		}
+		prevCenter = center
+		prevVal = b.Value
+		cum += float64(b.Count)
+	}
+	return h.bins[len(h.bins)-1].Value
 }

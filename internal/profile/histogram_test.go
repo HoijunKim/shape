@@ -1,6 +1,9 @@
 package profile
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestHistogramExactBelowCap(t *testing.T) {
 	h := newNumHistogram(64)
@@ -61,5 +64,53 @@ func TestHistogramSnapshotIsCopy(t *testing.T) {
 	snap[0].Count = 999
 	if h.snapshot()[0].Count != 1 {
 		t.Error("snapshot must return a copy, not the live slice")
+	}
+}
+
+func TestHistogramQuantileEmpty(t *testing.T) {
+	h := newNumHistogram(64)
+	if q := h.quantile(0.5); !math.IsNaN(q) {
+		t.Errorf("quantile of empty = %v, want NaN", q)
+	}
+}
+
+func TestHistogramQuantileSingleValue(t *testing.T) {
+	h := newNumHistogram(64)
+	for i := 0; i < 5; i++ {
+		h.add(42)
+	}
+	if q := h.quantile(0.5); q != 42 {
+		t.Errorf("median = %v, want 42", q)
+	}
+	if q := h.quantile(0.95); q != 42 {
+		t.Errorf("p95 = %v, want 42", q)
+	}
+}
+
+func TestHistogramQuantileClamp(t *testing.T) {
+	h := newNumHistogram(64)
+	for _, v := range []float64{10, 20, 30} {
+		h.add(v)
+	}
+	if q := h.quantile(0); q != 10 {
+		t.Errorf("q(0) = %v, want 10 (min)", q)
+	}
+	if q := h.quantile(1); q != 30 {
+		t.Errorf("q(1) = %v, want 30 (max)", q)
+	}
+}
+
+func TestHistogramQuantileUniformAccuracy(t *testing.T) {
+	h := newNumHistogram(64)
+	for i := 0; i < 10000; i++ {
+		h.add(float64(i)) // uniform 0..9999
+	}
+	med := h.quantile(0.5)
+	if med < 4900 || med > 5100 { // within ~1% of true median 4999.5
+		t.Errorf("median = %v, want ~4999.5 (+/-100)", med)
+	}
+	p95 := h.quantile(0.95)
+	if p95 < 9400 || p95 > 9600 { // within ~1% of true p95 ~9499
+		t.Errorf("p95 = %v, want ~9499 (+/-100)", p95)
 	}
 }
