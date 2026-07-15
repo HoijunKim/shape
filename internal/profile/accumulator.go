@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"math"
 	"sort"
 	"strconv"
 )
@@ -21,11 +22,17 @@ type ValueCount struct {
 
 // FieldProfile is the accumulated profile for one path.
 type FieldProfile struct {
-	Path          string
-	PresenceRate  float64
-	TypeDist      map[JSONKind]float64
-	NullRate      float64
-	Min, Max      *float64
+	Path         string
+	PresenceRate float64
+	TypeDist     map[JSONKind]float64
+	NullRate     float64
+	Min, Max     *float64
+	// Histogram holds variable-width streaming centroids, not equal-width
+	// display bins; after merging, extreme centroids drift inward, so use
+	// Min/Max for the true axis extent.
+	Histogram     []HistBin
+	Median        *float64
+	P95           *float64
 	DistinctCount int
 	DistinctExact bool
 	TopValues     []ValueCount
@@ -41,6 +48,7 @@ type fieldAccumulator struct {
 	obs        int
 	haveNum    bool
 	min, max   float64
+	hist       *numHistogram
 	haveLen    bool
 	lenMin     int
 	lenMax     int
@@ -67,6 +75,9 @@ func (a *fieldAccumulator) AddValue(o Observation) {
 	a.kindCounts[o.Kind]++
 	switch o.Kind {
 	case KindInt, KindFloat:
+		if math.IsNaN(o.Num) || math.IsInf(o.Num, 0) {
+			return // still counted as a float observation; excluded from numeric stats
+		}
 		if !a.haveNum || o.Num < a.min {
 			a.min = o.Num
 		}
@@ -74,6 +85,10 @@ func (a *fieldAccumulator) AddValue(o Observation) {
 			a.max = o.Num
 		}
 		a.haveNum = true
+		if a.hist == nil {
+			a.hist = newNumHistogram(histMaxBins)
+		}
+		a.hist.add(o.Num)
 		a.addCount(numKey(o.Num))
 	case KindString:
 		l := len(o.Str)
@@ -146,6 +161,12 @@ func (a *fieldAccumulator) Result(totalRecords int) FieldProfile {
 	if a.haveNum {
 		mn, mx := a.min, a.max
 		fp.Min, fp.Max = &mn, &mx
+	}
+	if a.hist != nil && a.hist.total > 0 {
+		fp.Histogram = a.hist.snapshot()
+		med := a.hist.quantile(0.5)
+		p95 := a.hist.quantile(0.95)
+		fp.Median, fp.P95 = &med, &p95
 	}
 	if a.haveLen {
 		mn, mx := a.lenMin, a.lenMax

@@ -1,7 +1,9 @@
 package profile
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -106,5 +108,72 @@ func TestAccumulatorPromotedUniformNoFalseTop(t *testing.T) {
 	}
 	if len(fp.TopValues) != 0 {
 		t.Errorf("a uniform field has no repeated heavy hitters; TopValues must be empty, got %v", fp.TopValues)
+	}
+}
+
+func TestAccumulatorNumericHistogram(t *testing.T) {
+	a := newFieldAccumulator("n", DefaultExactCap)
+	for i := 0; i < 1000; i++ {
+		a.AddValue(Observation{Path: "n", Kind: KindInt, Num: float64(i)})
+		a.MarkPresent()
+	}
+	fp := a.Result(1000)
+
+	if len(fp.Histogram) == 0 {
+		t.Fatal("Histogram is empty for a numeric field")
+	}
+	if len(fp.Histogram) > histMaxBins {
+		t.Errorf("Histogram has %d bins, want <= %d", len(fp.Histogram), histMaxBins)
+	}
+	if fp.Median == nil || *fp.Median < 450 || *fp.Median > 550 {
+		t.Errorf("Median = %v, want ~499.5 (+/-50)", fp.Median)
+	}
+	if fp.P95 == nil || *fp.P95 < 900 || *fp.P95 > 990 {
+		t.Errorf("P95 = %v, want ~949 (+/-50)", fp.P95)
+	}
+}
+
+func TestAccumulatorNonFiniteNumeric(t *testing.T) {
+	a := newFieldAccumulator("n", DefaultExactCap)
+	vals := []float64{10, 20, math.NaN(), 30, math.Inf(1), 40, math.Inf(-1)}
+	for _, v := range vals {
+		a.AddValue(Observation{Path: "n", Kind: KindFloat, Num: v})
+		a.MarkPresent()
+	}
+	fp := a.Result(len(vals))
+
+	// float type distribution still reflects every observation (incl. non-finite).
+	if fp.TypeDist[KindFloat] != 1 {
+		t.Errorf("float type dist = %v, want 1", fp.TypeDist[KindFloat])
+	}
+	// min/max/median/p95 exclude non-finite -> all finite.
+	for name, p := range map[string]*float64{"min": fp.Min, "max": fp.Max, "median": fp.Median, "p95": fp.P95} {
+		if p == nil {
+			t.Fatalf("%s is nil, want a finite value", name)
+		}
+		if math.IsNaN(*p) || math.IsInf(*p, 0) {
+			t.Errorf("%s = %v, want finite", name, *p)
+		}
+	}
+	if fp.Min != nil && *fp.Min != 10 {
+		t.Errorf("min = %v, want 10 (non-finite excluded)", *fp.Min)
+	}
+	if fp.Max != nil && *fp.Max != 40 {
+		t.Errorf("max = %v, want 40 (non-finite excluded)", *fp.Max)
+	}
+	// the histogram must be JSON-marshalable (P2 consumer requirement).
+	if _, err := json.Marshal(fp.Histogram); err != nil {
+		t.Errorf("histogram not JSON-marshalable: %v", err)
+	}
+}
+
+func TestAccumulatorNonNumericHasNoHistogram(t *testing.T) {
+	a := newFieldAccumulator("s", DefaultExactCap)
+	a.AddValue(Observation{Path: "s", Kind: KindString, Str: "x"})
+	a.MarkPresent()
+	fp := a.Result(1)
+	if fp.Histogram != nil || fp.Median != nil || fp.P95 != nil {
+		t.Errorf("string field got histogram data: bins=%v median=%v p95=%v",
+			fp.Histogram, fp.Median, fp.P95)
 	}
 }
