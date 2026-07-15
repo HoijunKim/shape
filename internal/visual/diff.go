@@ -163,7 +163,7 @@ func diffKindLabel(k diff.ChangeKind) string {
 
 // diffDetail maps one diff.Detail 1:1, per design §6. Old/New are the
 // differ's own preformatted text; an empty string (never emitted by the
-// differ today, but the mapping must hold for any Detail) renders as an en
+// differ today, but the mapping must hold for any Detail) renders as an em
 // dash. Severity follows Breaking alone - there is no serious/good tier at
 // this granularity.
 func diffDetail(det diff.Detail) DiffDetail {
@@ -181,11 +181,12 @@ func diffDetail(det diff.Detail) DiffDetail {
 	}
 }
 
-// dashIfEmpty renders an empty string as an en dash (–, U+2013) - distinct
-// from fmtNum's em dash (—, U+2014) NaN/Inf placeholder.
+// dashIfEmpty renders an empty string as an em dash (—, U+2014) - matching
+// fmtNum's em dash NaN/Inf placeholder, so the same "missing value" glyph is
+// used consistently across the VisualModel.
 func dashIfEmpty(s string) string {
 	if s == "" {
-		return "–"
+		return "—"
 	}
 	return s
 }

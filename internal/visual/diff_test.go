@@ -200,7 +200,7 @@ func TestDiffDetailEmptyDash(t *testing.T) {
 	}}}
 	vm := FromDiff(d)
 	det := vm.Groups[0].Rows[0].Details[0]
-	if det.Old != "–" || det.New != "–" {
+	if det.Old != "—" || det.New != "—" {
 		t.Errorf("expected em dash for empty old/new, got Old=%q New=%q", det.Old, det.New)
 	}
 	if det.Severity != SevWarning {
