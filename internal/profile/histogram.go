@@ -35,6 +35,9 @@ func newNumHistogram(maxBins int) *numHistogram {
 
 // add records one numeric observation.
 func (h *numHistogram) add(x float64) {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return
+	}
 	h.total++
 	i := sort.Search(len(h.bins), func(j int) bool { return h.bins[j].Value >= x })
 	if i < len(h.bins) && h.bins[i].Value == x {

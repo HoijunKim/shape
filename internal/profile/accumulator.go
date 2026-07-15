@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"math"
 	"sort"
 	"strconv"
 )
@@ -21,11 +22,14 @@ type ValueCount struct {
 
 // FieldProfile is the accumulated profile for one path.
 type FieldProfile struct {
-	Path          string
-	PresenceRate  float64
-	TypeDist      map[JSONKind]float64
-	NullRate      float64
-	Min, Max      *float64
+	Path         string
+	PresenceRate float64
+	TypeDist     map[JSONKind]float64
+	NullRate     float64
+	Min, Max     *float64
+	// Histogram holds variable-width streaming centroids, not equal-width
+	// display bins; after merging, extreme centroids drift inward, so use
+	// Min/Max for the true axis extent.
 	Histogram     []HistBin
 	Median        *float64
 	P95           *float64
@@ -71,6 +75,9 @@ func (a *fieldAccumulator) AddValue(o Observation) {
 	a.kindCounts[o.Kind]++
 	switch o.Kind {
 	case KindInt, KindFloat:
+		if math.IsNaN(o.Num) || math.IsInf(o.Num, 0) {
+			return // still counted as a float observation; excluded from numeric stats
+		}
 		if !a.haveNum || o.Num < a.min {
 			a.min = o.Num
 		}

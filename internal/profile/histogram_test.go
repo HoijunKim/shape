@@ -100,6 +100,33 @@ func TestHistogramQuantileClamp(t *testing.T) {
 	}
 }
 
+func TestHistogramIgnoresNonFinite(t *testing.T) {
+	h := newNumHistogram(64)
+	for _, v := range []float64{1, 2, math.NaN(), 3, math.Inf(1), 0.5, math.Inf(-1)} {
+		h.add(v)
+	}
+	if h.total != 4 { // only 1,2,3,0.5 are finite
+		t.Errorf("total = %d, want 4 (non-finite excluded)", h.total)
+	}
+	bins := h.snapshot()
+	sum := 0
+	for i, b := range bins {
+		sum += b.Count
+		if math.IsNaN(b.Value) || math.IsInf(b.Value, 0) {
+			t.Errorf("bin %d has non-finite value %v", i, b.Value)
+		}
+		if i > 0 && bins[i].Value < bins[i-1].Value {
+			t.Fatalf("bins not sorted at %d: %v", i, bins)
+		}
+	}
+	if sum != 4 {
+		t.Errorf("sum of bin counts = %d, want 4", sum)
+	}
+	if q := h.quantile(0.5); math.IsNaN(q) || math.IsInf(q, 0) {
+		t.Errorf("median = %v, want finite", q)
+	}
+}
+
 func TestHistogramQuantileUniformAccuracy(t *testing.T) {
 	h := newNumHistogram(64)
 	for i := 0; i < 10000; i++ {
