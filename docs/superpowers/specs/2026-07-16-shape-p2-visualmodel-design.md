@@ -530,7 +530,13 @@ Format derivation (`Options.Format==""`): from the `Name`/`Source` extension —
 - Health: all-clean->100, all-critical->0, mixed+skip -> exact int + grade band.
 - `FromDiff` goldens: grouping/order, breaking->critical, verdict selection,
   `field_removed`/`type_narrowing` badges, empty-diff, caveats passthrough.
-- Dual-consumer: every `FieldCard` has non-nil `TypeMix`,`Meter`,`Stats`,`Badges`.
+- Dual-consumer: every `FieldCard` has non-nil `Meter`,`Stats`,`Badges`, and a
+  non-nil `TypeMix` EXCEPT when `Form==FormEmpty` (all-null / no observations),
+  where `TypeMix` is `nil` (JSON `null`) because there is no non-null mass to
+  compose. **Renderer note (P3/P6):** gate type-mix rendering on
+  `Form !== "empty"` — a naive `card.typeMix.map(...)` would throw on the empty
+  card. The empty card is fully described by `Form:"empty"`, `Kind:"empty"`,
+  `Status:"critical"`, and `Meter.nullRate==1`.
 
 ## 9. Flags carried for the plan author (all resolved; none blocking)
 1. `Options.Format` extends the spec signature — the pipeline/GUI must pass a label.
@@ -539,3 +545,13 @@ Format derivation (`Options.Format==""`): from the `Name`/`Source` extension —
 4. `mean` is derived from centroids (no stored mean), approximate like median/p95.
 5. `[]` element fields render both as their own card and (via
    `ArrayBreakdown.ElementPath`) nestable under the array container — link, never duplicate.
+6. Per-bar / per-segment `Percent` is independently rounded, so a set can sum to
+   99 or 101. It is display text only; geometry consumers use `Frac`/`Count`
+   (exact). Do not assert `Σ Percent == 100`; if P3 needs pixel-perfect stacking,
+   drive widths from `Frac` (or apply largest-remainder rounding in the view).
+7. Placeholder glyph for a missing value is EM DASH `—` (U+2014) everywhere
+   (`fmtNum`, `deriveFormat`, empty diff `Old`/`New`); the EN DASH `–` (U+2013)
+   appears only as a numeric-range separator (histogram bin labels, `StrLenBar`).
+   Separately, the differ's own preformatted present/absent marker `-` (ASCII
+   hyphen) passes through diff detail text verbatim per §6 — a diff view may see
+   both `-` and `—`; normalize in the renderer if desired.
