@@ -1,0 +1,186 @@
+{
+  "old": "v1.ndjson",
+  "new": "v2.ndjson",
+  "breaking": true,
+  "verdict": "Breaking changes",
+  "verdictSeverity": "critical",
+  "kpis": [
+    {
+      "key": "compared",
+      "label": "Compared",
+      "value": "9",
+      "raw": 9
+    },
+    {
+      "key": "added",
+      "label": "Added",
+      "value": "1",
+      "raw": 1,
+      "severity": "good"
+    },
+    {
+      "key": "removed",
+      "label": "Removed",
+      "value": "2",
+      "raw": 2,
+      "severity": "warning"
+    },
+    {
+      "key": "changed",
+      "label": "Changed",
+      "value": "2",
+      "raw": 2,
+      "severity": "warning"
+    },
+    {
+      "key": "breaking",
+      "label": "Breaking",
+      "value": "2",
+      "raw": 2,
+      "severity": "critical",
+      "hero": true
+    }
+  ],
+  "groups": [
+    {
+      "kind": "added",
+      "label": "Added",
+      "count": 1,
+      "rows": [
+        {
+          "path": "address",
+          "kind": "added",
+          "breaking": false,
+          "severity": "good",
+          "icon": "✓",
+          "label": "Added",
+          "details": [
+            {
+              "reason": "presence",
+              "message": "new field",
+              "old": "-",
+              "new": "100%",
+              "breaking": false,
+              "severity": "warning"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "removed",
+      "label": "Removed",
+      "count": 2,
+      "rows": [
+        {
+          "path": "legacy_field",
+          "kind": "removed",
+          "breaking": true,
+          "severity": "critical",
+          "icon": "⛔",
+          "label": "Breaking",
+          "details": [
+            {
+              "reason": "presence",
+              "message": "removed (was always-present)",
+              "old": "100%",
+              "new": "-",
+              "breaking": true,
+              "severity": "critical"
+            }
+          ]
+        },
+        {
+          "path": "optional_field",
+          "kind": "removed",
+          "breaking": false,
+          "severity": "warning",
+          "icon": "⚠",
+          "label": "Removed",
+          "details": [
+            {
+              "reason": "presence",
+              "message": "removed (was optional)",
+              "old": "80%",
+              "new": "-",
+              "breaking": false,
+              "severity": "warning"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "changed",
+      "label": "Changed",
+      "count": 2,
+      "rows": [
+        {
+          "path": "id",
+          "kind": "changed",
+          "breaking": true,
+          "severity": "critical",
+          "icon": "⛔",
+          "label": "Breaking",
+          "details": [
+            {
+              "reason": "type",
+              "message": "type -string",
+              "old": "number,string",
+              "new": "number",
+              "breaking": true,
+              "severity": "critical"
+            }
+          ]
+        },
+        {
+          "path": "status",
+          "kind": "changed",
+          "breaking": false,
+          "severity": "warning",
+          "icon": "⚠",
+          "label": "Changed",
+          "details": [
+            {
+              "reason": "enum",
+              "message": "enum +\"archived\"",
+              "old": "active,pending",
+              "new": "active,archived,pending",
+              "breaking": false,
+              "severity": "warning"
+            },
+            {
+              "reason": "presence",
+              "message": "presence edge case",
+              "old": "–",
+              "new": "–",
+              "breaking": false,
+              "severity": "warning"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "badges": [
+    {
+      "severity": "critical",
+      "code": "type_narrowing",
+      "icon": "⛔",
+      "label": "Type narrowing",
+      "detail": "Field 'id' narrowed its type set (number,string -\u003e number).",
+      "path": "id"
+    },
+    {
+      "severity": "critical",
+      "code": "field_removed",
+      "icon": "⛔",
+      "label": "Field removed",
+      "detail": "Always-present field 'legacy_field' was removed.",
+      "path": "legacy_field"
+    }
+  ],
+  "caveats": [
+    "skipped lines (old=0, new=3): removed/dropped-type signals may be parse artifacts"
+  ]
+}

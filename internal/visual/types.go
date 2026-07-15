@@ -1,9 +1,5 @@
 package visual
 
-import (
-	"github.com/hoijun-kim/shape/internal/diff"
-)
-
 // Options carries render metadata that ProfileResult does not itself hold.
 // ProfileResult.Source is only set on the diff path, and no detected format is
 // stored anywhere, so the caller passes them here. This is the one deliberate
@@ -11,11 +7,6 @@ import (
 type Options struct {
 	Name   string // display name (filename/label); "" -> ProfileResult.Source
 	Format string // "JSON"|"NDJSON"|"CSV"|"TSV"|"Parquet"|"SQLite"; "" -> derive from Name/Source ext
-}
-
-// FromDiff builds the two-file comparison model.
-func FromDiff(d diff.DiffResult) DiffVisualModel {
-	panic("not implemented")
 }
 
 // ---------------------------------------------------------------------------
