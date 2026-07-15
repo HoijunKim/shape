@@ -1,0 +1,4 @@
+# Golden test fixtures are compared byte-for-byte against os.WriteFile output
+# (LF). Force LF on checkout so core.autocrlf=true does not inject CRLF and
+# break the visual package's golden tests on Windows.
+*.golden text eol=lf

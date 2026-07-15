@@ -5,12 +5,20 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/profile"
 )
 
 var update = flag.Bool("update", false, "update golden files")
+
+// normalizeEOL strips CR so byte-exact golden comparison is stable regardless of
+// how git checked the fixture out (core.autocrlf=true injects CRLF on Windows).
+// The generator writes LF via os.WriteFile; this guards the read side.
+func normalizeEOL(b []byte) string {
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
+}
 
 func goldenCheck(t *testing.T, name string, got []byte) {
 	t.Helper()
@@ -25,7 +33,7 @@ func goldenCheck(t *testing.T, name string, got []byte) {
 	if err != nil {
 		t.Fatalf("read golden (run -update first): %v", err)
 	}
-	if string(got) != string(want) {
+	if normalizeEOL(got) != normalizeEOL(want) {
 		t.Errorf("golden mismatch for %s; run: go test ./internal/visual -run %s -update", name, t.Name())
 	}
 }
