@@ -2,7 +2,6 @@ package visual
 
 import (
 	"github.com/hoijun-kim/shape/internal/diff"
-	"github.com/hoijun-kim/shape/internal/profile"
 )
 
 // Options carries render metadata that ProfileResult does not itself hold.
@@ -12,11 +11,6 @@ import (
 type Options struct {
 	Name   string // display name (filename/label); "" -> ProfileResult.Source
 	Format string // "JSON"|"NDJSON"|"CSV"|"TSV"|"Parquet"|"SQLite"; "" -> derive from Name/Source ext
-}
-
-// FromProfile builds the whole-file dashboard model.
-func FromProfile(res profile.ProfileResult, opts Options) VisualModel {
-	panic("not implemented")
 }
 
 // FromDiff builds the two-file comparison model.

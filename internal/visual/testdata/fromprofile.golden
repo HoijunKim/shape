@@ -1,0 +1,1092 @@
+{
+  "summary": {
+    "name": "sample.ndjson",
+    "format": "NDJSON",
+    "records": 1000,
+    "skipped": 5,
+    "fieldCount": 9,
+    "warningCount": 4,
+    "healthScore": 80,
+    "healthGrade": "Good",
+    "healthSeverity": "good"
+  },
+  "kpis": [
+    {
+      "key": "records",
+      "label": "Records",
+      "value": "1,000",
+      "raw": 1000,
+      "sub": "5 skipped",
+      "severity": "warning"
+    },
+    {
+      "key": "fields",
+      "label": "Fields",
+      "value": "9",
+      "raw": 9
+    },
+    {
+      "key": "format",
+      "label": "Format",
+      "value": "NDJSON",
+      "raw": 0
+    },
+    {
+      "key": "warnings",
+      "label": "Warnings",
+      "value": "4",
+      "raw": 4,
+      "severity": "critical"
+    },
+    {
+      "key": "health",
+      "label": "Health",
+      "value": "80",
+      "raw": 80,
+      "sub": "Good",
+      "severity": "good",
+      "hero": true
+    }
+  ],
+  "fields": [
+    {
+      "path": "active",
+      "displayName": "active",
+      "form": "meter",
+      "kind": "bool",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "good",
+      "typeMix": [
+        {
+          "kind": "bool",
+          "label": "Boolean",
+          "frac": 1,
+          "offset": 0,
+          "count": 1000,
+          "percent": 100,
+          "series": 2
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0,
+        "presenceText": "100%",
+        "nullText": "0%"
+      },
+      "stats": [
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "1,000"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "good",
+          "code": "clean",
+          "icon": "✓",
+          "label": "Clean",
+          "detail": "",
+          "path": "active"
+        }
+      ]
+    },
+    {
+      "path": "email",
+      "displayName": "email",
+      "form": "highCardString",
+      "kind": "string",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "warning",
+      "typeMix": [
+        {
+          "kind": "string",
+          "label": "String",
+          "frac": 1,
+          "offset": 0,
+          "count": 950,
+          "percent": 100,
+          "series": 1
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0.05,
+        "presenceText": "100%",
+        "nullText": "5%"
+      },
+      "stats": [
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "~900",
+          "approx": true
+        },
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "1,000"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "warning",
+          "code": "high_cardinality",
+          "icon": "⚠",
+          "label": "High cardinality",
+          "detail": "~900",
+          "path": "email"
+        }
+      ],
+      "highCard": {
+        "distinct": 900,
+        "distinctText": "~900",
+        "uniqueRatio": 0.9473684210526315,
+        "sample": [
+          "a@x.com",
+          "b@x.com",
+          "c@x.com",
+          "d@x.com",
+          "e@x.com"
+        ],
+        "strLen": {
+          "min": 6,
+          "max": 40,
+          "text": "6–40 chars"
+        }
+      }
+    },
+    {
+      "path": "id",
+      "displayName": "id",
+      "form": "typeMix",
+      "kind": "mixed",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "serious",
+      "typeMix": [
+        {
+          "kind": "number",
+          "label": "Number",
+          "frac": 0.7,
+          "offset": 0,
+          "count": 700,
+          "percent": 70,
+          "series": 0
+        },
+        {
+          "kind": "string",
+          "label": "String",
+          "frac": 0.3,
+          "offset": 0.7,
+          "count": 300,
+          "percent": 30,
+          "series": 1
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0,
+        "presenceText": "100%",
+        "nullText": "0%"
+      },
+      "stats": [
+        {
+          "key": "min",
+          "label": "Min",
+          "text": "100"
+        },
+        {
+          "key": "mean",
+          "label": "Mean",
+          "text": "500",
+          "approx": true
+        },
+        {
+          "key": "median",
+          "label": "Median",
+          "text": "500",
+          "approx": true
+        },
+        {
+          "key": "p95",
+          "label": "P95",
+          "text": "880",
+          "approx": true
+        },
+        {
+          "key": "max",
+          "label": "Max",
+          "text": "900"
+        },
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "900"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "serious",
+          "code": "type_drift",
+          "icon": "❗",
+          "label": "Mixed types",
+          "detail": "Number 70%, String 30%",
+          "path": "id"
+        }
+      ]
+    },
+    {
+      "path": "last_login",
+      "displayName": "last_login",
+      "form": "empty",
+      "kind": "empty",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "critical",
+      "typeMix": null,
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 1,
+        "presenceText": "100%",
+        "nullText": "100%",
+        "nullStatus": "critical"
+      },
+      "stats": [
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "1,000"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "critical",
+          "code": "all_null",
+          "icon": "⛔",
+          "label": "All null",
+          "detail": "Every value is null.",
+          "path": "last_login"
+        }
+      ]
+    },
+    {
+      "path": "latency_ms",
+      "displayName": "latency_ms",
+      "form": "histogram",
+      "kind": "number",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "good",
+      "typeMix": [
+        {
+          "kind": "number",
+          "label": "Number",
+          "frac": 1,
+          "offset": 0,
+          "count": 980,
+          "percent": 100,
+          "series": 0
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0.02,
+        "presenceText": "100%",
+        "nullText": "2%"
+      },
+      "stats": [
+        {
+          "key": "min",
+          "label": "Min",
+          "text": "5"
+        },
+        {
+          "key": "mean",
+          "label": "Mean",
+          "text": "94.34",
+          "approx": true
+        },
+        {
+          "key": "median",
+          "label": "Median",
+          "text": "70",
+          "approx": true
+        },
+        {
+          "key": "p95",
+          "label": "P95",
+          "text": "400",
+          "approx": true
+        },
+        {
+          "key": "max",
+          "label": "Max",
+          "text": "500"
+        },
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "643"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "good",
+          "code": "clean",
+          "icon": "✓",
+          "label": "Clean",
+          "detail": "",
+          "path": "latency_ms"
+        }
+      ],
+      "histogram": {
+        "min": 5,
+        "max": 500,
+        "binWidth": 24.75,
+        "bins": [
+          {
+            "lo": 5,
+            "hi": 29.75,
+            "count": 100,
+            "frac": 0.4,
+            "label": "5–29.75"
+          },
+          {
+            "lo": 29.75,
+            "hi": 54.5,
+            "count": 200,
+            "frac": 0.8,
+            "label": "29.75–54.5"
+          },
+          {
+            "lo": 54.5,
+            "hi": 79.25,
+            "count": 250,
+            "frac": 1,
+            "label": "54.5–79.25"
+          },
+          {
+            "lo": 79.25,
+            "hi": 104,
+            "count": 200,
+            "frac": 0.8,
+            "label": "79.25–104"
+          },
+          {
+            "lo": 104,
+            "hi": 128.75,
+            "count": 0,
+            "frac": 0,
+            "label": "104–128.75"
+          },
+          {
+            "lo": 128.75,
+            "hi": 153.5,
+            "count": 120,
+            "frac": 0.48,
+            "label": "128.75–153.5"
+          },
+          {
+            "lo": 153.5,
+            "hi": 178.25,
+            "count": 0,
+            "frac": 0,
+            "label": "153.5–178.25"
+          },
+          {
+            "lo": 178.25,
+            "hi": 203,
+            "count": 0,
+            "frac": 0,
+            "label": "178.25–203"
+          },
+          {
+            "lo": 203,
+            "hi": 227.75,
+            "count": 0,
+            "frac": 0,
+            "label": "203–227.75"
+          },
+          {
+            "lo": 227.75,
+            "hi": 252.5,
+            "count": 70,
+            "frac": 0.28,
+            "label": "227.75–252.5"
+          },
+          {
+            "lo": 252.5,
+            "hi": 277.25,
+            "count": 0,
+            "frac": 0,
+            "label": "252.5–277.25"
+          },
+          {
+            "lo": 277.25,
+            "hi": 302,
+            "count": 0,
+            "frac": 0,
+            "label": "277.25–302"
+          },
+          {
+            "lo": 302,
+            "hi": 326.75,
+            "count": 0,
+            "frac": 0,
+            "label": "302–326.75"
+          },
+          {
+            "lo": 326.75,
+            "hi": 351.5,
+            "count": 0,
+            "frac": 0,
+            "label": "326.75–351.5"
+          },
+          {
+            "lo": 351.5,
+            "hi": 376.25,
+            "count": 0,
+            "frac": 0,
+            "label": "351.5–376.25"
+          },
+          {
+            "lo": 376.25,
+            "hi": 401,
+            "count": 30,
+            "frac": 0.12,
+            "label": "376.25–401"
+          },
+          {
+            "lo": 401,
+            "hi": 425.75,
+            "count": 0,
+            "frac": 0,
+            "label": "401–425.75"
+          },
+          {
+            "lo": 425.75,
+            "hi": 450.5,
+            "count": 0,
+            "frac": 0,
+            "label": "425.75–450.5"
+          },
+          {
+            "lo": 450.5,
+            "hi": 475.25,
+            "count": 0,
+            "frac": 0,
+            "label": "450.5–475.25"
+          },
+          {
+            "lo": 475.25,
+            "hi": 500,
+            "count": 10,
+            "frac": 0.04,
+            "label": "475.25–500"
+          }
+        ],
+        "maxCount": 250,
+        "total": 980
+      },
+      "sparkline": [
+        {
+          "x": 0.025,
+          "y": 0.4
+        },
+        {
+          "x": 0.075,
+          "y": 0.8
+        },
+        {
+          "x": 0.125,
+          "y": 1
+        },
+        {
+          "x": 0.175,
+          "y": 0.8
+        },
+        {
+          "x": 0.225,
+          "y": 0
+        },
+        {
+          "x": 0.275,
+          "y": 0.48
+        },
+        {
+          "x": 0.325,
+          "y": 0
+        },
+        {
+          "x": 0.375,
+          "y": 0
+        },
+        {
+          "x": 0.425,
+          "y": 0
+        },
+        {
+          "x": 0.475,
+          "y": 0.28
+        },
+        {
+          "x": 0.525,
+          "y": 0
+        },
+        {
+          "x": 0.575,
+          "y": 0
+        },
+        {
+          "x": 0.625,
+          "y": 0
+        },
+        {
+          "x": 0.675,
+          "y": 0
+        },
+        {
+          "x": 0.725,
+          "y": 0
+        },
+        {
+          "x": 0.775,
+          "y": 0.12
+        },
+        {
+          "x": 0.825,
+          "y": 0
+        },
+        {
+          "x": 0.875,
+          "y": 0
+        },
+        {
+          "x": 0.925,
+          "y": 0
+        },
+        {
+          "x": 0.975,
+          "y": 0.04
+        }
+      ]
+    },
+    {
+      "path": "rating",
+      "displayName": "rating",
+      "form": "categorical",
+      "kind": "number",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "good",
+      "typeMix": [
+        {
+          "kind": "number",
+          "label": "Number",
+          "frac": 1,
+          "offset": 0,
+          "count": 1000,
+          "percent": 100,
+          "series": 0
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0,
+        "presenceText": "100%",
+        "nullText": "0%"
+      },
+      "stats": [
+        {
+          "key": "min",
+          "label": "Min",
+          "text": "1"
+        },
+        {
+          "key": "mean",
+          "label": "Mean",
+          "text": "3.9",
+          "approx": true
+        },
+        {
+          "key": "median",
+          "label": "Median",
+          "text": "4",
+          "approx": true
+        },
+        {
+          "key": "p95",
+          "label": "P95",
+          "text": "5",
+          "approx": true
+        },
+        {
+          "key": "max",
+          "label": "Max",
+          "text": "5"
+        },
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "5"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "good",
+          "code": "clean",
+          "icon": "✓",
+          "label": "Clean",
+          "detail": "",
+          "path": "rating"
+        }
+      ],
+      "categorical": {
+        "bars": [
+          {
+            "label": "5",
+            "count": 400,
+            "frac": 1,
+            "percent": 40
+          },
+          {
+            "label": "4",
+            "count": 300,
+            "frac": 0.75,
+            "percent": 30
+          },
+          {
+            "label": "3",
+            "count": 150,
+            "frac": 0.375,
+            "percent": 15
+          },
+          {
+            "label": "2",
+            "count": 100,
+            "frac": 0.25,
+            "percent": 10
+          },
+          {
+            "label": "1",
+            "count": 50,
+            "frac": 0.125,
+            "percent": 5
+          }
+        ],
+        "total": 1000,
+        "maxCount": 400,
+        "truncated": false
+      },
+      "sparkline": [
+        {
+          "x": 0.1,
+          "y": 1
+        },
+        {
+          "x": 0.3,
+          "y": 0.75
+        },
+        {
+          "x": 0.5,
+          "y": 0.375
+        },
+        {
+          "x": 0.7,
+          "y": 0.25
+        },
+        {
+          "x": 0.9,
+          "y": 0.125
+        }
+      ]
+    },
+    {
+      "path": "status",
+      "displayName": "status",
+      "form": "categorical",
+      "kind": "string",
+      "enumLike": true,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "warning",
+      "typeMix": [
+        {
+          "kind": "string",
+          "label": "String",
+          "frac": 1,
+          "offset": 0,
+          "count": 750,
+          "percent": 100,
+          "series": 1
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0.25,
+        "presenceText": "100%",
+        "nullText": "25%",
+        "nullStatus": "warning"
+      },
+      "stats": [
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "4"
+        },
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "1,000"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "warning",
+          "code": "null_elevated",
+          "icon": "⚠",
+          "label": "Elevated nulls",
+          "detail": "25%",
+          "path": "status"
+        }
+      ],
+      "categorical": {
+        "bars": [
+          {
+            "label": "active",
+            "count": 450,
+            "frac": 1,
+            "percent": 60
+          },
+          {
+            "label": "pending",
+            "count": 150,
+            "frac": 0.3333333333333333,
+            "percent": 20
+          },
+          {
+            "label": "closed",
+            "count": 100,
+            "frac": 0.2222222222222222,
+            "percent": 13
+          },
+          {
+            "label": "cancelled",
+            "count": 50,
+            "frac": 0.1111111111111111,
+            "percent": 7
+          }
+        ],
+        "total": 750,
+        "maxCount": 450,
+        "truncated": false
+      },
+      "sparkline": [
+        {
+          "x": 0.125,
+          "y": 1
+        },
+        {
+          "x": 0.375,
+          "y": 0.3333333333333333
+        },
+        {
+          "x": 0.625,
+          "y": 0.2222222222222222
+        },
+        {
+          "x": 0.875,
+          "y": 0.1111111111111111
+        }
+      ]
+    },
+    {
+      "path": "tags",
+      "displayName": "tags",
+      "form": "array",
+      "kind": "array",
+      "enumLike": false,
+      "arrayElement": false,
+      "observations": 1000,
+      "status": "good",
+      "typeMix": [
+        {
+          "kind": "array",
+          "label": "Array",
+          "frac": 1,
+          "offset": 0,
+          "count": 1000,
+          "percent": 100,
+          "series": 3
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0,
+        "presenceText": "100%",
+        "nullText": "0%"
+      },
+      "stats": [
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "1,000"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "good",
+          "code": "clean",
+          "icon": "✓",
+          "label": "Clean",
+          "detail": "",
+          "path": "tags"
+        }
+      ],
+      "array": {
+        "elementPath": "tags[]",
+        "present": true,
+        "elementCount": 2500,
+        "elementTypes": [
+          {
+            "kind": "string",
+            "label": "String",
+            "frac": 1,
+            "offset": 0,
+            "count": 2500,
+            "percent": 100,
+            "series": 1
+          }
+        ]
+      }
+    },
+    {
+      "path": "tags[]",
+      "displayName": "tags[]",
+      "form": "categorical",
+      "kind": "string",
+      "enumLike": true,
+      "arrayElement": true,
+      "observations": 2500,
+      "status": "good",
+      "typeMix": [
+        {
+          "kind": "string",
+          "label": "String",
+          "frac": 1,
+          "offset": 0,
+          "count": 2500,
+          "percent": 100,
+          "series": 1
+        }
+      ],
+      "meter": {
+        "presenceRate": 1,
+        "nullRate": 0,
+        "presenceText": "100%",
+        "nullText": "0%"
+      },
+      "stats": [
+        {
+          "key": "distinct",
+          "label": "Distinct",
+          "text": "8"
+        },
+        {
+          "key": "observations",
+          "label": "Observations",
+          "text": "2,500"
+        }
+      ],
+      "badges": [
+        {
+          "severity": "good",
+          "code": "clean",
+          "icon": "✓",
+          "label": "Clean",
+          "detail": "",
+          "path": "tags[]"
+        }
+      ],
+      "categorical": {
+        "bars": [
+          {
+            "label": "news",
+            "count": 500,
+            "frac": 1,
+            "percent": 20
+          },
+          {
+            "label": "sports",
+            "count": 400,
+            "frac": 0.8,
+            "percent": 16
+          },
+          {
+            "label": "tech",
+            "count": 350,
+            "frac": 0.7,
+            "percent": 14
+          },
+          {
+            "label": "music",
+            "count": 300,
+            "frac": 0.6,
+            "percent": 12
+          },
+          {
+            "label": "travel",
+            "count": 300,
+            "frac": 0.6,
+            "percent": 12
+          },
+          {
+            "label": "food",
+            "count": 250,
+            "frac": 0.5,
+            "percent": 10
+          },
+          {
+            "label": "health",
+            "count": 250,
+            "frac": 0.5,
+            "percent": 10
+          },
+          {
+            "label": "finance",
+            "count": 150,
+            "frac": 0.3,
+            "percent": 6
+          }
+        ],
+        "total": 2500,
+        "maxCount": 500,
+        "truncated": false
+      },
+      "sparkline": [
+        {
+          "x": 0.0625,
+          "y": 1
+        },
+        {
+          "x": 0.1875,
+          "y": 0.8
+        },
+        {
+          "x": 0.3125,
+          "y": 0.7
+        },
+        {
+          "x": 0.4375,
+          "y": 0.6
+        },
+        {
+          "x": 0.5625,
+          "y": 0.6
+        },
+        {
+          "x": 0.6875,
+          "y": 0.5
+        },
+        {
+          "x": 0.8125,
+          "y": 0.5
+        },
+        {
+          "x": 0.9375,
+          "y": 0.3
+        }
+      ]
+    }
+  ],
+  "badges": [
+    {
+      "severity": "critical",
+      "code": "all_null",
+      "icon": "⛔",
+      "label": "All null",
+      "detail": "Every value is null.",
+      "path": "last_login"
+    },
+    {
+      "severity": "serious",
+      "code": "type_drift",
+      "icon": "❗",
+      "label": "Mixed types",
+      "detail": "Number 70%, String 30%",
+      "path": "id"
+    },
+    {
+      "severity": "warning",
+      "code": "skipped_records",
+      "icon": "⚠",
+      "label": "Skipped records",
+      "detail": "5 records skipped"
+    },
+    {
+      "severity": "warning",
+      "code": "high_cardinality",
+      "icon": "⚠",
+      "label": "High cardinality",
+      "detail": "~900",
+      "path": "email"
+    },
+    {
+      "severity": "warning",
+      "code": "null_elevated",
+      "icon": "⚠",
+      "label": "Elevated nulls",
+      "detail": "25%",
+      "path": "status"
+    },
+    {
+      "severity": "good",
+      "code": "clean",
+      "icon": "✓",
+      "label": "Clean",
+      "detail": "",
+      "path": "active"
+    },
+    {
+      "severity": "good",
+      "code": "clean",
+      "icon": "✓",
+      "label": "Clean",
+      "detail": "",
+      "path": "latency_ms"
+    },
+    {
+      "severity": "good",
+      "code": "clean",
+      "icon": "✓",
+      "label": "Clean",
+      "detail": "",
+      "path": "rating"
+    },
+    {
+      "severity": "good",
+      "code": "clean",
+      "icon": "✓",
+      "label": "Clean",
+      "detail": "",
+      "path": "tags"
+    },
+    {
+      "severity": "good",
+      "code": "clean",
+      "icon": "✓",
+      "label": "Clean",
+      "detail": "",
+      "path": "tags[]"
+    }
+  ]
+}
