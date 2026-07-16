@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/hoijun-kim/shape/internal/diff"
 	"github.com/hoijun-kim/shape/internal/pipeline"
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijun-kim/shape/internal/visual"
 	wr "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -21,64 +22,27 @@ func NewApp() *App { return &App{} }
 // startup captures the runtime context (wired via OnStartup, not a binding).
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
-// FieldView is a frontend-friendly per-field profile.
-type FieldView struct {
-	Path         string             `json:"path"`
-	PresenceRate float64            `json:"presenceRate"`
-	NullRate     float64            `json:"nullRate"`
-	TypeDist     map[string]float64 `json:"typeDist"`
-	Distinct     int                `json:"distinct"`
-	DistinctEx   bool               `json:"distinctExact"`
-	Drift        bool               `json:"drift"`
-	Min          *float64           `json:"min,omitempty"`
-	Max          *float64           `json:"max,omitempty"`
-	StrLenMin    *int               `json:"strLenMin,omitempty"`
-	StrLenMax    *int               `json:"strLenMax,omitempty"`
-	TopValues    []ValueView        `json:"topValues"`
-}
-
-// ValueView is a value + its count for the top-values list.
-type ValueView struct {
-	Value string `json:"value"`
-	Count int    `json:"count"`
-}
-
-// ProfileView is the full profile handed to the frontend.
-type ProfileView struct {
-	Source  string      `json:"source"`
-	Records int         `json:"records"`
-	Skipped int         `json:"skipped"`
-	Fields  []FieldView `json:"fields"`
-}
-
-func toView(r profile.ProfileResult) ProfileView {
-	pv := ProfileView{Source: r.Source, Records: r.Records, Skipped: r.Skipped}
-	for _, f := range r.Fields {
-		td := map[string]float64{}
-		for k, v := range f.TypeDist {
-			td[string(k)] = v
-		}
-		tv := make([]ValueView, 0, len(f.TopValues))
-		for _, v := range f.TopValues {
-			tv = append(tv, ValueView{Value: v.Value, Count: v.Count})
-		}
-		pv.Fields = append(pv.Fields, FieldView{
-			Path: f.Path, PresenceRate: f.PresenceRate, NullRate: f.NullRate,
-			TypeDist: td, Distinct: f.DistinctCount, DistinctEx: f.DistinctExact,
-			Drift: profile.IsTypeDrift(f), Min: f.Min, Max: f.Max,
-			StrLenMin: f.StrLenMin, StrLenMax: f.StrLenMax, TopValues: tv,
-		})
-	}
-	return pv
-}
-
-// ProfileFile returns the per-field profile of a data file.
-func (a *App) ProfileFile(path string) (ProfileView, error) {
+// ProfileFile returns the visual dashboard model for a data file.
+func (a *App) ProfileFile(path string) (visual.VisualModel, error) {
 	r, err := pipeline.Profile(pipeline.Options{Path: path, Format: "auto"})
 	if err != nil {
-		return ProfileView{}, err
+		return visual.VisualModel{}, err
 	}
-	return toView(r), nil
+	return visual.FromProfile(r, visual.Options{Name: r.Source}), nil
+}
+
+// DiffFiles returns the visual comparison model between two data files.
+func (a *App) DiffFiles(oldPath, newPath string) (visual.DiffVisualModel, error) {
+	oldR, err := pipeline.Profile(pipeline.Options{Path: oldPath, Format: "auto"})
+	if err != nil {
+		return visual.DiffVisualModel{}, err
+	}
+	newR, err := pipeline.Profile(pipeline.Options{Path: newPath, Format: "auto"})
+	if err != nil {
+		return visual.DiffVisualModel{}, err
+	}
+	d := diff.Diff(oldR, newR)
+	return visual.FromDiff(d), nil
 }
 
 // SchemaJSON returns the inferred JSON Schema as a pretty-printed string.
