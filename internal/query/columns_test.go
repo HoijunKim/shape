@@ -398,7 +398,7 @@ func TestBuildColumnModel_OrderIsFirstSeenNotAlphabetical(t *testing.T) {
 		{"zebra": json.Number("4"), "apple": json.Number("5"), "mango": json.Number("6")},
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	var gotPaths []string
 	for _, c := range cm.Columns {
@@ -415,13 +415,107 @@ func TestBuildColumnModel_OrderIsFirstSeenNotAlphabetical(t *testing.T) {
 	}
 }
 
+// multiSiblingRecord returns a record introducing 8 new sibling top-level
+// keys in ONE Observe call -- the COMMON case (a uniform CSV/JSON where
+// every column appears in the first record) that
+// TestColumnDiscoverer_FirstSeenOrderNotAlphabetical and
+// TestBuildColumnModel_OrderIsFirstSeenNotAlphabetical above do NOT cover:
+// both of those fixtures introduce at most one brand-new path per record,
+// sidestepping the intra-call sibling tie entirely. Keys are listed in a
+// deliberately non-alphabetical logical order (a fruit-stand walk order) so
+// a test asserting alphabetical Path order cannot be accidentally satisfied
+// by coincidence.
+func multiSiblingRecord() map[string]any {
+	return map[string]any{
+		"zebra":  json.Number("1"),
+		"mango":  json.Number("2"),
+		"apple":  json.Number("3"),
+		"kiwi":   json.Number("4"),
+		"banana": json.Number("5"),
+		"fig":    json.Number("6"),
+		"cherry": json.Number("7"),
+		"date":   json.Number("8"),
+	}
+}
+
+// TestBuildColumnModel_MultiNewSiblingOrderIsDeterministic is the
+// regression test for the Critical finding: pre-fix, columnDiscoverer.walk
+// registered a record's newly-seen sibling paths via a raw
+// `for k, cv := range t` over its map[string]any, so when a SINGLE Observe
+// call first-saw multiple sibling paths (this fixture: 8 at once), their
+// relative registration order depended on Go's randomized map iteration --
+// varying across runs of the identical input. The fix sorts the
+// newly-discovered paths (bytewise, by dotted path string) before
+// registering them, so the order asserted below (alphabetical, since these
+// are single-segment top-level paths) must come out identical every time,
+// regardless of map iteration order.
+//
+// Run the whole disc+build pipeline fresh several times (a fresh map
+// literal and a fresh columnDiscoverer each time, so each run gets its own
+// independent map iteration) and assert every run produces the exact same
+// order: this is the "stable across repeated calls" assertion, and it is
+// also what makes this test flaky/failing against the pre-fix map-range
+// code (see task report for the pre-fix RED run demonstrating this).
+func TestBuildColumnModel_MultiNewSiblingOrderIsDeterministic(t *testing.T) {
+	want := []string{"apple", "banana", "cherry", "date", "fig", "kiwi", "mango", "zebra"}
+
+	build := func() []string {
+		rec := multiSiblingRecord()
+		disc, prof := discoverAndProfile([]map[string]any{rec})
+		cm := buildColumnModel(disc, prof, nil)
+		got := make([]string, len(cm.Columns))
+		for i, c := range cm.Columns {
+			got[i] = c.Path
+		}
+		return got
+	}
+
+	const runs = 5
+	for i := 0; i < runs; i++ {
+		got := build()
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: Columns paths = %#v, want deterministic sorted order %#v (non-deterministic map-order regression)", i, got, want)
+		}
+	}
+}
+
+// TestBuildColumnModel_SourceOrderHintHonored covers Part B: when a caller
+// supplies sourceOrder (the seam a backend with a REAL column order -- CSV
+// header, SQLite/Parquet schema -- fills in later tasks), eligible columns
+// are ordered by their sourceOrder position; a column absent from
+// sourceOrder is placed after, in the deterministic first-seen order from
+// Part A (here: alphabetical, since every path is a single-segment
+// top-level path discovered in one Observe call).
+func TestBuildColumnModel_SourceOrderHintHonored(t *testing.T) {
+	rec := multiSiblingRecord()
+	disc, prof := discoverAndProfile([]map[string]any{rec})
+
+	// Deliberately non-alphabetical, and omits "date" and "fig" so both the
+	// "honor sourceOrder position" and "unmatched columns fall back to
+	// deterministic order" behaviors are exercised in one test.
+	sourceOrder := []string{"zebra", "kiwi", "apple", "mango", "banana", "cherry"}
+	cm := buildColumnModel(disc, prof, sourceOrder)
+
+	var got []string
+	for _, c := range cm.Columns {
+		got = append(got, c.Path)
+	}
+	// "date" and "fig" (both absent from sourceOrder) come after the
+	// sourceOrder-matched columns, in deterministic (alphabetical) order
+	// relative to each other: "date" < "fig".
+	want := []string{"zebra", "kiwi", "apple", "mango", "banana", "cherry", "date", "fig"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Columns paths = %#v, want sourceOrder-then-deterministic order %#v", got, want)
+	}
+}
+
 func TestBuildColumnModel_ElemPathsExcluded(t *testing.T) {
 	records := []map[string]any{
 		{"tags": []any{"a", "b"}},
 		{"tags": []any{"c"}},
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	if _, ok := cm.byPath["tags[]"]; ok {
 		t.Fatalf("byPath contains \"tags[]\", want Elem paths excluded from columns")
@@ -451,7 +545,7 @@ func TestBuildColumnModel_PureInteriorObjectDroppedDriftKept(t *testing.T) {
 		},
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	if _, ok := cm.byPath["user"]; ok {
 		t.Fatalf("byPath contains \"user\": pure interior object (always object, has deeper column user.name) should be dropped")
@@ -500,7 +594,7 @@ func TestBuildColumnModel_TypeNullablePresenceDistinctFromFieldProfile(t *testin
 		{"name": "Alice"}, // age entirely absent this record
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	nameIdx, ok := cm.byPath["name"]
 	if !ok {
@@ -560,7 +654,7 @@ func TestBuildColumnModel_MaxColumnsCap(t *testing.T) {
 	}
 
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	if cm.TotalPaths != n {
 		t.Fatalf("TotalPaths = %d, want %d", cm.TotalPaths, n)
@@ -596,7 +690,7 @@ func TestResolveCol_AlignedCells(t *testing.T) {
 		{"a": json.Number("2"), "b": "y"},
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	aIdx, ok := cm.byPath["a"]
 	if !ok {
@@ -639,7 +733,7 @@ func TestResolveCol_MissingIsCellMissing(t *testing.T) {
 		{"a": json.Number("2")}, // "b" absent this record
 	}
 	disc, prof := discoverAndProfile(records)
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	bIdx, ok := cm.byPath["b"]
 	if !ok {
@@ -654,7 +748,7 @@ func TestResolveCol_MissingIsCellMissing(t *testing.T) {
 
 func TestResolveCol_OutOfRangeIndexIsCellMissing(t *testing.T) {
 	disc, prof := discoverAndProfile([]map[string]any{{"a": json.Number("1")}})
-	cm := buildColumnModel(disc, prof)
+	cm := buildColumnModel(disc, prof, nil)
 
 	if got := cm.resolveCol(-1, map[string]any{}); got != (Cell{Kind: CellMissing}) {
 		t.Fatalf("resolveCol(-1, ...) = %#v, want CellMissing", got)

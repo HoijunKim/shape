@@ -277,55 +277,77 @@ func newColumnDiscoverer() *columnDiscoverer {
 
 // Observe walks record (record is shaped as produced by the readers/
 // profile pipeline: nil/bool/string/json.Number scalars, map[string]any,
-// []any) and registers any newly-seen path in first-seen order.
+// []any) and registers any newly-seen path.
 //
-// Known limitation (by design, not fixed here -- see
-// docs/superpowers/sdd/task-2-report.md): once a record is decoded into
-// map[string]any, Go's map iteration order is unspecified (intentionally
-// randomized per range), so the relative first-seen order between two or
-// more sibling keys that are BOTH introduced by the SAME Observe call is not
-// recoverable -- true source key order is only available before generic
-// decode, which is outside this package's scope. Order ACROSS separate
-// Observe calls (i.e. across records) is fully deterministic: a path
-// registered by an earlier record always sorts before one first seen in a
-// later record.
+// Paths first seen in an EARLIER Observe call always sort before ones first
+// seen in a LATER call (true first-seen order, across records). Within a
+// SINGLE Observe call, walk necessarily ranges over each map[string]any's
+// keys (Go map iteration order is unspecified and randomized per range), so
+// two or more sibling paths BOTH introduced by that same call cannot be
+// ordered by any real "first-seen" signal -- there isn't one, since generic
+// decode into map[string]any already erased true source key order before
+// columnDiscoverer ever saw the record (an upstream internal/readers
+// limitation, out of this package's scope; see buildColumnModel's
+// sourceOrder parameter for the seam a backend with a real column order --
+// CSV header, SQLite/Parquet schema -- can use to restore it). What Observe
+// DOES guarantee: that intra-call tie is broken the SAME way every time, by
+// sorting the paths newly discovered by this call (bytewise, by dotted path
+// string) before appending them to the first-seen order slice -- so
+// Columns order is stable and reproducible across runs for identical input,
+// never dependent on map iteration order.
 func (d *columnDiscoverer) Observe(record any) {
-	d.walk("", record)
+	batch := &discoverBatch{seen: map[string]bool{}}
+	d.walk("", record, batch)
+	sort.Strings(batch.paths)
+	for _, p := range batch.paths {
+		d.seen[p] = true
+		d.order = append(d.order, p)
+	}
 }
 
-func (d *columnDiscoverer) walk(path string, v any) {
+// discoverBatch buffers the paths newly discovered within a single Observe
+// call so they can be sorted (breaking the intra-call sibling tie
+// deterministically) before being committed to columnDiscoverer.order.
+type discoverBatch struct {
+	paths []string
+	seen  map[string]bool // paths already buffered THIS call (dedupe within the batch)
+}
+
+func (d *columnDiscoverer) walk(path string, v any, batch *discoverBatch) {
 	switch t := v.(type) {
 	case map[string]any:
 		if path != "" {
-			d.register(path)
+			d.stage(path, batch)
 		}
 		for k, cv := range t {
 			child := k
 			if path != "" {
 				child = path + "." + k
 			}
-			d.walk(child, cv)
+			d.walk(child, cv, batch)
 		}
 	case []any:
-		d.register(rootOrPath(path))
+		d.stage(rootOrPath(path), batch)
 		elem := "[]"
 		if path != "" {
 			elem = path + "[]"
 		}
 		for _, cv := range t {
-			d.walk(elem, cv)
+			d.walk(elem, cv, batch)
 		}
 	default:
-		d.register(rootOrPath(path))
+		d.stage(rootOrPath(path), batch)
 	}
 }
 
-func (d *columnDiscoverer) register(path string) {
-	if d.seen[path] {
+// stage buffers path into batch if it is new (not already registered from a
+// prior Observe call, and not already buffered earlier in THIS call).
+func (d *columnDiscoverer) stage(path string, batch *discoverBatch) {
+	if d.seen[path] || batch.seen[path] {
 		return
 	}
-	d.seen[path] = true
-	d.order = append(d.order, path)
+	batch.seen[path] = true
+	batch.paths = append(batch.paths, path)
 }
 
 // rootOrPath mirrors profile.Flatten's internal rootOr: the root scalar/
@@ -394,11 +416,25 @@ const MaxColumns = 512
 //     stays a column alongside its excluded "tags[]" element path.
 //
 // The surviving columns are capped at MaxColumns: the top MaxColumns by
-// presence-desc (ties keep first-seen order, via a stable sort) are kept,
-// but the final Columns slice is re-ordered back to first-seen order among
-// the kept set, so "column order == first-seen order" remains true for
-// every column a caller can see. Truncated/TotalPaths report the cap.
-func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult) *ColumnModel {
+// presence-desc (ties keep the resolved order, via a stable sort) are kept,
+// but the final Columns slice is re-ordered back to the resolved order among
+// the kept set, so "column order == resolved order" remains true for every
+// column a caller can see. Truncated/TotalPaths report the cap.
+//
+// sourceOrder is an optional hint giving the TRUE source column order (e.g.
+// a CSV header row, or a SQLite/Parquet schema's column order) as dotted
+// path strings matching Column.Path. When non-empty, eligible columns are
+// ordered by their position in sourceOrder first; any eligible column not
+// present in sourceOrder is placed after, in disc's deterministic first-seen
+// order (see columnDiscoverer.Observe). When sourceOrder is nil/empty (as
+// from every caller today), the result is exactly disc's deterministic
+// first-seen order -- unchanged behavior. JSON/NDJSON readers cannot supply
+// a meaningful sourceOrder yet: generic decode into map[string]any already
+// erases true source key order before columnDiscoverer ever sees the
+// record, an upstream internal/readers limitation deferred to a later task
+// (CSV/SQLite/Parquet backends that DO have a real column order wire it
+// through this parameter once their readers are built).
+func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult, sourceOrder []string) *ColumnModel {
 	fieldByPath := make(map[string]profile.FieldProfile, len(prof.Fields))
 	for _, fp := range prof.Fields {
 		fieldByPath[fp.Path] = fp
@@ -456,25 +492,36 @@ func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult) *Colum
 	}
 
 	total := len(candidates)
-	kept := candidates
 	truncated := false
+	keepSet := make(map[string]bool, total)
+	for _, c := range candidates {
+		keepSet[c.path] = true
+	}
 	if total > MaxColumns {
 		truncated = true
 		ranked := append([]candidate(nil), candidates...)
 		sort.SliceStable(ranked, func(i, j int) bool {
 			return ranked[i].col.Presence > ranked[j].col.Presence
 		})
-		keepSet := make(map[string]bool, MaxColumns)
+		keepSet = make(map[string]bool, MaxColumns)
 		for _, c := range ranked[:MaxColumns] {
 			keepSet[c.path] = true
 		}
-		filtered := make([]candidate, 0, MaxColumns)
-		for _, c := range candidates { // restore first-seen order among the kept set
-			if keepSet[c.path] {
-				filtered = append(filtered, c)
-			}
+	}
+
+	candidateOrder := make([]string, len(candidates))
+	byPath := make(map[string]candidate, len(candidates))
+	for i, c := range candidates {
+		candidateOrder[i] = c.path
+		byPath[c.path] = c
+	}
+	resolved := resolveColumnOrder(candidateOrder, sourceOrder)
+
+	kept := make([]candidate, 0, len(keepSet))
+	for _, p := range resolved { // apply the resolved (sourceOrder-hinted or first-seen) order to the kept set
+		if keepSet[p] {
+			kept = append(kept, byPath[p])
 		}
-		kept = filtered
 	}
 
 	cm := &ColumnModel{
@@ -491,6 +538,46 @@ func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult) *Colum
 		cm.byPath[c.path] = i
 	}
 	return cm
+}
+
+// resolveColumnOrder returns candidateOrder (already in deterministic
+// first-seen order -- see columnDiscoverer.Observe) re-ordered per
+// sourceOrder when sourceOrder is non-empty: a path present in sourceOrder
+// sorts by its index there; a path absent from sourceOrder keeps its
+// relative first-seen position, placed after every sourceOrder-matched
+// path. A stable sort makes this a single pass: candidateOrder's existing
+// deterministic order is the natural tiebreak for both "which sourceOrder
+// duplicate wins" (first occurrence, via the index map below) and "how do
+// unmatched paths order among themselves".
+//
+// When sourceOrder is nil/empty, candidateOrder is returned unchanged --
+// callers that don't have a real source column order (nil, per
+// buildColumnModel's doc comment) get exactly the deterministic first-seen
+// order, with no behavior change from before this hint existed.
+func resolveColumnOrder(candidateOrder []string, sourceOrder []string) []string {
+	if len(sourceOrder) == 0 {
+		return candidateOrder
+	}
+	srcIndex := make(map[string]int, len(sourceOrder))
+	for i, p := range sourceOrder {
+		if _, exists := srcIndex[p]; !exists {
+			srcIndex[p] = i
+		}
+	}
+	ordered := append([]string(nil), candidateOrder...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		pi, oki := srcIndex[ordered[i]]
+		pj, okj := srcIndex[ordered[j]]
+		switch {
+		case oki && okj:
+			return pi < pj
+		case oki != okj:
+			return oki // the sourceOrder-matched path sorts first
+		default:
+			return false // neither matched: stable sort keeps first-seen relative order
+		}
+	})
+	return ordered
 }
 
 // resolveCol resolves column i's compiled segments against rec (see
