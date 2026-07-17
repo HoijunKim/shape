@@ -190,10 +190,10 @@ type compiledCondition struct {
 	containsOperand string         // OpContains, pre-lowered if ci
 	eqOperandLower  string         // OpEq/OpNe, pre-lowered if ci and Value.Kind==ValString
 
-	inStrings  map[string]bool // OpIn
-	inNumbers  map[float64]bool
-	inBoolTrue bool
-	inBoolFals bool
+	inStrings   map[string]bool // OpIn
+	inNumbers   map[float64]bool
+	inBoolTrue  bool
+	inBoolFalse bool
 }
 
 // resolveSegs resolves path to compiled Seg, validating it first (see
@@ -308,7 +308,7 @@ func compileCondition(c Condition, cm *ColumnModel) (*compiledCondition, error) 
 				if item.Bool {
 					cc.inBoolTrue = true
 				} else {
-					cc.inBoolFals = true
+					cc.inBoolFalse = true
 				}
 			}
 			// ValNull list entries never match: a resolved value that is
@@ -481,7 +481,7 @@ func (cc *compiledCondition) matchesIn(v any) bool {
 		if b {
 			return cc.inBoolTrue
 		}
-		return cc.inBoolFals
+		return cc.inBoolFalse
 	}
 	return false // object/array/other: no bucket, never a member
 }

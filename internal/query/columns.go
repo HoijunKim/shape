@@ -6,6 +6,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -203,6 +204,15 @@ func toCell(v any) Cell {
 			return Cell{Kind: CellFloat, Num: f, Str: num.String()}
 		}
 		f, _ := v.(float64)
+		// Parquet DOUBLE / SQLite REAL columns can hold NaN/+Inf/-Inf, which
+		// arrive here as a raw float64 (see readers.ToProfileValue). A
+		// non-finite Num would make encoding/json.Marshal error on any Cell/
+		// Row/RowSet containing it (the E2 Wails-response crash this guards
+		// against), so a non-finite value is rendered as a deterministic
+		// sentinel string with Num forced to 0 instead.
+		if num, sentinel := sanitizeFloat(f); sentinel != "" {
+			return Cell{Kind: CellFloat, Num: num, Str: sentinel}
+		}
 		return Cell{Kind: CellFloat, Num: f, Str: strconv.FormatFloat(f, 'g', -1, 64)}
 	case profile.KindString:
 		s, ok := v.(string)
@@ -223,14 +233,84 @@ func toCell(v any) Cell {
 	}
 }
 
+// sanitizeFloat maps a non-finite float to a JSON-safe sentinel; finite
+// passes through. It returns (f, "") unchanged for a finite f; for a
+// non-finite f it returns (0, sentinel) where sentinel is one of the
+// deterministic strings "NaN", "Inf", "-Inf" -- callers use the empty-string
+// return to distinguish "finite, nothing to do" from "substitute this
+// sentinel". Used so Cell.Num / profile Min-Max never carry NaN/Inf into
+// encoding/json (encoding/json.Marshal errors on a non-finite float64).
+func sanitizeFloat(f float64) (float64, string) {
+	switch {
+	case math.IsNaN(f):
+		return 0, "NaN"
+	case math.IsInf(f, 1):
+		return 0, "Inf"
+	case math.IsInf(f, -1):
+		return 0, "-Inf"
+	default:
+		return f, ""
+	}
+}
+
+// sanitizeFloatPtr sanitizes a *float64 profile extreme (FieldDTO.Min/Max)
+// for the DTO boundary: a non-finite value is dropped to nil (so
+// `json:"...,omitempty"` omits it) rather than ever reaching
+// encoding/json.Marshal; nil and finite pointers pass through unchanged.
+func sanitizeFloatPtr(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	if _, sentinel := sanitizeFloat(*p); sentinel != "" {
+		return nil
+	}
+	return p
+}
+
+// sanitizeValue recursively replaces any non-finite float64 within v (a
+// map[string]any/[]any/scalar tree, as produced by resolve/readers) with its
+// deterministic string sentinel (see sanitizeFloat), leaving every other
+// value untouched.
+func sanitizeValue(v any) any {
+	switch t := v.(type) {
+	case float64:
+		if _, sentinel := sanitizeFloat(t); sentinel != "" {
+			return sentinel
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, cv := range t {
+			out[k] = sanitizeValue(cv)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, cv := range t {
+			out[i] = sanitizeValue(cv)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // compactJSON renders v as compact (no-whitespace) JSON for use as a
-// container preview. A marshal failure (not expected for values decoded from
-// JSON/CSV/SQLite/Parquet readers) yields an empty string rather than a
+// container preview. The common (all-finite) case marshals v directly with
+// no extra allocation; a marshal failure falls back to a sanitized copy of v
+// (see sanitizeValue) so a container nesting a non-finite float64 (Parquet
+// DOUBLE/SQLite REAL can carry NaN/+Inf/-Inf at any depth) still produces a
+// deterministic, non-empty preview instead of silently failing. A second
+// marshal failure (not expected: nothing else in a JSON/CSV/SQLite/Parquet-
+// decoded value tree is unmarshalable) yields an empty string rather than a
 // panic.
 func compactJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return ""
+		b, err = json.Marshal(sanitizeValue(v))
+		if err != nil {
+			return ""
+		}
 	}
 	return string(b)
 }

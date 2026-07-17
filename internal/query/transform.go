@@ -44,12 +44,11 @@ type Transform struct {
 	FlattenObjects bool         `json:"flattenObjects"`
 }
 
-// outCol is one compiled output column: name is its display name (After
-// Select's As-or-leaf-name rule; equal to the base Column.Name otherwise),
-// segs are the compiled path segments Project resolves against each record,
-// and col is the full Column metadata returned by CompiledTransform.Columns.
+// outCol is one compiled output column: segs are the compiled path segments
+// Project resolves against each record, and col is the full Column metadata
+// (including its display name, After Select's As-or-leaf-name rule; equal to
+// the base Column.Name otherwise) returned by CompiledTransform.Columns.
 type outCol struct {
-	name string
 	segs []Seg
 	col  Column
 }
@@ -127,7 +126,7 @@ func CompileTransform(t Transform, cm *ColumnModel) (*CompiledTransform, error) 
 func baseOutCols(cm *ColumnModel) []outCol {
 	cols := make([]outCol, len(cm.Columns))
 	for i, c := range cm.Columns {
-		cols[i] = outCol{name: c.Name, segs: cm.segs[i], col: c}
+		cols[i] = outCol{segs: cm.segs[i], col: c}
 	}
 	return cols
 }
@@ -159,7 +158,7 @@ func compileSelect(specs []ColumnSpec, cm *ColumnModel) ([]outCol, error) {
 		out.Path = name
 		out.Name = name
 		out.Index = len(cols)
-		cols = append(cols, outCol{name: name, segs: segs, col: out})
+		cols = append(cols, outCol{segs: segs, col: out})
 	}
 	return cols, nil
 }

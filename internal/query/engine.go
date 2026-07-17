@@ -116,8 +116,8 @@ func adaptProfile(pr profile.ProfileResult) ProfileDTO {
 			NullRate:      fp.NullRate,
 			Distinct:      fp.DistinctCount,
 			DistinctExact: fp.DistinctExact,
-			Min:           fp.Min,
-			Max:           fp.Max,
+			Min:           sanitizeFloatPtr(fp.Min),
+			Max:           sanitizeFloatPtr(fp.Max),
 			TopValues:     adaptTopValues(fp.TopValues),
 			Drift:         profile.IsTypeDrift(fp),
 		}

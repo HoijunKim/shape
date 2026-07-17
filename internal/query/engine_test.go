@@ -1,10 +1,13 @@
 package query
 
 import (
+	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/hoijun-kim/shape/internal/profile"
 	"github.com/hoijun-kim/shape/internal/readers"
 )
 
@@ -203,6 +206,68 @@ func TestEngine_OpenSource_RejectsEmptyAndStdinPath(t *testing.T) {
 // empty/invalid file still errors cleanly for both formats (not a valid
 // SQLite database / not a valid Parquet file -- Parquet's footer alone
 // requires more bytes than an empty file has) rather than panicking.
+
+// --- adaptProfile: non-finite Min/Max sanitized at the DTO boundary (I1) ----
+//
+// internal/profile's accumulator already excludes non-finite values from
+// Min/Max when it builds a FieldProfile normally (see accumulator.go's
+// AddValue: a NaN/Inf observation is counted but skipped for min/max), so
+// this is defense-in-depth at the query/DTO boundary (adaptProfile) for any
+// FieldProfile assembled some other way: a non-finite Min/Max must never
+// reach encoding/json.Marshal, since Marshal errors on a non-finite float64
+// -- pre-fix, this would fail OpenResult's marshal and the file wouldn't
+// open at all.
+
+func TestAdaptProfile_NonFiniteMinMax_Sanitized(t *testing.T) {
+	inf := math.Inf(1)
+	nan := math.NaN()
+	fine := 42.0
+	pr := profile.ProfileResult{
+		Records: 3,
+		Fields: []profile.FieldProfile{
+			{Path: "bad", Min: &inf, Max: &nan},
+			{Path: "good", Min: &fine, Max: &fine},
+			{Path: "nilptr", Min: nil, Max: nil},
+		},
+	}
+
+	dto := adaptProfile(pr)
+	if len(dto.Fields) != 3 {
+		t.Fatalf("len(Fields) = %d, want 3", len(dto.Fields))
+	}
+	if dto.Fields[0].Min != nil || dto.Fields[0].Max != nil {
+		t.Fatalf("Fields[0] (non-finite) Min/Max = %v/%v, want nil/nil (omitted)", dto.Fields[0].Min, dto.Fields[0].Max)
+	}
+	if dto.Fields[1].Min == nil || *dto.Fields[1].Min != fine || dto.Fields[1].Max == nil || *dto.Fields[1].Max != fine {
+		t.Fatalf("Fields[1] (finite) Min/Max = %v/%v, want %v/%v unchanged", dto.Fields[1].Min, dto.Fields[1].Max, fine, fine)
+	}
+	if dto.Fields[2].Min != nil || dto.Fields[2].Max != nil {
+		t.Fatalf("Fields[2] (already nil) Min/Max = %v/%v, want nil/nil unchanged", dto.Fields[2].Min, dto.Fields[2].Max)
+	}
+
+	if _, err := json.Marshal(dto); err != nil {
+		t.Fatalf("json.Marshal(ProfileDTO) error = %v, want nil (the OpenResult crash this fix closes)", err)
+	}
+}
+
+// TestOpenResult_MarshalsWithNonFiniteProfileExtremes is the literal
+// OpenResult-level regression named in the finding: "the file won't open at
+// all" if a profiled field's Min/Max is non-finite.
+func TestOpenResult_MarshalsWithNonFiniteProfileExtremes(t *testing.T) {
+	inf := math.Inf(1)
+	res := OpenResult{
+		Handle: "h1",
+		Format: "parquet",
+		Tier:   "parquet",
+		Profile: adaptProfile(profile.ProfileResult{
+			Records: 1,
+			Fields:  []profile.FieldProfile{{Path: "amount", Min: &inf, Max: &inf}},
+		}),
+	}
+	if _, err := json.Marshal(res); err != nil {
+		t.Fatalf("json.Marshal(OpenResult) error = %v, want nil (non-finite profile extreme must not crash OpenSource's response)", err)
+	}
+}
 
 func TestEngine_OpenSource_SQLiteAndParquet_EmptyFileErrors(t *testing.T) {
 	dir := t.TempDir()

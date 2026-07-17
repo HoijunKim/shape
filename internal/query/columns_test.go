@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"testing"
@@ -202,6 +203,129 @@ func TestToCell_FloatRawFloat64(t *testing.T) {
 	want := Cell{Kind: CellFloat, Num: 2.5, Str: "2.5"}
 	if got != want {
 		t.Fatalf("toCell(2.5) = %#v, want %#v", got, want)
+	}
+}
+
+// --- toCell: non-finite raw float64 (I1 fix) --------------------------------
+//
+// Parquet DOUBLE / SQLite REAL columns can hold NaN/+Inf/-Inf, which arrive
+// at toCell as a raw float64 (readers.ToProfileValue), not json.Number (JSON
+// itself has no NaN/Inf literal). Pre-fix, Cell.Num would carry the
+// non-finite value straight through, and encoding/json.Marshal ERRORS on a
+// non-finite float64 -- the E2 Wails-response crash this guards against.
+func TestToCell_FloatNonFinite(t *testing.T) {
+	cases := []struct {
+		name         string
+		v            float64
+		wantSentinel string
+	}{
+		{"nan", math.NaN(), "NaN"},
+		{"pos_inf", math.Inf(1), "Inf"},
+		{"neg_inf", math.Inf(-1), "-Inf"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toCell(tc.v)
+			if got.Kind != CellFloat {
+				t.Fatalf("Kind = %v, want CellFloat", got.Kind)
+			}
+			if got.Num != 0 {
+				t.Fatalf("Num = %v, want 0 (non-finite must not carry through)", got.Num)
+			}
+			if got.Str != tc.wantSentinel {
+				t.Fatalf("Str = %q, want sentinel %q", got.Str, tc.wantSentinel)
+			}
+			b, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("json.Marshal(cell) error = %v, want nil (this is the boundary bug the fix closes)", err)
+			}
+			// Round-trip: the marshaled Cell must decode back to the exact
+			// same sentinel/kind/num (deterministic across backends).
+			var back Cell
+			if err := json.Unmarshal(b, &back); err != nil {
+				t.Fatalf("json.Unmarshal(marshaled cell) error = %v, want nil", err)
+			}
+			if back != got {
+				t.Fatalf("round-tripped cell = %#v, want %#v", back, got)
+			}
+		})
+	}
+}
+
+// TestRowSet_MarshalWithNonFiniteCell_Succeeds is the E2-crash regression: a
+// RowSet carrying a cell derived from a non-finite float (e.g. a Parquet
+// DOUBLE column with NaN) must still marshal successfully end-to-end -- this
+// is exactly the shape QueryRows returns over the Wails binding. Against
+// pre-fix code (toCell passing the raw NaN/Inf straight into Cell.Num), this
+// test fails with an UnsupportedValueError from encoding/json.
+func TestRowSet_MarshalWithNonFiniteCell_Succeeds(t *testing.T) {
+	rs := RowSet{
+		Columns: []Column{{Path: "amount", Name: "amount", Type: "float"}},
+		Rows: []Row{
+			{Index: 0, Cells: []Cell{toCell(math.NaN())}},
+			{Index: 1, Cells: []Cell{toCell(math.Inf(1))}},
+			{Index: 2, Cells: []Cell{toCell(math.Inf(-1))}},
+			{Index: 3, Cells: []Cell{toCell(2.5)}}, // finite sibling: unaffected
+		},
+		Total:      4,
+		TotalExact: true,
+	}
+	if _, err := json.Marshal(rs); err != nil {
+		t.Fatalf("json.Marshal(RowSet with non-finite cell) error = %v, want nil (E2 Wails-response crash regression)", err)
+	}
+}
+
+// --- compactJSON: non-finite floats inside a container (I1 fix) ------------
+//
+// compactJSON backs toCell's object/array preview (Cell.Str). Pre-fix, a
+// container nesting a non-finite float64 made the marshal fail and the
+// preview silently became "" -- a cross-backend divergence (a parquet nested
+// NaN vs the logically-equal JSON would render differently). Post-fix the
+// preview must be non-empty and deterministic.
+func TestCompactJSON_NonFiniteContainer(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+	}{
+		{"map", map[string]any{"a": math.NaN(), "b": json.Number("1")}},
+		{"array", []any{math.Inf(1), math.Inf(-1), json.Number("2")}},
+	}
+
+	for _, tc := range cases {
+		v := tc.v
+		t.Run(tc.name, func(t *testing.T) {
+			got := compactJSON(v)
+			if got == "" {
+				t.Fatalf("compactJSON(%#v) = \"\", want non-empty (non-finite float must not silently empty the preview)", v)
+			}
+			// Deterministic: repeated calls yield the same string.
+			if again := compactJSON(v); again != got {
+				t.Fatalf("compactJSON(%#v) not deterministic: %q vs %q", v, got, again)
+			}
+			// Result must itself be valid JSON (a caller-facing preview that
+			// doesn't parse would be worse than an honest empty string).
+			var decoded any
+			if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+				t.Fatalf("compactJSON(%#v) = %q is not valid JSON: %v", v, got, err)
+			}
+		})
+	}
+}
+
+// TestToCell_ContainerWithNonFiniteFloat confirms the fix end-to-end through
+// toCell's object/array branch (not just compactJSON directly): the
+// resulting Cell.Str preview is non-empty and the Cell itself marshals.
+func TestToCell_ContainerWithNonFiniteFloat(t *testing.T) {
+	v := map[string]any{"x": math.NaN()}
+	got := toCell(v)
+	if got.Kind != CellObject {
+		t.Fatalf("Kind = %v, want CellObject", got.Kind)
+	}
+	if got.Str == "" {
+		t.Fatalf("Str = \"\", want a non-empty preview containing the sanitized sentinel")
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("json.Marshal(cell) error = %v, want nil", err)
 	}
 }
 
