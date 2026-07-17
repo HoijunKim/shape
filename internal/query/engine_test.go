@@ -192,9 +192,16 @@ func TestEngine_OpenSource_RejectsEmptyAndStdinPath(t *testing.T) {
 	}
 }
 
-// --- OpenSource: sqlite/parquet routing is stubbed for Task 7/8 -------------
+// --- OpenSource: an empty/invalid file errors for both formats -------------
+//
+// FormatParquet routing is still stubbed (Task 8, ErrParquetBackendNotImplemented
+// in source.go). FormatSQLite is wired to newSQLBackend as of Task 7
+// (sqlbackend.go): a real .sqlite fixture is covered by
+// TestEngine_OpenSource_SQLite_TierAndColumns/TestCrossBackend_SQLBackendMatchesMemBackend
+// in sqlbackend_test.go; this test just confirms an empty/invalid file
+// still errors cleanly (not a valid SQLite database) rather than panicking.
 
-func TestEngine_OpenSource_SQLiteAndParquet_NotYetImplemented(t *testing.T) {
+func TestEngine_OpenSource_SQLiteAndParquet_EmptyFileErrors(t *testing.T) {
 	dir := t.TempDir()
 	for _, ext := range []string{"sqlite", "parquet"} {
 		path := filepath.Join(dir, "fixture."+ext)
@@ -203,7 +210,7 @@ func TestEngine_OpenSource_SQLiteAndParquet_NotYetImplemented(t *testing.T) {
 		}
 		e := NewEngine()
 		if _, err := e.OpenSource(OpenRequest{Path: path}); err == nil {
-			t.Fatalf("OpenSource(%s) error = nil, want non-nil (Task 7/8 backend not yet implemented)", ext)
+			t.Fatalf("OpenSource(%s) error = nil, want non-nil (empty file is not a valid %s source; parquet is also still stubbed, Task 8)", ext, ext)
 		}
 	}
 }

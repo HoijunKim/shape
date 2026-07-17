@@ -17,17 +17,15 @@ import (
 // source downgrades from memBackend to rescanBackend.
 const DefaultMemBudgetBytes int64 = 512 << 20
 
-// ErrSQLiteBackendNotImplemented / ErrParquetBackendNotImplemented mark the
-// two backends not yet built (Task 7/8, spec §1's per-format Backend table).
-// openBackend's switch is the ONLY place those tasks need to touch to slot
-// sqlBackend/parquetBackend in -- the FormatSQLite/FormatParquet branches
-// below become "return newSQLBackend(...), ..." / "return
-// newParquetBackend(...), ..." and nothing else in this package changes
-// (Engine.OpenSource just forwards whatever openBackend returns).
-var (
-	ErrSQLiteBackendNotImplemented  = errors.New("query: sqlite backend not yet implemented (Task 7)")
-	ErrParquetBackendNotImplemented = errors.New("query: parquet backend not yet implemented (Task 8)")
-)
+// ErrParquetBackendNotImplemented marks the one backend not yet built (Task
+// 8, spec §1's per-format Backend table). openBackend's switch is the ONLY
+// place that task needs to touch to slot parquetBackend in -- the
+// FormatParquet branch below becomes "return newParquetBackend(...), ..."
+// and nothing else in this package changes (Engine.OpenSource just forwards
+// whatever openBackend returns). FormatSQLite's equivalent stub was
+// ErrSQLiteBackendNotImplemented until Task 7 wired in newSQLBackend
+// (sqlbackend.go) below.
+var ErrParquetBackendNotImplemented = errors.New("query: parquet backend not yet implemented (Task 8)")
 
 // budgetBytesOf resolves req.BudgetMB (spec §8: "0 ⇒ 512") to a byte budget.
 func budgetBytesOf(req OpenRequest) int64 {
@@ -55,10 +53,11 @@ func fileSizeOf(path string) int64 {
 // openBackend selects and builds a Backend for req.Path, per
 // readers.DetectFormat (spec §1/§2's per-format Backend table):
 // FormatJSON/FormatCSV run OpenSource's shared ingest pass
-// (openIngestBackend, this task's mem-or-rescan routing); FormatSQLite and
-// FormatParquet are routed to their native-pushdown backends, stubbed here
-// (see the Err*NotImplemented vars) until Task 7/8 land sqlbackend.go/
-// parquetbackend.go.
+// (openIngestBackend, this task's mem-or-rescan routing); FormatSQLite is
+// routed to newSQLBackend (sqlbackend.go, Task 7 -- native projection/
+// window/count pushdown with a Go residual for filter correctness);
+// FormatParquet remains routed to its native-pushdown backend, stubbed here
+// (see ErrParquetBackendNotImplemented) until Task 8 lands parquetbackend.go.
 //
 // The source is opened exactly once here (pipeline.OpenSource, closed via
 // defer): readers.DetectFormat only needs the small peek pipeline.OpenSource
@@ -87,7 +86,11 @@ func openBackend(req OpenRequest) (backend Backend, format readers.Format, tier 
 		backend, tier, err = openIngestBackend(req.Path, format, req.Format, req.CSVRaw, stream, budgetBytesOf(req))
 		return backend, format, tier, err
 	case readers.FormatSQLite:
-		return nil, format, "", ErrSQLiteBackendNotImplemented
+		sb, serr := newSQLBackend(req.Path, req.Table)
+		if serr != nil {
+			return nil, format, "", fmt.Errorf("query: open sqlite backend for %s: %w", req.Path, serr)
+		}
+		return sb, format, "sqlite", nil
 	case readers.FormatParquet:
 		return nil, format, "", ErrParquetBackendNotImplemented
 	default:
