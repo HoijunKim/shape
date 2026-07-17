@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -30,6 +31,23 @@ func fixtureRecords() []map[string]any {
 		recs[i] = map[string]any{
 			"name": name,
 			"age":  json.Number(fmt.Sprintf("%d", 20+i)),
+			"even": i%2 == 0,
+		}
+	}
+	return recs
+}
+
+// manyRecords returns n records with the same shape as fixtureRecords (a
+// "name" field and an index-parity "even" bool), but sized so that a
+// computeMatchBitset scan crosses several cancelCheckStride (4096) boundaries
+// -- large enough that a cancellation check partway through the scan (not
+// just the very first iteration) would matter, and to make a cold-scan
+// cancellation test a faithful stand-in for a large real-world scan.
+func manyRecords(n int) []map[string]any {
+	recs := make([]map[string]any, n)
+	for i := range recs {
+		recs[i] = map[string]any{
+			"name": fmt.Sprintf("rec%d", i),
 			"even": i%2 == 0,
 		}
 	}
@@ -459,5 +477,185 @@ func TestMemBackend_Close(t *testing.T) {
 	}
 	if len(mb.countCache) != 0 {
 		t.Fatalf("countCache not cleared after Close: %d entries remain", len(mb.countCache))
+	}
+}
+
+// --- memBackend: cancellation ------------------------------------------------
+
+// TestMemBackend_Query_CancelledContext_NotCached exercises the Important
+// review finding: an already-cancelled ctx must abort the O(records)
+// match-bitset scan behind Query's cache-miss path (rather than running it to
+// completion, uncancellable, as before the fix), the scan's error must
+// surface as ctx.Err() through Query, and -- critically -- nothing may be
+// cached for the aborted compute: a later Query with a live ctx over the same
+// filter must still (re-)compute and return correct results.
+func TestMemBackend_Query_CancelledContext_NotCached(t *testing.T) {
+	maps := manyRecords(20000)
+	mb, cm := newTestMemBackend(t, maps)
+	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+	p := compilePlan(t, f, Transform{}, cm)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	rs, err := mb.Query(ctx, p, Window{Offset: 0, Limit: 10}, true)
+	if err == nil {
+		t.Fatalf("Query(cancelled ctx) error = nil, want non-nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Query(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if len(rs.Rows) != 0 {
+		t.Fatalf("Query(cancelled ctx) returned %d rows, want a zero-value RowSet on error", len(rs.Rows))
+	}
+
+	mb.mu.Lock()
+	_, cached := mb.filterCache[p.FilterKey()]
+	entries := len(mb.filterCache)
+	mb.mu.Unlock()
+	if cached || entries != 0 {
+		t.Fatalf("filterCache has %d entries (cached=%v) after a cancelled Query, want 0/false: a cancelled compute must never be cached", entries, cached)
+	}
+
+	// A subsequent Query with a live ctx and the SAME filter/plan must still
+	// work (not poisoned by the earlier cancellation) and return correct,
+	// complete results.
+	rs2, err := mb.Query(context.Background(), p, Window{Offset: 0, Limit: 10000}, true)
+	if err != nil {
+		t.Fatalf("follow-up Query error = %v, want nil", err)
+	}
+	if rs2.Total != int64(len(maps))/2 || !rs2.TotalExact {
+		t.Fatalf("follow-up Query Total/TotalExact = %d/%v, want %d/true", rs2.Total, rs2.TotalExact, len(maps)/2)
+	}
+
+	mb.mu.Lock()
+	_, cachedAfter := mb.filterCache[p.FilterKey()]
+	mb.mu.Unlock()
+	if !cachedAfter {
+		t.Fatalf("filterCache has no entry for FilterKey() after a successful follow-up Query")
+	}
+}
+
+// TestMemBackend_Count_CancelledContext_NotCached is the Count-side twin of
+// TestMemBackend_Query_CancelledContext_NotCached: Count's cache-miss path
+// goes through the same computeMatchBitset scan via countCache instead of
+// filterCache, and must be independently cancellable and independently
+// non-caching on cancellation.
+func TestMemBackend_Count_CancelledContext_NotCached(t *testing.T) {
+	maps := manyRecords(20000)
+	mb, cm := newTestMemBackend(t, maps)
+	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+	cf, err := CompileFilter(f, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, _, err := mb.Count(ctx, cf); err == nil {
+		t.Fatalf("Count(cancelled ctx) error = nil, want non-nil")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Count(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+
+	mb.mu.Lock()
+	_, cached := mb.countCache[cf]
+	mb.mu.Unlock()
+	if cached {
+		t.Fatalf("countCache has an entry for cf after a cancelled Count: cancelled compute must never be cached")
+	}
+
+	total, exact, err := mb.Count(context.Background(), cf)
+	if err != nil {
+		t.Fatalf("follow-up Count error = %v, want nil", err)
+	}
+	if total != int64(len(maps))/2 || !exact {
+		t.Fatalf("follow-up Count = (%d, %v), want (%d, true)", total, exact, len(maps)/2)
+	}
+}
+
+// --- memBackend: different filters do not contaminate each other's results --
+
+// TestMemBackend_Query_DifferentFilters_NoContamination covers a previously
+// uncovered gap: two logically different filters queried against the SAME
+// memBackend instance must each return their own correct, uncontaminated
+// results (not the other filter's matches, and not a merge of both), and the
+// filterCache must end up with exactly one entry per distinct FilterKey --
+// here, two.
+func TestMemBackend_Query_DifferentFilters_NoContamination(t *testing.T) {
+	maps := fixtureRecords()
+	mb, cm := newTestMemBackend(t, maps)
+	nameIdx := cm.byPath["name"]
+
+	fEven := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+	pEven := compilePlan(t, fEven, Transform{}, cm)
+
+	fCarol := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "carol"}}}}
+	pCarol := compilePlan(t, fCarol, Transform{}, cm)
+
+	rsEven, err := mb.Query(context.Background(), pEven, Window{Offset: 0, Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Query(even) error = %v, want nil", err)
+	}
+	rsCarol, err := mb.Query(context.Background(), pCarol, Window{Offset: 0, Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Query(carol) error = %v, want nil", err)
+	}
+
+	wantEven := []string{"alice", "carol", "erin", "grace", "ivan"}
+	if rsEven.Total != int64(len(wantEven)) || !rsEven.TotalExact {
+		t.Fatalf("Query(even) Total/TotalExact = %d/%v, want %d/true", rsEven.Total, rsEven.TotalExact, len(wantEven))
+	}
+	if len(rsEven.Rows) != len(wantEven) {
+		t.Fatalf("Query(even) len(Rows) = %d, want %d", len(rsEven.Rows), len(wantEven))
+	}
+	for i, row := range rsEven.Rows {
+		if got := row.Cells[nameIdx].Str; got != wantEven[i] {
+			t.Fatalf("Query(even) Rows[%d] name = %q, want %q", i, got, wantEven[i])
+		}
+	}
+
+	if rsCarol.Total != 1 || !rsCarol.TotalExact {
+		t.Fatalf("Query(carol) Total/TotalExact = %d/%v, want 1/true", rsCarol.Total, rsCarol.TotalExact)
+	}
+	if len(rsCarol.Rows) != 1 || rsCarol.Rows[0].Cells[nameIdx].Str != "carol" {
+		t.Fatalf("Query(carol) Rows = %#v, want a single row for %q", rsCarol.Rows, "carol")
+	}
+
+	// Re-running the first filter must still be unaffected by having computed
+	// the second in between (no shared/aliased bitset state).
+	rsEvenAgain, err := mb.Query(context.Background(), pEven, Window{Offset: 0, Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Query(even) re-run error = %v, want nil", err)
+	}
+	if rsEvenAgain.Total != int64(len(wantEven)) {
+		t.Fatalf("Query(even) re-run Total = %d, want %d (unaffected by intervening different-filter Query)", rsEvenAgain.Total, len(wantEven))
+	}
+
+	mb.mu.Lock()
+	entries := len(mb.filterCache)
+	mb.mu.Unlock()
+	if entries != 2 {
+		t.Fatalf("filterCache has %d entries, want 2 (two distinct filters, each cached once)", entries)
+	}
+}
+
+// --- memBackend.Count: nil filter (match-all) -------------------------------
+
+// TestMemBackend_Count_NilFilterMatchesAll covers the nil-*CompiledFilter
+// match-all path through Count directly (Backend.Count's f may be nil):
+// CompiledFilter.Match treats a nil receiver as match-all, so Count(ctx, nil)
+// must return the exact, full record count.
+func TestMemBackend_Count_NilFilterMatchesAll(t *testing.T) {
+	maps := fixtureRecords()
+	mb, _ := newTestMemBackend(t, maps)
+
+	total, exact, err := mb.Count(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Count(nil) error = %v, want nil", err)
+	}
+	if total != int64(len(maps)) || !exact {
+		t.Fatalf("Count(nil) = (%d, %v), want (%d, true)", total, exact, len(maps))
 	}
 }

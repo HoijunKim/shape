@@ -135,7 +135,10 @@ func (m *memBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 		return RowSet{}, fmt.Errorf("query: memBackend.Query: nil CompiledPlan")
 	}
 
-	bs := m.matchBitsetForPlan(p)
+	bs, err := m.matchBitsetForPlan(ctx, p)
+	if err != nil {
+		return RowSet{}, err
+	}
 
 	limit := w.Limit
 	if limit < 0 {
@@ -185,7 +188,10 @@ func (m *memBackend) Count(ctx context.Context, f *CompiledFilter) (total int64,
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
-	bs := m.matchBitsetForFilter(f)
+	bs, err := m.matchBitsetForFilter(ctx, f)
+	if err != nil {
+		return 0, false, err
+	}
 	return bs.Count(), true, nil
 }
 
@@ -235,30 +241,68 @@ func (m *memBackend) Close() error {
 
 // matchBitsetForPlan returns the cached match bitset for p.Filter, computing
 // and storing it under p.FilterKey() on a cache miss.
-func (m *memBackend) matchBitsetForPlan(p *CompiledPlan) *bitset {
+//
+// The compute itself happens OUTSIDE m.mu (double-checked locking): (1) lock,
+// check the cache, unlock on a hit; (2) on a miss, unlock and run the
+// (possibly expensive, ctx-checked) scan with no lock held, so unrelated
+// concurrent Query/Count calls are never blocked behind it and a
+// long/cancelled scan never holds the lock; (3) re-lock and re-check --
+// another goroutine may have finished computing the same key first, in which
+// case its bitset is used (last-write-in-the-lock-is-irrelevant: both
+// computations are deterministic and produce an identical result over the
+// same immutable m.records, so either winning is correct) -- otherwise this
+// goroutine's result is stored. A cancelled/errored compute is never locked
+// back in, so it can never be cached.
+func (m *memBackend) matchBitsetForPlan(ctx context.Context, p *CompiledPlan) (*bitset, error) {
 	key := p.FilterKey()
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if bs, ok := m.filterCache[key]; ok {
-		return bs
+		m.mu.Unlock()
+		return bs, nil
 	}
-	bs := m.computeMatchBitset(p.Filter)
-	m.filterCache[key] = bs
-	return bs
+	m.mu.Unlock()
+
+	bs, err := m.computeMatchBitset(ctx, p.Filter)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.filterCache[key]; ok {
+		bs = existing
+	} else {
+		m.filterCache[key] = bs
+	}
+	m.mu.Unlock()
+	return bs, nil
 }
 
 // matchBitsetForFilter returns the cached match bitset for the standalone
 // filter f (Count's call path -- see countCache's doc comment), computing
-// and storing it under f's pointer identity on a cache miss.
-func (m *memBackend) matchBitsetForFilter(f *CompiledFilter) *bitset {
+// and storing it under f's pointer identity on a cache miss. Uses the same
+// off-lock double-checked pattern as matchBitsetForPlan; see its doc comment.
+func (m *memBackend) matchBitsetForFilter(ctx context.Context, f *CompiledFilter) (*bitset, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if bs, ok := m.countCache[f]; ok {
-		return bs
+		m.mu.Unlock()
+		return bs, nil
 	}
-	bs := m.computeMatchBitset(f)
-	m.countCache[f] = bs
-	return bs
+	m.mu.Unlock()
+
+	bs, err := m.computeMatchBitset(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.countCache[f]; ok {
+		bs = existing
+	} else {
+		m.countCache[f] = bs
+	}
+	m.mu.Unlock()
+	return bs, nil
 }
 
 // computeMatchBitset scans every record in m.records exactly once and
@@ -266,12 +310,24 @@ func (m *memBackend) matchBitsetForFilter(f *CompiledFilter) *bitset {
 // a nil *CompiledFilter (or a nil/empty-Filter-compiled predicate) as
 // match-all, so an empty filter naturally yields an all-set bitset here with
 // no special-casing.
-func (m *memBackend) computeMatchBitset(f *CompiledFilter) *bitset {
+//
+// ctx is checked every cancelCheckStride records (mirroring Export's
+// discipline): a cancelled/expired ctx aborts the scan and returns the error
+// with a nil bitset, so a caller changing filters in the GUI can cancel a
+// large cold scan (up to the full 512 MiB record budget, potentially
+// regex-driven) instead of blocking until it completes.
+func (m *memBackend) computeMatchBitset(ctx context.Context, f *CompiledFilter) (*bitset, error) {
+	const cancelCheckStride = 4096
 	bs := newBitset(len(m.records))
 	for i, rec := range m.records {
+		if i%cancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if f.Match(rec) {
 			bs.Set(i)
 		}
 	}
-	return bs
+	return bs, nil
 }
