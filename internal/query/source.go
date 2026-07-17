@@ -17,16 +17,6 @@ import (
 // source downgrades from memBackend to rescanBackend.
 const DefaultMemBudgetBytes int64 = 512 << 20
 
-// ErrParquetBackendNotImplemented marks the one backend not yet built (Task
-// 8, spec §1's per-format Backend table). openBackend's switch is the ONLY
-// place that task needs to touch to slot parquetBackend in -- the
-// FormatParquet branch below becomes "return newParquetBackend(...), ..."
-// and nothing else in this package changes (Engine.OpenSource just forwards
-// whatever openBackend returns). FormatSQLite's equivalent stub was
-// ErrSQLiteBackendNotImplemented until Task 7 wired in newSQLBackend
-// (sqlbackend.go) below.
-var ErrParquetBackendNotImplemented = errors.New("query: parquet backend not yet implemented (Task 8)")
-
 // budgetBytesOf resolves req.BudgetMB (spec §8: "0 ⇒ 512") to a byte budget.
 func budgetBytesOf(req OpenRequest) int64 {
 	mb := req.BudgetMB
@@ -56,8 +46,9 @@ func fileSizeOf(path string) int64 {
 // (openIngestBackend, this task's mem-or-rescan routing); FormatSQLite is
 // routed to newSQLBackend (sqlbackend.go, Task 7 -- native projection/
 // window/count pushdown with a Go residual for filter correctness);
-// FormatParquet remains routed to its native-pushdown backend, stubbed here
-// (see ErrParquetBackendNotImplemented) until Task 8 lands parquetbackend.go.
+// FormatParquet is routed to newParquetBackend (parquetbackend.go, Task 8 --
+// footer row-group NumRows/SeekToRow-based window random access, with a Go
+// residual for filter correctness, exactly like sqlBackend).
 //
 // The source is opened exactly once here (pipeline.OpenSource, closed via
 // defer): readers.DetectFormat only needs the small peek pipeline.OpenSource
@@ -92,7 +83,11 @@ func openBackend(req OpenRequest) (backend Backend, format readers.Format, tier 
 		}
 		return sb, format, "sqlite", nil
 	case readers.FormatParquet:
-		return nil, format, "", ErrParquetBackendNotImplemented
+		pb, perr := newParquetBackend(req.Path)
+		if perr != nil {
+			return nil, format, "", fmt.Errorf("query: open parquet backend for %s: %w", req.Path, perr)
+		}
+		return pb, format, "parquet", nil
 	default:
 		return nil, format, "", fmt.Errorf("query: unsupported format %q", format)
 	}

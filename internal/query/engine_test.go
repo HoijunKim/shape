@@ -194,12 +194,15 @@ func TestEngine_OpenSource_RejectsEmptyAndStdinPath(t *testing.T) {
 
 // --- OpenSource: an empty/invalid file errors for both formats -------------
 //
-// FormatParquet routing is still stubbed (Task 8, ErrParquetBackendNotImplemented
-// in source.go). FormatSQLite is wired to newSQLBackend as of Task 7
-// (sqlbackend.go): a real .sqlite fixture is covered by
-// TestEngine_OpenSource_SQLite_TierAndColumns/TestCrossBackend_SQLBackendMatchesMemBackend
-// in sqlbackend_test.go; this test just confirms an empty/invalid file
-// still errors cleanly (not a valid SQLite database) rather than panicking.
+// Both FormatSQLite (newSQLBackend, sqlbackend.go, Task 7) and FormatParquet
+// (newParquetBackend, parquetbackend.go, Task 8) are real backends now; a
+// real fixture for each is covered elsewhere
+// (TestEngine_OpenSource_SQLite_TierAndColumns/TestCrossBackend_SQLBackendMatchesMemBackend
+// in sqlbackend_test.go, TestEngine_OpenSource_Parquet_TierAndColumns/the
+// cross-backend tests in parquetbackend_test.go). This test just confirms an
+// empty/invalid file still errors cleanly for both formats (not a valid
+// SQLite database / not a valid Parquet file -- Parquet's footer alone
+// requires more bytes than an empty file has) rather than panicking.
 
 func TestEngine_OpenSource_SQLiteAndParquet_EmptyFileErrors(t *testing.T) {
 	dir := t.TempDir()
