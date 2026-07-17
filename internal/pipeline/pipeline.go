@@ -28,7 +28,7 @@ type Options struct {
 
 // Profile opens+detects+streams+profiles one source.
 func Profile(o Options) (profile.ProfileResult, error) {
-	src, closeSrc, err := openSource(o.Path)
+	src, closeSrc, err := OpenSource(o.Path)
 	if err != nil {
 		return profile.ProfileResult{}, err
 	}
@@ -83,9 +83,11 @@ func Diff(oldO, newO Options) (diff.DiffResult, error) {
 	return diff.Diff(a, b), nil
 }
 
-// openSource opens a file path or stdin ("-") into a readers.Source with a peek.
-// (moved verbatim from internal/cmd/source.go)
-func openSource(src string) (readers.Source, func() error, error) {
+// OpenSource opens a file path or stdin ("-") into a readers.Source with a peek.
+// (moved verbatim from internal/cmd/source.go; exported so internal/query's
+// stateless-re-scan engine can reuse the identical open path -- each Backend
+// scan re-opens its own *os.File via this function, spec §2.)
+func OpenSource(src string) (readers.Source, func() error, error) {
 	if src == "-" {
 		buf := make([]byte, 512)
 		n, _ := io.ReadFull(os.Stdin, buf)
