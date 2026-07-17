@@ -3,11 +3,13 @@ package query
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/readers"
@@ -406,6 +408,185 @@ func TestSQLBackend_Query_Filtered_CancelledContext(t *testing.T) {
 		t.Fatalf("Query(cancelled ctx) error = nil, want non-nil")
 	} else if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Query(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+}
+
+// --- Query: wantTotal's COUNT(*) respects ctx, cancelled mid-flight --------
+//
+// TestSQLBackend_Query_Filtered_CancelledContext above (and
+// TestSQLBackend_Count_CancelledContext) only prove ctx propagation for a
+// NON-empty filter / a direct Count call. Both PRE-cancel ctx before calling
+// Query/Count, which the top-level "if err := ctx.Err(); err != nil" guard
+// at the very start of sqlBackend.Query (and the equivalent guard in Count)
+// catches immediately -- so those tests never even reach queryUnfiltered's
+// wantTotal branch, and cannot prove anything about it.
+//
+// A naive "pre-cancel but fool the top-level guard once" context does not
+// work either: Query's empty-filter path calls s.queryWindowSQL(ctx, ...)
+// (the LIMIT/OFFSET pushdown) BEFORE ever reaching the wantTotal branch, and
+// that call ALSO threads ctx into database/sql -- which eagerly rejects an
+// already-cancelled ctx the moment it tries to acquire a connection. So a
+// pre-cancelled ctx fails at the window query, before the wantTotal branch
+// runs at all, in BOTH the buggy code (s.RowCount(), ignoring ctx) and the
+// fixed code (s.rowCountSQL(ctx)) -- the test would pass either way and
+// prove nothing about this specific fix.
+//
+// So this test needs ctx to still be live (not cancelled) while the window
+// query runs, and to become cancelled ONLY once the COUNT(*) query itself
+// starts -- genuinely "mid-flight" between the two calls inside
+// queryUnfiltered, with no timing/goroutine race. countCancelConn below
+// achieves this deterministically: it wraps the real modernc.org/sqlite
+// driver.Conn (obtained from a throwaway *sql.DB's Driver()) and, for every
+// query it sees, cancels a test-supplied context.CancelFunc the instant the
+// query text contains "COUNT(*)" (rowCountSQL's literal SQL), THEN checks
+// ctx.Err() before deciding whether to actually run the query. That makes
+// the outcome depend entirely on WHICH ctx reaches the driver:
+//   - fixed code: s.rowCountSQL(ctx) hands the driver the SAME ctx this test
+//     cancels -- QueryContext observes ctx.Err() != nil right after the
+//     cancel and returns it without running the COUNT, so Query surfaces
+//     context.Canceled.
+//   - pre-fix code: s.RowCount() runs its COUNT against
+//     context.Background() -- a context this driver call never sees as
+//     cancelled -- so the COUNT executes normally and Query would return a
+//     nil error with a valid Total, which the assertions below would catch
+//     as a failure.
+//
+// modernc.org/sqlite's conn only implements the legacy, non-context
+// driver.Queryer/driver.Execer (verified by reading its sqlite.go: "TODO
+// implement ExecerContext"/"QueryerContext" lint-ignored stubs, no
+// driver.StmtQueryContext on its stmt type either) -- so database/sql calls
+// straight through to whatever QueryerContext the WRAPPING conn provides,
+// letting countCancelConn intercept every query without needing to emulate
+// any other part of the driver protocol.
+
+// countCancelDriver wraps a real driver.Driver, handing out countCancelConn
+// connections that call onCount() the instant they see a "COUNT(*)" query.
+type countCancelDriver struct {
+	real    driver.Driver
+	onCount func()
+}
+
+func (d *countCancelDriver) Open(name string) (driver.Conn, error) {
+	c, err := d.real.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &countCancelConn{real: c, onCount: d.onCount}, nil
+}
+
+// countCancelConn wraps a real modernc.org/sqlite driver.Conn, delegating
+// Prepare/Close/Begin verbatim (required by driver.Conn, unused by
+// sqlBackend's read-only single-query flow) and implementing QueryContext
+// itself so database/sql routes every query through it directly, bypassing
+// the wrapped conn's own (context-oblivious) Queryer entirely for the
+// decision of whether to run at all.
+type countCancelConn struct {
+	real    driver.Conn
+	onCount func()
+}
+
+func (c *countCancelConn) Prepare(query string) (driver.Stmt, error) { return c.real.Prepare(query) }
+func (c *countCancelConn) Close() error                              { return c.real.Close() }
+func (c *countCancelConn) Begin() (driver.Tx, error)                 { return c.real.Begin() }
+
+func (c *countCancelConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "COUNT(*)") {
+		c.onCount()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	queryer, ok := c.real.(driver.Queryer)
+	if !ok {
+		return nil, fmt.Errorf("countCancelConn: underlying conn does not implement driver.Queryer")
+	}
+	dargs := make([]driver.Value, len(args))
+	for i, a := range args {
+		dargs[i] = a.Value
+	}
+	return queryer.Query(query, dargs)
+}
+
+var countCancelDriverSeq int64
+
+// registerCountCancelDriver registers a fresh, uniquely-named driver (an
+// atomic counter, not a pointer address, so it stays collision-free across
+// -count=2 reruns of the same test in one process) wrapping the real
+// "sqlite" driver, and returns the name to pass to sql.Open.
+func registerCountCancelDriver(t *testing.T, onCount func()) string {
+	t.Helper()
+	probe, err := sql.Open("sqlite", "file::memory:")
+	if err != nil {
+		t.Fatalf("open probe db: %v", err)
+	}
+	real := probe.Driver()
+	probe.Close()
+
+	name := fmt.Sprintf("query_countcancel_%d", atomic.AddInt64(&countCancelDriverSeq, 1))
+	sql.Register(name, &countCancelDriver{real: real, onCount: onCount})
+	return name
+}
+
+func TestSQLBackend_Query_WantTotal_CountCancelledMidFlight(t *testing.T) {
+	rows := sqlNameParityRows()
+	path := makeSQLiteFixture(t,
+		"CREATE TABLE t (name TEXT, idx INTEGER, even INTEGER)",
+		sqlInsertStatements("t", []string{"name", "idx", "even"}, rows)...,
+	)
+
+	// A normal backend (opened read-only over the SAME fixture path) supplies
+	// a valid ColumnModel/cols/hasRowID/table -- Query itself never needs
+	// Columns()/Profile() to go through the wrapped connection, only s.db does.
+	sb2ref, err := newSQLBackend(path, "")
+	if err != nil {
+		t.Fatalf("newSQLBackend error = %v, want nil", err)
+	}
+	t.Cleanup(func() { sb2ref.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	driverName := registerCountCancelDriver(t, cancel)
+	db2, err := sql.Open(driverName, sqliteReadonlyURI(path))
+	if err != nil {
+		t.Fatalf("open wrapped db: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+
+	sb := &sqlBackend{
+		db:       db2,
+		table:    sb2ref.table,
+		cols:     sb2ref.cols,
+		hasRowID: sb2ref.hasRowID,
+		cm:       sb2ref.cm,
+		prof:     sb2ref.prof,
+	}
+	p := compilePlan(t, Filter{}, Transform{}, sb.Columns())
+
+	_, err = sb.Query(ctx, p, Window{Offset: 0, Limit: 3}, true)
+	if err == nil {
+		t.Fatalf("Query error = nil, want non-nil (COUNT(*) cancelled mid-flight)")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Query error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+}
+
+// TestSQLBackend_Query_WantTotal_LiveContext_ExactTotal is the positive
+// counterpart: with a live (never-cancelled) ctx, the wantTotal branch's
+// COUNT(*) still runs to completion and reports the exact total -- the fix
+// (threading ctx through) must not change this success-path behavior at all.
+func TestSQLBackend_Query_WantTotal_LiveContext_ExactTotal(t *testing.T) {
+	rows := sqlNameParityRows()
+	sb := newTestSQLBackend(t, "t", []string{"name", "idx", "even"}, "name TEXT, idx INTEGER, even INTEGER", rows)
+	p := compilePlan(t, Filter{}, Transform{}, sb.Columns())
+
+	rs, err := sb.Query(context.Background(), p, Window{Offset: 0, Limit: 3}, true)
+	if err != nil {
+		t.Fatalf("Query error = %v, want nil", err)
+	}
+	if rs.Total != int64(len(rows)) || !rs.TotalExact {
+		t.Fatalf("Total/TotalExact = %d/%v, want %d/true", rs.Total, rs.TotalExact, len(rows))
 	}
 }
 

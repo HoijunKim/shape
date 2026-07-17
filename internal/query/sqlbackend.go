@@ -413,9 +413,18 @@ func (s *sqlBackend) queryUnfiltered(ctx context.Context, p *CompiledPlan, w Win
 		ElapsedMs: time.Since(start).Milliseconds(),
 	}
 	if wantTotal {
-		n, exact := s.RowCount()
+		// Use s.rowCountSQL(ctx) directly rather than s.RowCount() -- RowCount
+		// has no ctx parameter (Backend interface) and always runs its COUNT(*)
+		// against context.Background(), which would make a wantTotal query's
+		// COUNT uncancellable even though the caller's ctx is right here. A
+		// cancelled/timed-out COUNT must propagate ctx.Err() out of Query, the
+		// same way queryWindowSQL's own ctx-bound query already does above.
+		n, err := s.rowCountSQL(ctx)
+		if err != nil {
+			return RowSet{}, err
+		}
 		rs.Total = n
-		rs.TotalExact = exact
+		rs.TotalExact = true
 	} else {
 		rs.Total = -1
 		rs.TotalExact = false
