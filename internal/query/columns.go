@@ -6,6 +6,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -242,4 +243,316 @@ func truncate(s string, max int) (string, bool) {
 		return s, false
 	}
 	return string(r[:max]), true
+}
+
+// columnDiscoverer accumulates the set of paths observed across a stream of
+// records, in FIRST-SEEN order. It walks each record using the same
+// recursive shape as profile.Flatten (internal/profile/flatten.go): interior
+// object paths, array-container paths, and scalar leaf paths are all
+// registered -- the same path universe that ends up (alphabetized) in
+// profile.ProfileResult.Fields -- but, unlike the profiler, first-seen order
+// is kept rather than discarded.
+//
+// This is the ONLY source of column order: profile.Profiler.Result() sorts
+// Fields alphabetically (see internal/profile/profiler.go, Result), so it
+// cannot supply the order that matches CSV header order or JSON key order.
+// buildColumnModel joins disc's ordered path set with prof's per-path type
+// info by Path string, so columnDiscoverer's path-building must exactly
+// match profile.Flatten's (plain "." concatenation, no escaping) or the
+// join would miss entries; see the package doc comment on the resulting
+// path-string ambiguity this inherits from flatten.go.
+//
+// Observe is idempotent per path: an already-registered path is a single
+// map lookup, so total work across a stream is bounded by the number of
+// DISTINCT paths, not the number of records.
+type columnDiscoverer struct {
+	order []string // first-seen path order
+	seen  map[string]bool
+}
+
+// newColumnDiscoverer returns an empty columnDiscoverer.
+func newColumnDiscoverer() *columnDiscoverer {
+	return &columnDiscoverer{seen: map[string]bool{}}
+}
+
+// Observe walks record (record is shaped as produced by the readers/
+// profile pipeline: nil/bool/string/json.Number scalars, map[string]any,
+// []any) and registers any newly-seen path in first-seen order.
+//
+// Known limitation (by design, not fixed here -- see
+// docs/superpowers/sdd/task-2-report.md): once a record is decoded into
+// map[string]any, Go's map iteration order is unspecified (intentionally
+// randomized per range), so the relative first-seen order between two or
+// more sibling keys that are BOTH introduced by the SAME Observe call is not
+// recoverable -- true source key order is only available before generic
+// decode, which is outside this package's scope. Order ACROSS separate
+// Observe calls (i.e. across records) is fully deterministic: a path
+// registered by an earlier record always sorts before one first seen in a
+// later record.
+func (d *columnDiscoverer) Observe(record any) {
+	d.walk("", record)
+}
+
+func (d *columnDiscoverer) walk(path string, v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		if path != "" {
+			d.register(path)
+		}
+		for k, cv := range t {
+			child := k
+			if path != "" {
+				child = path + "." + k
+			}
+			d.walk(child, cv)
+		}
+	case []any:
+		d.register(rootOrPath(path))
+		elem := "[]"
+		if path != "" {
+			elem = path + "[]"
+		}
+		for _, cv := range t {
+			d.walk(elem, cv)
+		}
+	default:
+		d.register(rootOrPath(path))
+	}
+}
+
+func (d *columnDiscoverer) register(path string) {
+	if d.seen[path] {
+		return
+	}
+	d.seen[path] = true
+	d.order = append(d.order, path)
+}
+
+// rootOrPath mirrors profile.Flatten's internal rootOr: the root scalar/
+// array path displays as "$".
+func rootOrPath(path string) string {
+	if path == "" {
+		return "$"
+	}
+	return path
+}
+
+// Column describes one discovered, typed column in a ColumnModel (spec §3).
+type Column struct {
+	Path      string  `json:"path"`
+	Name      string  `json:"name"`
+	Type      string  `json:"type"`
+	Nullable  bool    `json:"nullable"`
+	Presence  float64 `json:"presence"`
+	Distinct  int     `json:"distinct"`
+	Container bool    `json:"container"`
+	Index     int     `json:"index"`
+}
+
+// ColumnModel is the resolved, ordered column set for one source: the base
+// projection a Query/Export starts from before a Transform narrows or
+// reorders it.
+type ColumnModel struct {
+	Columns []Column `json:"columns"`
+
+	// segs is parallel to Columns (segs[i] holds the compiled path segments
+	// for Columns[i]); byPath maps a column's dotted Path to its index in
+	// Columns. Both are populated by buildColumnModel and are not
+	// serialized.
+	segs   [][]Seg
+	byPath map[string]int
+
+	Truncated  bool `json:"truncated"`  // MaxColumns cap was hit
+	TotalPaths int  `json:"totalPaths"` // count of eligible columns before the cap
+}
+
+// MaxColumns bounds the number of columns kept in the base ColumnModel
+// (spec §3, wide-data bound). A path beyond the cap remains addressable by
+// name -- naming it explicitly in a later Transform.Select overrides the cap
+// (an explicit projection is unbounded). columnDiscoverer itself holds a
+// bounded path SET, O(distinct paths) not O(rows); this cap instead bounds
+// how many of those paths become default, displayed columns.
+const MaxColumns = 512
+
+// buildColumnModel combines the first-seen path order recorded by disc with
+// the per-path type/nullability/presence/distinct/container information in
+// prof (the sidebar profiler's result, run over the same records), applying
+// the column-selection rules from spec §3:
+//
+//  1. A path containing an Elem segment ("[]") is excluded: array elements
+//     are previews (see toCell), not fixed columns -- unnesting them is a
+//     later Transform, not a base column.
+//  2. A path that is a PURE interior object -- no type drift
+//     (profile.IsTypeDrift is false) and its only observed kind is
+//     profile.KindObject -- AND has at least one deeper discovered path
+//     nested under it is dropped: it would be redundant with those deeper
+//     columns. A DRIFTING path (sometimes scalar, sometimes object) is KEPT
+//     even when it also has deeper paths: its object occurrences render as
+//     preview cells via toCell (drift is shown, not hidden). Array
+//     containers are never dropped by this rule (only "pure interior
+//     OBJECT" is named in the spec); an always-array path such as "tags"
+//     stays a column alongside its excluded "tags[]" element path.
+//
+// The surviving columns are capped at MaxColumns: the top MaxColumns by
+// presence-desc (ties keep first-seen order, via a stable sort) are kept,
+// but the final Columns slice is re-ordered back to first-seen order among
+// the kept set, so "column order == first-seen order" remains true for
+// every column a caller can see. Truncated/TotalPaths report the cap.
+func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult) *ColumnModel {
+	fieldByPath := make(map[string]profile.FieldProfile, len(prof.Fields))
+	for _, fp := range prof.Fields {
+		fieldByPath[fp.Path] = fp
+	}
+
+	// hasChild[p] is true iff some OTHER discovered path nests under p (an
+	// object child "p.k" or an array-element path "p[]").
+	hasChild := make(map[string]bool, len(disc.order))
+	for _, p := range disc.order {
+		for _, q := range disc.order {
+			if q != p && (strings.HasPrefix(q, p+".") || strings.HasPrefix(q, p+"[]")) {
+				hasChild[p] = true
+				break
+			}
+		}
+	}
+
+	type candidate struct {
+		path string
+		col  Column
+		segs []Seg
+	}
+	candidates := make([]candidate, 0, len(disc.order))
+	for _, p := range disc.order {
+		segs := parsePath(p)
+		if hasElemSeg(segs) {
+			continue // array elements are previews, not columns
+		}
+		fp, ok := fieldByPath[p]
+		if !ok {
+			continue // discovered but never profiled: nothing to type it with
+		}
+		drift := profile.IsTypeDrift(fp)
+		dk := dominantKind(fp)
+		if !drift && dk == string(profile.KindObject) && hasChild[p] {
+			continue // pure interior object with deeper columns: redundant
+		}
+		typ := dk
+		if drift {
+			typ = "mixed"
+		}
+		candidates = append(candidates, candidate{
+			path: p,
+			segs: segs,
+			col: Column{
+				Path:      p,
+				Name:      columnName(p, segs),
+				Type:      typ,
+				Nullable:  fp.NullRate > 0,
+				Presence:  fp.PresenceRate,
+				Distinct:  fp.DistinctCount,
+				Container: fp.TypeDist[profile.KindObject] > 0 || fp.TypeDist[profile.KindArray] > 0,
+			},
+		})
+	}
+
+	total := len(candidates)
+	kept := candidates
+	truncated := false
+	if total > MaxColumns {
+		truncated = true
+		ranked := append([]candidate(nil), candidates...)
+		sort.SliceStable(ranked, func(i, j int) bool {
+			return ranked[i].col.Presence > ranked[j].col.Presence
+		})
+		keepSet := make(map[string]bool, MaxColumns)
+		for _, c := range ranked[:MaxColumns] {
+			keepSet[c.path] = true
+		}
+		filtered := make([]candidate, 0, MaxColumns)
+		for _, c := range candidates { // restore first-seen order among the kept set
+			if keepSet[c.path] {
+				filtered = append(filtered, c)
+			}
+		}
+		kept = filtered
+	}
+
+	cm := &ColumnModel{
+		Truncated:  truncated,
+		TotalPaths: total,
+		Columns:    make([]Column, 0, len(kept)),
+		segs:       make([][]Seg, 0, len(kept)),
+		byPath:     make(map[string]int, len(kept)),
+	}
+	for i, c := range kept {
+		c.col.Index = i
+		cm.Columns = append(cm.Columns, c.col)
+		cm.segs = append(cm.segs, c.segs)
+		cm.byPath[c.path] = i
+	}
+	return cm
+}
+
+// resolveCol resolves column i's compiled segments against rec (see
+// resolve) and classifies the single/first resolved value into a Cell (see
+// toCell). An empty resolve() set (path absent for rec) or an out-of-range
+// index yields CellMissing.
+func (cm *ColumnModel) resolveCol(i int, rec any) Cell {
+	if i < 0 || i >= len(cm.segs) {
+		return Cell{Kind: CellMissing}
+	}
+	values := resolve(rec, cm.segs[i])
+	if len(values) == 0 {
+		return Cell{Kind: CellMissing}
+	}
+	return toCell(values[0])
+}
+
+// hasElemSeg reports whether segs contains an Elem ("[]") segment.
+func hasElemSeg(segs []Seg) bool {
+	for _, s := range segs {
+		if s.Elem {
+			return true
+		}
+	}
+	return false
+}
+
+// columnName derives a short display name for a column from its parsed
+// segments: the last key segment (e.g. "user.name" -> "name"). segs is
+// always Elem-free by the time this is called (buildColumnModel excludes
+// Elem paths before naming); a root path ("$", zero segments) falls back to
+// the dotted path itself.
+func columnName(path string, segs []Seg) string {
+	if len(segs) == 0 {
+		return path
+	}
+	return segs[len(segs)-1].Key
+}
+
+// kindRank lists non-null JSONKinds in a fixed, deterministic order used by
+// dominantKind to break ties without depending on Go's randomized map
+// iteration order over FieldProfile.TypeDist.
+var kindRank = []profile.JSONKind{
+	profile.KindBool, profile.KindInt, profile.KindFloat,
+	profile.KindString, profile.KindArray, profile.KindObject,
+}
+
+// dominantKind returns the non-null JSONKind with the largest share of
+// fp.TypeDist (as a string, for direct use as Column.Type), breaking ties by
+// kindRank order. A field observed as null only (or never observed with a
+// non-null value) falls back to "null".
+func dominantKind(fp profile.FieldProfile) string {
+	best := profile.JSONKind("")
+	bestShare := 0.0
+	for _, k := range kindRank {
+		if share := fp.TypeDist[k]; share > bestShare {
+			bestShare = share
+			best = k
+		}
+	}
+	if best == "" {
+		return string(profile.KindNull)
+	}
+	return string(best)
 }
