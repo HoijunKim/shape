@@ -16,3 +16,10 @@ gui/frontend/.vscode/
 npm/bin/shape
 npm/bin/shape.exe
 npm/node_modules/
+
+# GUI preview/screenshot harness (dev-only, reproducible)
+/gui/preview/
+/gui/frontend/preview/
+/gui/frontend/preview.html
+/gui/frontend/vite.preview.config.ts
+/gui/frontend/preview-dist/

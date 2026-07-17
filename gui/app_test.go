@@ -8,24 +8,35 @@ import (
 
 func TestAppProfileFile(t *testing.T) {
 	a := NewApp()
-	pv, err := a.ProfileFile("../internal/cmd/testdata/sample.ndjson")
+	vm, err := a.ProfileFile("../internal/cmd/testdata/sample.ndjson")
 	if err != nil {
 		t.Fatalf("ProfileFile: %v", err)
 	}
-	if pv.Records != 3 {
-		t.Errorf("records = %d, want 3", pv.Records)
+	if vm.Summary.Records != 3 {
+		t.Errorf("records = %d, want 3", vm.Summary.Records)
 	}
-	var id *FieldView
-	for i := range pv.Fields {
-		if pv.Fields[i].Path == "id" {
-			id = &pv.Fields[i]
-		}
+	if len(vm.KPIs) != 5 {
+		t.Errorf("len(KPIs) = %d, want 5", len(vm.KPIs))
 	}
-	if id == nil {
-		t.Fatal("id field missing")
+	if len(vm.Fields) == 0 {
+		t.Fatal("Fields is empty")
 	}
-	if !id.Drift { // id is int then string across records
-		t.Errorf("id should be flagged drift")
+	if vm.Summary.Format == "" {
+		t.Error("Summary.Format is empty")
+	}
+}
+
+func TestAppDiffFiles(t *testing.T) {
+	a := NewApp()
+	dvm, err := a.DiffFiles("../internal/cmd/testdata/diff_old.ndjson", "../internal/cmd/testdata/diff_new.ndjson")
+	if err != nil {
+		t.Fatalf("DiffFiles: %v", err)
+	}
+	if !dvm.Breaking {
+		t.Error("Breaking = false, want true")
+	}
+	if dvm.Verdict != "Breaking changes" {
+		t.Errorf("Verdict = %q, want %q", dvm.Verdict, "Breaking changes")
 	}
 }
 

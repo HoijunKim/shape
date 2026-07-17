@@ -23,16 +23,16 @@
 
   .drop-inner {
     border: 2px dashed var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius);
     padding: 64px 96px;
     text-align: center;
-    background: var(--bg-panel);
+    background: var(--surface-1);
   }
 
   .drop-title {
     font-size: 16px;
     margin: 0 0 16px;
-    color: var(--text);
+    color: var(--text-primary);
   }
 
   .drop-hint {

@@ -1,37 +1,123 @@
+/* ============================================================
+   Shape — design tokens
+   Premium, theme-aware token system (Linear/Vercel aesthetic).
+   Light is the default; dark applies via OS preference and/or
+   an explicit `data-theme` toggle (toggle always wins).
+   Palette contract: docs/superpowers/plans/2026-07-16-shape-p3-
+   gui-dashboard.md — do not change these hexes without updating
+   the plan (categorical + status colors are dataviz-validated).
+   ============================================================ */
+
 :root {
-  --bg: #f7f7f8;
-  --bg-panel: #ffffff;
-  --bg-elevated: #ffffff;
-  --border: #e0e0e4;
-  --text: #1a1a1e;
-  --text-muted: #6b6b74;
-  --accent: #3860f0;
+  /* Surfaces */
+  --surface: #f6f6f4;   /* page background */
+  --surface-1: #fcfcfb; /* card / chart surface */
+  --surface-2: #ffffff; /* elevated / hover */
+  --border: #e6e5e1;
+
+  /* Text */
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #8a8983;
+
+  /* Accent (= number kind) */
+  --accent: #2a78d6;
   --accent-text: #ffffff;
-  --danger: #d0342c;
-  --danger-bg: #fbe9e8;
-  --row-hover: #f0f1f6;
-  --row-selected: #e6ebff;
-  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --radius: 6px;
+
+  /* Categorical type-kind colors (validated palette, locked) */
+  --kind-number: #2a78d6;
+  --kind-string: #1baf7a;
+  --kind-bool: #eda100;
+  --kind-array: #4a3aa7;
+  --kind-object: #eb6834;
+  --kind-null: #8a8983; /* neutral gray — null = absence */
+
+  /* Status colors — fixed, identical in light and dark, never themed */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+
+  /* Soft tint backgrounds for status badge pills */
+  --status-good-bg: color-mix(in srgb, var(--status-good) 14%, transparent);
+  --status-warning-bg: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  --status-serious-bg: color-mix(in srgb, var(--status-serious) 14%, transparent);
+  --status-critical-bg: color-mix(in srgb, var(--status-critical) 14%, transparent);
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius: 12px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgba(11, 11, 11, 0.04), 0 4px 12px rgba(11, 11, 11, 0.06);
+
+  /* Typography */
+  --font-sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
+/* Dark via OS preference — an explicit light toggle (data-theme="light") wins over this */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17181c;
-    --bg-panel: #1e1f24;
-    --bg-elevated: #24252b;
-    --border: #33343a;
-    --text: #e8e8ea;
-    --text-muted: #9a9aa2;
-    --accent: #5b7cfa;
-    --accent-text: #0e0f12;
-    --danger: #ff6b63;
-    --danger-bg: #3a2020;
-    --row-hover: #2a2b32;
-    --row-selected: #29305a;
+  :root:not([data-theme="light"]) {
+    --surface: #141413;
+    --surface-1: #1a1a19;
+    --surface-2: #232320;
+    --border: #33322e;
+
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+
+    --accent: #3987e5;
+    --accent-text: #0b0b0b;
+
+    --kind-number: #3987e5;
+    --kind-string: #199e70;
+    --kind-bool: #c98500;
+    --kind-array: #9085e9;
+    --kind-object: #d95926;
+    --kind-null: #6f6e68;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 16px rgba(0, 0, 0, 0.32);
   }
 }
+
+/* Dark via explicit toggle — wins regardless of OS preference */
+:root[data-theme="dark"] {
+  --surface: #141413;
+  --surface-1: #1a1a19;
+  --surface-2: #232320;
+  --border: #33322e;
+
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8f8e86;
+
+  --accent: #3987e5;
+  --accent-text: #0b0b0b;
+
+  --kind-number: #3987e5;
+  --kind-string: #199e70;
+  --kind-bool: #c98500;
+  --kind-array: #9085e9;
+  --kind-object: #d95926;
+  --kind-null: #6f6e68;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 16px rgba(0, 0, 0, 0.32);
+}
+
+/* ============================================================
+   Base
+   Components carry their own (scoped) styles from here on.
+   ============================================================ */
 
 * {
   box-sizing: border-box;
@@ -40,25 +126,19 @@
 html,
 body {
   margin: 0;
-  padding: 0;
   height: 100%;
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
+  color-scheme: light dark;
 }
 
 #app {
-  height: 100vh;
-}
-
-.app {
-  display: flex;
-  flex-direction: column;
   height: 100vh;
 }
 
@@ -66,14 +146,16 @@ button {
   font-family: inherit;
   font-size: inherit;
   cursor: pointer;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text);
-  padding: 6px 12px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 
 button:hover:not(:disabled) {
+  background: var(--surface-2);
   border-color: var(--accent);
 }
 
@@ -88,25 +170,10 @@ button.primary {
   border-color: var(--accent);
 }
 
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
 .mono {
-  font-family: var(--mono);
-}
-
-.error {
-  margin: 0;
-  padding: 8px 16px;
-  background: var(--danger-bg);
-  color: var(--danger);
-  font-size: 13px;
-}
-
-.hint {
-  color: var(--text-muted);
-  padding: 16px;
-}
-
-.split {
-  flex: 1;
-  display: flex;
-  min-height: 0;
+  font-family: var(--font-mono);
 }
