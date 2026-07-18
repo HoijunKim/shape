@@ -65,6 +65,14 @@ describe("formatPercent", () => {
     expect(formatPercent(1)).toBe("100%");
     expect(formatPercent(0)).toBe("0%");
   });
+
+  it("clamps a negative rate to 0 before rounding (Math.max(0, ...) guard)", () => {
+    expect(formatPercent(-0.5)).toBe("0%");
+  });
+
+  it("treats a non-NaN, non-finite input (Infinity) as 0% via the !Number.isFinite guard", () => {
+    expect(formatPercent(Infinity)).toBe("0%");
+  });
 });
 
 describe("formatDistinct", () => {

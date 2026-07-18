@@ -12,6 +12,13 @@
   export let fields: FieldDTO[] = [];
   export let focusPath = "";
   export let columnPaths: Set<string> = new Set();
+  // Pass-through escape hatch for TreeNode's Minor 4 fix: bump this (e.g. to
+  // a store revision counter) when the consumer wants to re-reveal a branch
+  // the user manually collapsed, for a focusPath that itself hasn't changed
+  // value (Svelte no-ops a same-value prop re-assignment, so focusPath alone
+  // can't signal "focus this again"). Defaults to 0; StructureMap does not
+  // interpret it, only forwards it down to every TreeNode.
+  export let focusToken = 0;
 
   const dispatch = createEventDispatcher<{ focus: { path: string } }>();
 
@@ -32,7 +39,7 @@
     <p class="empty">No fields.</p>
   {:else}
     {#each tree as node (node.path)}
-      <TreeNode {node} depth={0} {focusPath} {columnPaths} {expandedAncestors} on:focus={onFocus} />
+      <TreeNode {node} depth={0} {focusPath} {columnPaths} {expandedAncestors} {focusToken} on:focus={onFocus} />
     {/each}
   {/if}
 </nav>

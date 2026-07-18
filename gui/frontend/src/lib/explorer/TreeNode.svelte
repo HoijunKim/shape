@@ -17,6 +17,17 @@
   // under them (StructureMap computes this once per focusPath change via
   // fieldDisplay.ancestorPaths and threads it down through every level).
   export let expandedAncestors: Set<string>;
+  // Bump this (e.g. to a store revision counter) to force a fresh check of
+  // expandedAncestors even when focusPath's own STRING value is unchanged.
+  // Svelte's reactivity is value-based: re-assigning a prop to an
+  // already-equal value is a silent no-op, so a repeated focus of an
+  // already-focused path (the user clicks the same DataTable header again
+  // after manually collapsing an ancestor in between) would otherwise never
+  // re-run the force-expand check below and the row would stay hidden
+  // forever (Minor 4). Defaults to 0 so no existing caller needs to touch
+  // it. Deliberately one-way (read-only here) -- it must never be written
+  // back to, and it never touches focusPath itself, so it cannot loop.
+  export let focusToken = 0;
 
   const dispatch = createEventDispatcher<{ focus: { path: string } }>();
 
@@ -24,18 +35,33 @@
 
   $: hasChildren = node.children.length > 0;
   // Rule 4 (T7 brief): a path with no table column has nothing to scroll to
-  // -- dim it and take it out of the tab order / click path entirely.
-  // columnPaths is the SOLE source of truth here, joined by path, never by
-  // index or by node.field-ness (a synthetic interior node just never turns
-  // up in columnPaths in practice).
+  // -- dim it and take it out of the FOCUS click path entirely. columnPaths
+  // is the SOLE source of truth here, joined by path, never by index or by
+  // node.field-ness: a node can carry its own FieldDTO (a profiled interior
+  // object, or an array-element path like "items[]"/"items[].sku") and
+  // still be correctly absent from columnPaths -- internal/query/
+  // columns.go's pure-interior-object rule and its unconditional exclusion
+  // of Elem-segment paths (see StructureMap.test.ts's "items[]" fixture).
   $: isColumn = columnPaths.has(node.path);
   $: isFocused = focusPath !== "" && node.path === focusPath;
+  // A dimmed parent still has children worth browsing (Finding 3): tabindex
+  // must not be gated on isColumn alone, only the "activate as column"
+  // action (Enter/Space, click-outside-the-caret) is. Anything with
+  // children, or any column (even a childless leaf), stays reachable; a
+  // dimmed leaf has nothing to do and correctly drops out of the tab order.
+  $: canReachByTab = isColumn || hasChildren;
 
   let expanded = false;
   // Force this node open whenever it sits on the path down to the current
   // focus -- never force it CLOSED, so a user's manual expand/collapse of an
-  // unrelated branch survives an unrelated focus change.
-  $: if (expandedAncestors.has(node.path)) expanded = true;
+  // unrelated branch survives an unrelated focus change. Also re-checked on
+  // every focusToken bump alone (see the export above): that is the escape
+  // hatch for re-revealing a branch the user collapsed by hand when the
+  // SAME path is focused again.
+  $: {
+    void focusToken;
+    if (expandedAncestors.has(node.path)) expanded = true;
+  }
 
   function toggleExpand(): void {
     expanded = !expanded;
@@ -46,8 +72,36 @@
     dispatch("focus", { path: node.path });
   }
 
-  // Matches the house keyboard-activation pattern (FieldCard.svelte:37-42).
+  // The caret is a plain aria-hidden span, not a nested interactive element
+  // (a <button> inside a role="button" row is invalid nesting -- Finding 3),
+  // so the ROW is the sole interactive control and click-delegates by
+  // target: a click landing on the caret toggles expand/collapse, anywhere
+  // else on the row activates the column focus (Rule 4).
+  function onRowClick(e: MouseEvent): void {
+    const eventTarget = e.target as HTMLElement;
+    if (hasChildren && eventTarget.closest(".caret")) {
+      toggleExpand();
+      return;
+    }
+    activate();
+  }
+
+  // Matches the house keyboard-activation pattern (FieldCard.svelte:37-42)
+  // for Enter/Space. ArrowRight/ArrowLeft expand/collapse (Finding 3) and
+  // are available on ANY node with children regardless of isColumn -- a
+  // dimmed parent still has structure worth browsing -- but focus dispatch
+  // (Enter/Space) stays gated on isColumn, matching Rule 4.
   function onKeydown(e: KeyboardEvent): void {
+    if (hasChildren && e.key === "ArrowRight") {
+      e.preventDefault();
+      if (!expanded) expanded = true;
+      return;
+    }
+    if (hasChildren && e.key === "ArrowLeft") {
+      e.preventDefault();
+      if (expanded) expanded = false;
+      return;
+    }
     if (!isColumn) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -69,24 +123,17 @@
   class:focused={isFocused}
   class:dimmed={!isColumn}
   role="button"
-  tabindex={isColumn ? 0 : -1}
+  tabindex={canReachByTab ? 0 : -1}
   aria-disabled={!isColumn}
+  aria-expanded={hasChildren ? expanded : undefined}
   title={node.path}
   data-path={node.path}
   style="padding-left: {depth * INDENT}px;"
-  on:click={activate}
+  on:click={onRowClick}
   on:keydown={onKeydown}
 >
   {#if hasChildren}
-    <button
-      type="button"
-      class="caret"
-      tabindex="-1"
-      aria-label={expanded ? "Collapse" : "Expand"}
-      on:click|stopPropagation={toggleExpand}
-    >
-      {expanded ? "▾" : "▸"}
-    </button>
+    <span class="caret" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
   {:else}
     <span class="caret-spacer" aria-hidden="true"></span>
   {/if}
@@ -107,7 +154,15 @@
 
 {#if hasChildren && expanded}
   {#each node.children as child (child.path)}
-    <svelte:self node={child} depth={depth + 1} {focusPath} {columnPaths} {expandedAncestors} on:focus />
+    <svelte:self
+      node={child}
+      depth={depth + 1}
+      {focusPath}
+      {columnPaths}
+      {expandedAncestors}
+      {focusToken}
+      on:focus
+    />
   {/each}
 {/if}
 
@@ -136,7 +191,11 @@
     background: var(--surface-2);
   }
 
-  .row:not(.dimmed):focus-visible {
+  /* Any row with tabindex=0 is keyboard-operable (a column can be focused,
+     or -- Finding 3 -- a dimmed parent's children can still be browsed via
+     ArrowRight/ArrowLeft even though it can't be activated), so the visible
+     focus ring is gated on actual reachability, not on isColumn/.dimmed. */
+  .row[tabindex="0"]:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
