@@ -575,7 +575,22 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 		_, qerr := e.QueryRows(context.Background(), req())
 		secondDone <- qerr
 	}()
-	<-gb.secondStarted // second's scan has genuinely begun, blocked at record 0 -- it cannot have finished by the time inFlightCount() is read below
+	// second's scan has genuinely begun, blocked at record 0 -- it cannot have
+	// finished by the time inFlightCount() is read below. Guarded by a
+	// generous timeout backstop (NOT a timing-aimed cancel): second's hooked
+	// filter reuses real.Key(), so if the first (ungated) request's scan ever
+	// wins the race and populates memBackend.matchCache under that same key
+	// first, second's Query becomes a cache hit, computeMatchBitset never
+	// runs, gb.secondStarted never closes, and an untimed receive here would
+	// hang forever instead of failing cleanly -- exactly the class of defect
+	// found and fixed elsewhere in this file (a cancel landing before the
+	// call it targets, proving nothing). On a lost race this reports a clean,
+	// diagnosable test failure instead of a hung CI job.
+	select {
+	case <-gb.secondStarted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("gb.secondStarted never closed within 30s: second's Query call never reached computeMatchBitset (the first request's ungated scan likely won the cache race first)")
+	}
 
 	var firstErr error
 	select {

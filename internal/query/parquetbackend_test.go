@@ -406,6 +406,46 @@ func TestParquetBackend_Query_Filtered_CancelledContext(t *testing.T) {
 	}
 }
 
+// TestParquetBackend_Scan_ZeroRowFile_CancelledContext covers Task 2's
+// hoisted ctx check at the top of scan (parquetbackend.go, MINOR-4): every
+// other parquet cancellation test above uses an 8000-row fixture, so a
+// pre-cancelled ctx is always caught by Query/Count's OWN entry guard before
+// scan is ever reached -- proving nothing about scan's hoisted check
+// specifically. A genuinely zero-row parquet file drives scan straight into
+// the "gr.Read returns (0, io.EOF) on the very first call" path the hoisted
+// check exists to guard: without it, a cancelled ctx over a file with no
+// rows to iterate would return a nil error (the per-row check inside the
+// loop never fires for n==0) instead of context.Canceled.
+func TestParquetBackend_Scan_ZeroRowFile_CancelledContext(t *testing.T) {
+	path := writeParquetFixture(t, []parquetManyRow{}, 0)
+	pb, err := newParquetBackend(context.Background(), path)
+	if err != nil {
+		t.Fatalf("newParquetBackend(zero-row fixture) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { pb.Close() })
+	if pb.total != 0 {
+		t.Fatalf("pb.total = %d, want 0 (zero-row fixture)", pb.total)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := 0
+	err = pb.scan(ctx, 0, func(_ int64, _ any) (bool, error) {
+		calls++
+		return false, nil
+	})
+	if err == nil {
+		t.Fatalf("scan(cancelled ctx, zero-row file) error = nil, want non-nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan(cancelled ctx, zero-row file) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if calls != 0 {
+		t.Fatalf("scan callback invoked %d times, want 0 (the hoisted ctx check before the outer loop must catch this before ever calling gr.Read)", calls)
+	}
+}
+
 func TestParquetBackend_Query_EmptyFilter_CancelledContext(t *testing.T) {
 	rows := manyParquetRows(8000)
 	pb := newTestParquetBackend(t, rows, 0)
