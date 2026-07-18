@@ -175,6 +175,42 @@ func TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant(t *testing.T) {
 	}
 }
 
+// --- OpenSource: rescan tier's streaming-mode warning matches byte-for-byte -
+
+// TestEngine_OpenSource_RescanTier_StreamingWarningExact (A4) pins the exact
+// warning string engine.go emits for a rescan-tier OpenSource, byte for byte
+// -- including the em dash (U+2014), not a hyphen or en dash. Several earlier
+// task briefs asserted a Go test already covered this ("a Go test matches
+// this byte-for-byte"); that claim was checked during T9 and found false --
+// grep over every *_test.go in this package finds no exact-string assertion
+// anywhere, only TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant's
+// `len(rescanRes.Warnings) == 0` check, which would pass just as happily if
+// the string were reworded, mis-punctuated, or had its dash swapped for a
+// plain "-". The frontend (StatusBar.svelte) renders this string verbatim
+// with no reformatting, so a silent wording drift here would ship straight
+// to the status bar.
+func TestEngine_OpenSource_RescanTier_StreamingWarningExact(t *testing.T) {
+	maps := manyRecords(20000) // large enough that a 1 MiB budget forces the rescan tier
+	path := writeNDJSONFile(t, maps)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path, BudgetMB: 1})
+	if err != nil {
+		t.Fatalf("OpenSource(BudgetMB=1) error = %v, want nil", err)
+	}
+	if res.Tier != "rescan" {
+		t.Fatalf("Tier = %q, want \"rescan\" (20000 records must exceed a 1 MiB budget)", res.Tier)
+	}
+
+	const want = "large file — streaming mode (totals are estimates)" // U+2014 EM DASH, not '-' or U+2013
+	if len(res.Warnings) != 1 {
+		t.Fatalf("Warnings = %#v, want exactly one warning", res.Warnings)
+	}
+	if res.Warnings[0] != want {
+		t.Fatalf("Warnings[0] = %q, want %q byte-for-byte", res.Warnings[0], want)
+	}
+}
+
 // --- QueryRows after CloseSource: clean error, no panic ---------------------
 
 func TestEngine_QueryRows_AfterCloseSource_ErrorsCleanly(t *testing.T) {
