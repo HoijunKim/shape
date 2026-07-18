@@ -83,6 +83,13 @@
       toggleExpand();
       return;
     }
+    // A dimmed parent has no column to focus, so a body click would other-
+    // wise be a dead click and its only mouse affordance would be the 14px
+    // caret glyph. Give the whole row expand/collapse instead.
+    if (!isColumn && hasChildren) {
+      toggleExpand();
+      return;
+    }
     activate();
   }
 
@@ -124,7 +131,7 @@
   class:dimmed={!isColumn}
   role="button"
   tabindex={canReachByTab ? 0 : -1}
-  aria-disabled={!isColumn}
+  aria-disabled={!canReachByTab}
   aria-expanded={hasChildren ? expanded : undefined}
   title={node.path}
   data-path={node.path}
