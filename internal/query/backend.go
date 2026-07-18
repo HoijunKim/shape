@@ -28,6 +28,15 @@ type RowSet struct {
 	Scanned    int64    `json:"scanned"`
 	Truncated  bool     `json:"truncated"` // fewer than Limit rows: EOF reached
 	ElapsedMs  int64    `json:"elapsedMs"`
+
+	// ColumnsTruncated and TotalPaths surface spec §3's wide-data bound: the
+	// column set is capped at MaxColumns (keeping highest-presence first, then
+	// first-seen), so a source with more distinct paths than that reports
+	// ColumnsTruncated=true and TotalPaths = the uncapped count. The UI shows
+	// "showing 512 of N columns". Note this is NOT RowSet.Truncated, which
+	// means "fewer rows than Limit: EOF reached".
+	ColumnsTruncated bool `json:"columnsTruncated"`
+	TotalPaths       int  `json:"totalPaths"`
 }
 
 // RowEncoder is the minimal streaming sink Backend.Export writes projected

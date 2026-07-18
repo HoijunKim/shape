@@ -881,3 +881,40 @@ func TestResolveCol_OutOfRangeIndexIsCellMissing(t *testing.T) {
 		t.Fatalf("resolveCol(len(Columns), ...) = %#v, want CellMissing", got)
 	}
 }
+
+// --- AllCellKindValues -------------------------------------------------------
+
+// TestAllCellKindValues_CoversEveryKind is a compile-time-adjacent guard: a
+// future ninth CellKind added to the const block (columns.go) but forgotten
+// here would otherwise silently ship a TS union missing a member (Wails'
+// EnumBind generates its TypeScript enum FROM this slice, Task 4) -- this
+// test catches that omission at test time instead.
+func TestAllCellKindValues_CoversEveryKind(t *testing.T) {
+	if len(AllCellKindValues) != 8 {
+		t.Fatalf("len(AllCellKindValues) = %d, want 8", len(AllCellKindValues))
+	}
+	want := map[CellKind]bool{
+		CellMissing: true, CellNull: true, CellBool: true, CellInt: true,
+		CellFloat: true, CellString: true, CellObject: true, CellArray: true,
+	}
+	got := make(map[CellKind]bool, len(AllCellKindValues))
+	for _, v := range AllCellKindValues {
+		if v.TSName == "" {
+			t.Fatalf("AllCellKindValues entry for %q has an empty TSName", v.Value)
+		}
+		got[v.Value] = true
+	}
+	if len(got) != len(AllCellKindValues) {
+		t.Fatalf("AllCellKindValues has duplicate Value entries: %d distinct of %d total", len(got), len(AllCellKindValues))
+	}
+	for k := range want {
+		if !got[k] {
+			t.Fatalf("AllCellKindValues missing %q", k)
+		}
+	}
+	for k := range got {
+		if !want[k] {
+			t.Fatalf("AllCellKindValues has unexpected %q not in the known CellKind set", k)
+		}
+	}
+}

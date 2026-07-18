@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -874,5 +875,317 @@ func TestEngine_OpenSource_CancelledDuringRowCount_NotRegistered(t *testing.T) {
 	}
 	if n := len(e.backends); n != 0 {
 		t.Fatalf("len(e.backends) = %d, want 0 (a Backend built under a ctx that died before OpenSource's post-RowCount check must not be registered -- it would otherwise leak, reachable by no handle)", n)
+	}
+}
+
+// --- E2 Task 3: CountMatches, wide-data DTO fields, CellKind enum export ----
+
+// TestEngine_CountMatches_ExactOnMemoryTier covers the base case (spec §8):
+// counting a filter matching a known subset on the memory tier returns the
+// exact total, Exact == true, and a non-negative ElapsedMs.
+func TestEngine_CountMatches_ExactOnMemoryTier(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	cr, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: evenFilter()})
+	if err != nil {
+		t.Fatalf("CountMatches error = %v, want nil", err)
+	}
+	if cr.Total != 5 || !cr.Exact {
+		t.Fatalf("Total/Exact = %d/%v, want 5/true", cr.Total, cr.Exact)
+	}
+	if cr.ElapsedMs < 0 {
+		t.Fatalf("ElapsedMs = %d, want >= 0", cr.ElapsedMs)
+	}
+}
+
+// TestEngine_CountMatches_MatchAllEqualsRowCount: an empty Filter{} (match
+// everything) must return the same total as OpenResult.RowEstimate on the
+// memory tier, where RowEstimate is itself exact.
+func TestEngine_CountMatches_MatchAllEqualsRowCount(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	cr, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: Filter{}})
+	if err != nil {
+		t.Fatalf("CountMatches(empty filter) error = %v, want nil", err)
+	}
+	if cr.Total != res.RowEstimate {
+		t.Fatalf("Total = %d, want %d (== OpenResult.RowEstimate on the memory tier)", cr.Total, res.RowEstimate)
+	}
+	if !cr.Exact {
+		t.Fatalf("Exact = false, want true (memory tier)")
+	}
+}
+
+// TestEngine_CountMatches_UnknownHandle: an unregistered handle must error
+// (naming the handle), never panic.
+func TestEngine_CountMatches_UnknownHandle(t *testing.T) {
+	e := NewEngine()
+	_, err := e.CountMatches(context.Background(), CountRequest{Handle: "no-such-handle"})
+	if err == nil {
+		t.Fatalf("CountMatches(unknown handle) error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "no-such-handle") {
+		t.Fatalf("CountMatches(unknown handle) error = %q, want it to mention the handle", err.Error())
+	}
+}
+
+// gatedCountingCountBackend is gatedCountingQueryBackend's (above)
+// Count-side twin: it wraps a real Backend and, on Count, substitutes a
+// decorator around the compiled Filter's predicate that (1) counts calls and
+// (2) on its FIRST call, closes started and blocks on <-gate -- letting a
+// test pin a CountMatches cancellation strictly AFTER
+// memBackend.computeMatchBitset's loop has genuinely started (proven by
+// started firing) and strictly BEFORE it is allowed to advance any further
+// (held at the gate), exactly like gatedCountingQueryBackend does for Query.
+type gatedCountingCountBackend struct {
+	Backend
+	calls   int64
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func (g *gatedCountingCountBackend) Count(ctx context.Context, f *CompiledFilter) (int64, bool, error) {
+	real := f
+	hooked := &CompiledFilter{
+		pred: func(rec any) bool {
+			if atomic.AddInt64(&g.calls, 1) == 1 {
+				close(g.started)
+				<-g.gate
+			}
+			return real.Match(rec)
+		},
+		key: real.Key(),
+	}
+	return g.Backend.Count(ctx, hooked)
+}
+
+// TestEngine_CountMatches_Cancellable is CountMatches' mid-flight cancel
+// case, mirroring TestEngine_Cancel_CancelsInFlightQuery's discipline
+// exactly: it starts CountMatches on a large mem source in a goroutine under
+// RequestID "c1", waits (waitForInFlight) until the engine reports "c1"
+// registered, THEN waits for gb.started -- proving computeMatchBitset's scan
+// has genuinely begun and is blocked at record 0 -- before calling
+// Cancel("c1") and only then releasing the gate. Because the gate release
+// happens strictly after Cancel, the cancellation is provably already in
+// effect before the scan is allowed to advance past record 0: this cannot be
+// short-circuited by CountMatches'/memBackend.Count's top-level ctx.Err()
+// guard (which would require the ctx to already be dead BEFORE Count is
+// ever called -- it is not, since gb.started only closes from inside the
+// scan itself). The predicate-call count landing at exactly
+// cancelCheckStride (computeMatchBitset's stride, memstore.go) after the
+// gate opens proves the abort happened at the very next stride check, not at
+// entry and not never.
+func TestEngine_CountMatches_Cancellable(t *testing.T) {
+	maps := manyRecords(50000)
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	e.mu.Lock()
+	real := e.backends[res.Handle]
+	gb := &gatedCountingCountBackend{Backend: real, started: make(chan struct{}), gate: make(chan struct{})}
+	e.backends[res.Handle] = gb
+	e.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, cerr := e.CountMatches(context.Background(), CountRequest{RequestID: "c1", Handle: res.Handle, Filter: evenFilter()})
+		done <- cerr
+	}()
+
+	waitForInFlight(t, e, 1)
+	<-gb.started // the scan has genuinely entered computeMatchBitset's loop, blocked at record 0
+	if err := e.Cancel("c1"); err != nil {
+		t.Fatalf("Cancel(c1) error = %v, want nil (c1 must be registered)", err)
+	}
+	close(gb.gate) // release the scan only now that ctx is already cancelled
+
+	select {
+	case cerr := <-done:
+		if cerr == nil {
+			t.Fatalf("CountMatches(cancelled mid-flight) error = nil, want non-nil")
+		}
+		if !errors.Is(cerr, context.Canceled) {
+			t.Fatalf("CountMatches(cancelled mid-flight) error = %v, want errors.Is(err, context.Canceled)", cerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("CountMatches never returned after Cancel(c1)")
+	}
+
+	if calls := atomic.LoadInt64(&gb.calls); calls != cancelCheckStride {
+		t.Fatalf("predicate calls = %d, want exactly %d (the cancellation must have been caught at computeMatchBitset's very next stride check after the gate released it, proving it landed mid-scan)", calls, cancelCheckStride)
+	}
+}
+
+// TestEngine_CountMatches_SharesQueryBitset: QueryRows then CountMatches with
+// the same logical filter on a memory-tier handle must leave exactly ONE
+// entry in the backend's matchCache (Task 1's content-hash Key(), reached
+// here via the package-internal *memBackend field, exactly like Task 1's own
+// tests do) -- proving CountMatches keys on the same CompiledFilter.Key() as
+// Query rather than maintaining its own, separate cache.
+func TestEngine_CountMatches_SharesQueryBitset(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	if _, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}); err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if _, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: evenFilter()}); err != nil {
+		t.Fatalf("CountMatches error = %v, want nil", err)
+	}
+
+	e.mu.Lock()
+	mb, ok := e.backends[res.Handle].(*memBackend)
+	e.mu.Unlock()
+	if !ok {
+		t.Fatalf("backend is not a *memBackend")
+	}
+	mb.mu.Lock()
+	entries := len(mb.matchCache)
+	mb.mu.Unlock()
+	if entries != 1 {
+		t.Fatalf("matchCache has %d entries after QueryRows then CountMatches over the same logical Filter, want 1 (shared cache, keyed on CompiledFilter.Key())", entries)
+	}
+}
+
+// TestEngine_CountMatches_RescanTierExactFlag: on a source forced to the
+// rescan tier (BudgetMB: 1 over a fixture far larger than that), Exact must
+// be reported per Backend.Count's own contract (rescanBackend.Count,
+// rescan.go: "a full cancellable scan (exact)" -- unlike Query's Total/
+// TotalExact, an uncancelled Count is always exact for rescanBackend), not
+// hardcoded to either true or false by CountMatches itself.
+func TestEngine_CountMatches_RescanTierExactFlag(t *testing.T) {
+	maps := manyRecords(20000) // >> a 1 MiB budget
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path, BudgetMB: 1})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+	if res.Tier != "rescan" {
+		t.Fatalf("Tier = %q, want \"rescan\" (20000 records must exceed a 1 MiB budget)", res.Tier)
+	}
+
+	cr, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: evenFilter()})
+	if err != nil {
+		t.Fatalf("CountMatches error = %v, want nil", err)
+	}
+	if cr.Total != int64(len(maps))/2 {
+		t.Fatalf("Total = %d, want %d (exact \"even\" match count)", cr.Total, len(maps)/2)
+	}
+	if !cr.Exact {
+		t.Fatalf("Exact = false, want true (rescanBackend.Count's own contract: an uncancelled full scan is always exact)")
+	}
+}
+
+// wideFixtureRecord returns a single record containing n distinct scalar
+// fields ("field000".."field(n-1)"), used to drive buildColumnModel's
+// MaxColumns cap (columns.go) end-to-end through OpenSource/QueryRows.
+func wideFixtureRecord(n int) map[string]any {
+	rec := make(map[string]any, n)
+	for i := 0; i < n; i++ {
+		rec[fmt.Sprintf("field%03d", i)] = json.Number(fmt.Sprintf("%d", i))
+	}
+	return rec
+}
+
+// TestEngine_OpenSource_ReportsColumnTruncation: a fixture whose single
+// record has MaxColumns+10 distinct keys must report ColumnsTruncated==true,
+// TotalPaths==MaxColumns+10, and len(Columns)==MaxColumns; a narrow fixture
+// (well under the cap) must report ColumnsTruncated==false and
+// TotalPaths==len(Columns).
+func TestEngine_OpenSource_ReportsColumnTruncation(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	widePath := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	wideRes, err := e.OpenSource(context.Background(), OpenRequest{Path: widePath})
+	if err != nil {
+		t.Fatalf("OpenSource(wide) error = %v, want nil", err)
+	}
+	if !wideRes.ColumnsTruncated {
+		t.Fatalf("ColumnsTruncated = false, want true (%d distinct paths > MaxColumns=%d)", MaxColumns+10, MaxColumns)
+	}
+	if wideRes.TotalPaths != MaxColumns+10 {
+		t.Fatalf("TotalPaths = %d, want %d", wideRes.TotalPaths, MaxColumns+10)
+	}
+	if len(wideRes.Columns) != MaxColumns {
+		t.Fatalf("len(Columns) = %d, want %d (MaxColumns cap)", len(wideRes.Columns), MaxColumns)
+	}
+
+	narrow := fixtureRecords()
+	narrowPath := writeNDJSONFile(t, narrow)
+	narrowRes, err := e.OpenSource(context.Background(), OpenRequest{Path: narrowPath})
+	if err != nil {
+		t.Fatalf("OpenSource(narrow) error = %v, want nil", err)
+	}
+	if narrowRes.ColumnsTruncated {
+		t.Fatalf("ColumnsTruncated = true, want false (narrow fixture, well under MaxColumns)")
+	}
+	if narrowRes.TotalPaths != len(narrowRes.Columns) {
+		t.Fatalf("TotalPaths = %d, want %d (== len(Columns): no truncation)", narrowRes.TotalPaths, len(narrowRes.Columns))
+	}
+}
+
+// TestEngine_QueryRows_ReportsColumnTruncation: the same wide fixture must
+// set the same two fields on the RowSet returned by QueryRows.
+func TestEngine_QueryRows_ReportsColumnTruncation(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	path := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Offset: 0, Limit: 1, WantTotal: true})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if !rs.ColumnsTruncated {
+		t.Fatalf("RowSet.ColumnsTruncated = false, want true")
+	}
+	if rs.TotalPaths != MaxColumns+10 {
+		t.Fatalf("RowSet.TotalPaths = %d, want %d", rs.TotalPaths, MaxColumns+10)
+	}
+}
+
+// TestOpenResult_JSONShape asserts tag conformance: the frontend reads these
+// exact field names off the wire (spec §8's DTO boundary), so a marshaled
+// OpenResult's raw JSON must contain "columnsTruncated"/"totalPaths", not
+// e.g. Go's default field-name casing.
+func TestOpenResult_JSONShape(t *testing.T) {
+	res := OpenResult{Handle: "h1", ColumnsTruncated: true, TotalPaths: 42}
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("json.Marshal(OpenResult) error = %v, want nil", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"columnsTruncated"`) {
+		t.Fatalf("marshaled JSON = %s, want it to contain \"columnsTruncated\"", s)
+	}
+	if !strings.Contains(s, `"totalPaths"`) {
+		t.Fatalf("marshaled JSON = %s, want it to contain \"totalPaths\"", s)
 	}
 }

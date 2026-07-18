@@ -149,6 +149,24 @@ const (
 	CellArray   CellKind = "array"
 )
 
+// AllCellKindValues enumerates every CellKind for Wails' EnumBind option, so
+// the generated TypeScript gets a real enum type instead of a bare `string`
+// and the cell renderer's switch can be checked for exhaustiveness. Adding a
+// CellKind without adding it here is caught by TestAllCellKindValues_CoversEveryKind.
+var AllCellKindValues = []struct {
+	Value  CellKind
+	TSName string
+}{
+	{CellMissing, "MISSING"},
+	{CellNull, "NULL"},
+	{CellBool, "BOOL"},
+	{CellInt, "INT"},
+	{CellFloat, "FLOAT"},
+	{CellString, "STRING"},
+	{CellObject, "OBJECT"},
+	{CellArray, "ARRAY"},
+}
+
 // previewCap bounds the compact-JSON preview stored in Cell.Str for
 // container values (object/array).
 const previewCap = 200

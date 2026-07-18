@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/hoijun-kim/shape/internal/profile"
 )
@@ -136,6 +137,55 @@ type OpenResult struct {
 	RowEstimate int64      `json:"rowEstimate"`
 	RowExact    bool       `json:"rowExact"`
 	Warnings    []string   `json:"warnings,omitempty"`
+
+	// ColumnsTruncated and TotalPaths surface spec §3's wide-data bound: the
+	// column set is capped at MaxColumns (keeping highest-presence first, then
+	// first-seen), so a source with more distinct paths than that reports
+	// ColumnsTruncated=true and TotalPaths = the uncapped count. The UI shows
+	// "showing 512 of N columns". Note this is NOT RowSet.Truncated, which
+	// means "fewer rows than Limit: EOF reached".
+	ColumnsTruncated bool `json:"columnsTruncated"`
+	TotalPaths       int  `json:"totalPaths"`
+}
+
+// CountRequest is the CountMatches request DTO (spec §8).
+type CountRequest struct {
+	RequestID string `json:"requestId,omitempty"`
+	Handle    string `json:"handle"`
+	Filter    Filter `json:"filter"`
+}
+
+// CountResult is the CountMatches response DTO (spec §8). Exact is false when
+// the backend can only supply a lower bound or an estimate.
+type CountResult struct {
+	Total     int64 `json:"total"`
+	Exact     bool  `json:"exact"`
+	ElapsedMs int64 `json:"elapsedMs"`
+}
+
+// CountMatches returns how many records match req.Filter (spec §8): the
+// cancellable, cached exact count behind the UI's "counting..." affordance,
+// used when a tier can only report a lower bound or estimate from Query.
+// On the memory tier it shares Query's match bitset (both key on
+// CompiledFilter.Key()), so counting a filter already scrolled is free.
+func (e *Engine) CountMatches(ctx context.Context, req CountRequest) (CountResult, error) {
+	backend, err := e.lookup(req.Handle)
+	if err != nil {
+		return CountResult{}, err
+	}
+	cf, err := CompileFilter(req.Filter, backend.Columns())
+	if err != nil {
+		return CountResult{}, fmt.Errorf("query: CountMatches: %w", err)
+	}
+	ctx, release := e.begin(ctx, req.RequestID)
+	defer release()
+
+	start := time.Now()
+	total, exact, err := backend.Count(ctx, cf)
+	if err != nil {
+		return CountResult{}, err
+	}
+	return CountResult{Total: total, Exact: exact, ElapsedMs: time.Since(start).Milliseconds()}, nil
 }
 
 // QueryRequest is the QueryRows request DTO (spec §8).
@@ -284,16 +334,19 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 	}
 
 	handle := e.register(backend)
+	cm := backend.Columns()
 	return OpenResult{
-		Handle:      handle,
-		Format:      string(format),
-		Tier:        tier,
-		Columns:     backend.Columns().Columns,
-		Profile:     adaptProfile(backend.Profile()),
-		Sampled:     tier == "rescan",
-		RowEstimate: n,
-		RowExact:    exact,
-		Warnings:    warnings,
+		Handle:           handle,
+		Format:           string(format),
+		Tier:             tier,
+		Columns:          cm.Columns,
+		Profile:          adaptProfile(backend.Profile()),
+		Sampled:          tier == "rescan",
+		RowEstimate:      n,
+		RowExact:         exact,
+		Warnings:         warnings,
+		ColumnsTruncated: cm.Truncated,
+		TotalPaths:       cm.TotalPaths,
 	}, nil
 }
 
@@ -315,7 +368,15 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	}
 	ctx, release := e.begin(ctx, req.RequestID)
 	defer release()
-	return backend.Query(ctx, plan, Window{Offset: req.Offset, Limit: req.Limit}, req.WantTotal)
+	rs, err := backend.Query(ctx, plan, Window{Offset: req.Offset, Limit: req.Limit}, req.WantTotal)
+	if err != nil {
+		return RowSet{}, err
+	}
+	if cm := backend.Columns(); cm != nil {
+		rs.ColumnsTruncated = cm.Truncated
+		rs.TotalPaths = cm.TotalPaths
+	}
+	return rs, nil
 }
 
 // CloseSource closes and unregisters handle's Backend. Calling QueryRows (or
