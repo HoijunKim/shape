@@ -383,20 +383,25 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	if err != nil {
 		return RowSet{}, err
 	}
-	// every Backend.Query sets RowSet.Columns from
-	// p.Transform.Columns() -- the PROJECTED column set -- not from
-	// backend.Columns() (the base ColumnModel). Stamping cm.Truncated/
-	// cm.TotalPaths unconditionally here (as before this fix) described the
-	// base model regardless of what rs.Columns actually held: a narrowing
-	// Transform.Select would report ColumnsTruncated/TotalPaths for a base
-	// set the caller never sees, and -- worse -- would report
-	// ColumnsTruncated=true for a Select naming a path beyond MaxColumns even
-	// though naming it explicitly is BY DEFINITION not truncated (see the
-	// MaxColumns doc comment, columns.go). Only an identity Transform (see
-	// isIdentityTransform) leaves rs.Columns equal to the base column set, so
-	// only then do the base model's numbers describe rs.Columns; otherwise
-	// rs.Columns IS the ground truth and is never truncated.
-	if isIdentityTransform(req.Transform) {
+	// every Backend.Query sets RowSet.Columns from p.Transform.Columns() --
+	// the PROJECTED column set -- not from backend.Columns() (the base
+	// ColumnModel). Whether the base model's truncation numbers still apply
+	// to that projection depends on Select alone, NOT on isIdentityTransform
+	// (Select empty AND Drop empty): Select, when non-empty, is an explicit,
+	// unbounded projection (naming a path overrides MaxColumns entirely --
+	// see its doc comment, columns.go), so ColumnsTruncated is always false
+	// and TotalPaths always == len(rs.Columns) whenever Select is used.
+	// Select-EMPTY, by contrast, always inherits the base model's own
+	// truncation verbatim, whether or not Drop is also present:
+	// CompileTransform's Select-empty path builds from baseOutCols(cm),
+	// which starts from cm.Columns -- the ALREADY-CAPPED slice
+	// (transform.go) -- and Drop (applyDrop) only ever subtracts named
+	// entries from that capped starting point, so it can never reach a path
+	// the cap already excluded. A Drop-only transform over a truncated base
+	// model therefore hides columns for two independent reasons (the cap,
+	// plus the drop), and cm.Truncated/cm.TotalPaths -- not
+	// len(rs.Columns) -- are what describe the cap's contribution.
+	if len(req.Transform.Select) == 0 {
 		if cm := backend.Columns(); cm != nil {
 			rs.ColumnsTruncated = cm.Truncated
 			rs.TotalPaths = cm.TotalPaths

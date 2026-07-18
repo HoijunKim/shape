@@ -1324,12 +1324,21 @@ func TestEngine_QueryRows_IdentityTransform_ReportsBaseTruncation(t *testing.T) 
 	}
 }
 
-// TestEngine_QueryRows_DropTransform_NarrowSource_TotalPathsAfterDrop: a Drop
-// transform over a narrow (well under MaxColumns) source must report
-// TotalPaths as the POST-drop column count, not the pre-drop base count --
-// the base model was never truncated, but Drop still changed what
-// rs.Columns actually contains, and TotalPaths must describe THAT.
-func TestEngine_QueryRows_DropTransform_NarrowSource_TotalPathsAfterDrop(t *testing.T) {
+// TestEngine_QueryRows_DropTransform_NarrowSource_ReportsBaseTotalPaths: a
+// Drop transform over a narrow (well under MaxColumns, so never truncated)
+// source must still report TotalPaths as the base ColumnModel's own count
+// (cm.TotalPaths, the eligible-candidate count before any cap), NOT the
+// post-drop len(rs.Columns) -- Drop only narrows the PROJECTION
+// (rs.Columns); it says nothing about the base model TotalPaths describes.
+// This was fixed alongside the wide-source case (see
+// TestEngine_QueryRows_DropTransform_WideSource_ReportsBaseTruncation): the
+// two differ only in whether cm.Truncated happens to be true, not in
+// whether Drop affects these fields (it never does). This test previously
+// asserted the opposite (TotalPaths == len(rs.Columns) post-drop) -- that
+// was the "Drop lumped in with Select" regression this fix repairs; on a
+// narrow source cm.Truncated is false either way, so only TotalPaths
+// exposed the difference.
+func TestEngine_QueryRows_DropTransform_NarrowSource_ReportsBaseTotalPaths(t *testing.T) {
 	narrow := fixtureRecords() // "name", "age", "even" -- well under MaxColumns
 	path := writeNDJSONFile(t, narrow)
 
@@ -1350,13 +1359,97 @@ func TestEngine_QueryRows_DropTransform_NarrowSource_TotalPathsAfterDrop(t *test
 		t.Fatalf("QueryRows error = %v, want nil", err)
 	}
 	if rs.ColumnsTruncated {
-		t.Fatalf("rs.ColumnsTruncated = true, want false (narrow source, Drop transform)")
+		t.Fatalf("rs.ColumnsTruncated = true, want false (narrow source: base model was never truncated)")
 	}
 	if len(rs.Columns) != 2 {
 		t.Fatalf("len(rs.Columns) = %d, want 2 (base 3 minus dropped \"age\")", len(rs.Columns))
 	}
+	if rs.TotalPaths != 3 {
+		t.Fatalf("rs.TotalPaths = %d, want 3 (base ColumnModel's own count, NOT the post-drop len(rs.Columns)=%d)", rs.TotalPaths, len(rs.Columns))
+	}
+}
+
+// TestEngine_QueryRows_DropTransform_WideSource_ReportsBaseTruncation: a
+// Drop-only transform over a WIDE source (more distinct paths than
+// MaxColumns) must still report the base ColumnModel's own truncation.
+// CompileTransform's Drop-only path starts from baseOutCols(cm), which is
+// built from cm.Columns -- the ALREADY-CAPPED slice (transform.go) -- and
+// only subtracts named entries (applyDrop); it can never reach a path the
+// cap already excluded. So on a truncated base model, Drop hides columns for
+// two independent reasons (the cap, plus the drop), and ColumnsTruncated/
+// TotalPaths must still describe the base model's cap, not the post-drop
+// length -- exactly like the identity-transform case above. "field000" is
+// one of the MaxColumns kept-by-presence-tie-break-to-first-seen columns
+// (wideFixtureRecord's single record gives every field equal presence, so
+// ties resolve to first-seen order), so dropping it changes len(rs.Columns)
+// without changing whether the base model was truncated.
+func TestEngine_QueryRows_DropTransform_WideSource_ReportsBaseTruncation(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	path := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{
+		Handle:    res.Handle,
+		Transform: Transform{Drop: []string{"field000"}},
+		Offset:    0,
+		Limit:     1,
+		WantTotal: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if len(rs.Columns) != MaxColumns-1 {
+		t.Fatalf("len(rs.Columns) = %d, want %d (capped MaxColumns minus the dropped column)", len(rs.Columns), MaxColumns-1)
+	}
+	if !rs.ColumnsTruncated {
+		t.Fatalf("rs.ColumnsTruncated = false, want true (base model IS truncated; Drop-only transform cannot un-cap it)")
+	}
+	if rs.TotalPaths != MaxColumns+10 {
+		t.Fatalf("rs.TotalPaths = %d, want %d (uncapped base count, NOT the post-drop len(rs.Columns)=%d)", rs.TotalPaths, MaxColumns+10, len(rs.Columns))
+	}
+}
+
+// TestEngine_QueryRows_SelectAndDropTransform_WideSource_UntruncatedProjection:
+// when BOTH Select and Drop are non-empty, CompileTransform takes the Select
+// branch outright (rule 1: "Drop is ignored whenever Select is non-empty") --
+// so the projection must follow the Select rule (unbounded, never truncated),
+// exactly as with Select alone, regardless of the (ignored) Drop content.
+func TestEngine_QueryRows_SelectAndDropTransform_WideSource_UntruncatedProjection(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	path := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{
+		Handle: res.Handle,
+		Transform: Transform{
+			Select: []ColumnSpec{{Path: "field000"}, {Path: "field001"}},
+			Drop:   []string{"field001"}, // ignored: Select is non-empty
+		},
+		Offset:    0,
+		Limit:     1,
+		WantTotal: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if len(rs.Columns) != 2 {
+		t.Fatalf("len(rs.Columns) = %d, want 2 (Drop is ignored when Select is non-empty)", len(rs.Columns))
+	}
+	if rs.ColumnsTruncated {
+		t.Fatalf("rs.ColumnsTruncated = true, want false (Select present -> unbounded projection, Drop's presence doesn't matter)")
+	}
 	if rs.TotalPaths != len(rs.Columns) {
-		t.Fatalf("rs.TotalPaths = %d, want %d (== len(rs.Columns) post-drop, not the pre-drop base count)", rs.TotalPaths, len(rs.Columns))
+		t.Fatalf("rs.TotalPaths = %d, want %d (== len(rs.Columns): projected set is not truncated)", rs.TotalPaths, len(rs.Columns))
 	}
 }
 

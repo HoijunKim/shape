@@ -32,28 +32,36 @@ type RowSet struct {
 	// ColumnsTruncated and TotalPaths describe whatever RowSet.Columns
 	// actually contains (spec §3's wide-data bound). Every Backend.Query sets
 	// Columns from CompiledTransform.Columns() -- the query's PROJECTED
-	// column set -- which equals the source's base ColumnModel only when the
-	// query's Transform is an identity (no Select, no Drop -- see
-	// isIdentityTransform, transform.go); Engine.QueryRows picks which
-	// meaning applies per call:
+	// column set -- but whether that projection still carries the base
+	// ColumnModel's own truncation depends on Transform.Select alone, NOT on
+	// the transform as a whole (see Engine.QueryRows, which picks per call):
 	//
-	//   - Identity Transform: Columns IS the base column set, capped at
-	//     MaxColumns (keeping highest-presence first, then first-seen), so
-	//     these fields report the base ColumnModel's own cap:
-	//     ColumnsTruncated=true and TotalPaths = the uncapped path count when
-	//     the source has more distinct paths than MaxColumns; otherwise
-	//     ColumnsTruncated=false and TotalPaths == len(Columns).
-	//   - Any other Transform (Select and/or Drop non-empty): the projection
-	//     is an explicit, un-capped column set -- naming a path in Select
-	//     overrides MaxColumns entirely (see its doc comment, columns.go),
-	//     and Drop only ever removes columns from an already-uncapped base
-	//     set -- so ColumnsTruncated is always false and TotalPaths always ==
-	//     len(Columns): the truncation these fields describe is, by
-	//     definition, about Columns itself, never a set the caller can't see.
+	//   - Select empty (whether or not Drop is also set): CompileTransform
+	//     builds Columns from baseOutCols(cm) (transform.go), which is
+	//     cm.Columns itself -- the base column set, already capped at
+	//     MaxColumns (keeping highest-presence first, then first-seen) -- and
+	//     a non-empty Drop only ever subtracts named entries from that capped
+	//     starting point (applyDrop): it can never restore a path the cap
+	//     already excluded. So these fields always mirror the base
+	//     ColumnModel's own cm.Truncated/cm.TotalPaths verbatim, REGARDLESS
+	//     of Drop: ColumnsTruncated=true and TotalPaths = the uncapped path
+	//     count when the source has more distinct paths than MaxColumns;
+	//     otherwise ColumnsTruncated=false and TotalPaths == len(cm.Columns)
+	//     (the base model's own, untruncated count). Either way, a non-empty
+	//     Drop can still shrink RowSet.Columns below that count -- these
+	//     fields describe the base model, not len(RowSet.Columns), so they
+	//     are NOT guaranteed to equal len(RowSet.Columns) once Drop has
+	//     removed anything.
+	//   - Select non-empty: CompileTransform takes the Select branch outright
+	//     (Drop, even if also set, is ignored) and naming a path overrides
+	//     MaxColumns entirely (see Select's doc comment, columns.go), so the
+	//     projection is explicit and un-capped -- ColumnsTruncated is always
+	//     false and TotalPaths always == len(RowSet.Columns) (here, unlike
+	//     the Select-empty case, the two really do coincide).
 	//
-	// The UI shows "showing 512 of N columns" only in the first case. Note
-	// this pair is NOT RowSet.Truncated (above), which means "fewer rows than
-	// Limit: EOF reached".
+	// The UI shows "showing 512 of N columns" only in the first case, when
+	// ColumnsTruncated is true. Note this pair is NOT RowSet.Truncated
+	// (above), which means "fewer rows than Limit: EOF reached".
 	ColumnsTruncated bool `json:"columnsTruncated"`
 	TotalPaths       int  `json:"totalPaths"`
 }
