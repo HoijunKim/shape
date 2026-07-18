@@ -5,23 +5,14 @@
   // badge glyph, and must stay distinguishable if that ever changes).
   import type { Cell } from "./types";
   import { CellKind } from "./types";
+  import { KIND_TOKEN } from "./kindToken";
 
   export let cell: Cell;
   export let align: "left" | "right" = "left";
 
-  // CellKind carries raw int/float; there is no --kind-int/--kind-float
-  // token in app.css (only --kind-number), so fold both to "number" here.
-  // Mirrors the guard in charts/TypeMixBar.svelte:12.
-  const KIND_TOKEN: Record<string, string> = {
-    int: "number",
-    float: "number",
-    bool: "bool",
-    string: "string",
-    object: "object",
-    array: "array",
-    null: "null",
-  };
-
+  // KIND_TOKEN lives in kindToken.ts (shared with KindChip.svelte, T7) so
+  // there is exactly one int/float->"number" folding table, not a copy per
+  // component. Mirrors the guard in charts/TypeMixBar.svelte:12.
   $: token = KIND_TOKEN[cell.kind];
   $: color = token ? `var(--kind-${token})` : "var(--text-muted)";
 
