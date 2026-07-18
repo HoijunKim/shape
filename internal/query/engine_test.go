@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,6 +334,46 @@ func waitForInFlight(t *testing.T, e *Engine, n int) {
 	t.Fatalf("inFlightCount() never reached %d within the 5s deadline (got %d)", n, e.inFlightCount())
 }
 
+// gatedCountingQueryBackend wraps a real Backend, and on Query substitutes a
+// decorator around the compiled Filter's predicate that (1) counts calls and
+// (2) on its FIRST call, closes started and then blocks on <-gate --
+// mirroring fakeRecordStream's onCall hook above, but at the per-record
+// predicate-call granularity memBackend.computeMatchBitset scans at (rather
+// than the record-stream granularity openIngestBackend scans at). This lets
+// a test deterministically pin a cancellation to land strictly AFTER the
+// scan has genuinely entered computeMatchBitset's loop (proven by started
+// firing) and strictly BEFORE the scan is allowed to advance any further
+// (held at the gate) -- removing the race the original version of
+// TestEngine_Cancel_CancelsInFlightQuery had between "Cancel() has been
+// called" and "the scan has actually started", which (measured empirically
+// while fixing MINOR-3: -count=5 failed 4/5 times) let the ctx die before a
+// single predicate call most of the time, silently proving nothing about
+// "mid-scan" at all. This is registered directly into Engine.backends (this
+// test file is package query, so the unexported field is reachable), not
+// through OpenSource, so it needs no seam in production code.
+type gatedCountingQueryBackend struct {
+	Backend
+	calls   int64
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func (g *gatedCountingQueryBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantTotal bool) (RowSet, error) {
+	real := p.Filter
+	hooked := &CompiledFilter{
+		pred: func(rec any) bool {
+			if atomic.AddInt64(&g.calls, 1) == 1 {
+				close(g.started)
+				<-g.gate
+			}
+			return real.Match(rec)
+		},
+		key: real.Key(),
+	}
+	hp := &CompiledPlan{Filter: hooked, Transform: p.Transform, Columns: p.Columns, filterKey: hooked.Key()}
+	return g.Backend.Query(ctx, hp, w, wantTotal)
+}
+
 // TestEngine_Cancel_CancelsInFlightQuery is the mid-flight case (as opposed
 // to TestEngine_QueryRows_HonorsCancelledContext's pre-cancelled short-
 // circuit, which never exercises a backend's stride check): it starts
@@ -339,11 +381,26 @@ func waitForInFlight(t *testing.T, e *Engine, n int) {
 // (waitForInFlight) until the engine actually reports "r1" registered, then
 // calls Cancel("r1") from the main goroutine -- proving Cancel can interrupt
 // a scan already in progress, not just a request that hasn't started yet.
-// manyRecords(50000) gives computeMatchBitset's scan a multi-millisecond
-// window (measured ~2-3ms locally) to be "in flight" in, which -- given
-// waitForInFlight/Cancel are a handful of near-instantaneous mutex
-// operations by comparison -- makes missing the window astronomically
-// unlikely without relying on any sleep or fixed timer.
+//
+// MINOR-3 review fix: errors.Is(qerr, context.Canceled) alone does not pin
+// WHERE the cancellation landed. gatedCountingQueryBackend closes that gap
+// deterministically (no sleep, no scheduling-luck timing margin):
+// gb.started is only closed from INSIDE computeMatchBitset's loop, on its
+// very first predicate call, and that same call blocks on gb.gate until the
+// test releases it -- so waiting on gb.started before calling Cancel("r1"),
+// and only closing gb.gate afterward, guarantees the ctx is already
+// cancelled by the time the scan is allowed to advance past record 0. Since
+// computeMatchBitset only rechecks ctx.Err() at i%cancelCheckStride==0, the
+// scan then runs uninterrupted through i=1..cancelCheckStride-1 (calling the
+// predicate cancelCheckStride-1 more times) before its next check (i =
+// cancelCheckStride) observes the cancellation and aborts -- so gb.calls
+// must land at EXACTLY cancelCheckStride on every run, mirroring
+// TestOpenIngestBackend_CancelsMidIngest's stream.calls == cancelCheckStride
+// assertion. calls == cancelCheckStride is only possible if the scan (a)
+// left Query's own entry guard (or it would be 0) and (b) did not run to
+// completion (or it would be len(maps)/2, the "even" match count, with no
+// error at all) -- i.e., it proves the cancellation was caught genuinely
+// mid-scan.
 func TestEngine_Cancel_CancelsInFlightQuery(t *testing.T) {
 	maps := manyRecords(50000)
 	path := writeNDJSONFile(t, maps)
@@ -353,6 +410,12 @@ func TestEngine_Cancel_CancelsInFlightQuery(t *testing.T) {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
 
+	e.mu.Lock()
+	real := e.backends[res.Handle]
+	gb := &gatedCountingQueryBackend{Backend: real, started: make(chan struct{}), gate: make(chan struct{})}
+	e.backends[res.Handle] = gb
+	e.mu.Unlock()
+
 	done := make(chan error, 1)
 	go func() {
 		_, qerr := e.QueryRows(context.Background(), QueryRequest{RequestID: "r1", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true})
@@ -360,9 +423,11 @@ func TestEngine_Cancel_CancelsInFlightQuery(t *testing.T) {
 	}()
 
 	waitForInFlight(t, e, 1)
+	<-gb.started // the scan has genuinely entered computeMatchBitset's loop, blocked at record 0
 	if err := e.Cancel("r1"); err != nil {
 		t.Fatalf("Cancel(r1) error = %v, want nil (r1 must be registered)", err)
 	}
+	close(gb.gate) // release the scan only now that ctx is already cancelled
 
 	select {
 	case qerr := <-done:
@@ -374,6 +439,10 @@ func TestEngine_Cancel_CancelsInFlightQuery(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("QueryRows never returned after Cancel(r1)")
+	}
+
+	if calls := atomic.LoadInt64(&gb.calls); calls != cancelCheckStride {
+		t.Fatalf("predicate calls = %d, want exactly %d (the cancellation must have been caught at computeMatchBitset's very next stride check after the gate released it, proving it landed mid-scan rather than at Query's entry guard or not at all)", calls, cancelCheckStride)
 	}
 }
 
@@ -391,6 +460,62 @@ func TestEngine_Cancel_UnknownRequestID(t *testing.T) {
 	}
 }
 
+// twoPhaseGateBackend wraps a real Backend for
+// TestEngine_Cancel_SupersedesDuplicateRequestID. Its Query method
+// distinguishes the FIRST call (the soon-to-be-superseded request) from the
+// SECOND (the superseding one) by a simple atomic call counter -- safe here
+// specifically because the test never starts the second QueryRows goroutine
+// until it has confirmed (via firstStarted) that the first one's Query call
+// has already begun, so there is no ambiguity about which logical request
+// "call #1" vs "call #2" is:
+//   - call #1 (first) just signals firstStarted and runs straight through
+//     unmodified -- it must complete via a genuine mid-scan cancellation
+//     (the supersede), not be held up by anything this wrapper does.
+//   - call #2 (second) signals secondStarted and then blocks its very first
+//     predicate invocation on <-gate, so the test can wait for that signal
+//     and then read e.inFlightCount() with an ARBITRARILY WIDE window
+//     (however slow the scheduler or a GC pause is) instead of the ~10x
+//     margin (~0.2ms vs ~2.4ms) the original sleep-free-but-still-
+//     wall-clock-dependent version relied on.
+type twoPhaseGateBackend struct {
+	Backend
+	calls         int64
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	gate          chan struct{}
+}
+
+func (b *twoPhaseGateBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantTotal bool) (RowSet, error) {
+	switch atomic.AddInt64(&b.calls, 1) {
+	case 1:
+		close(b.firstStarted)
+		return b.Backend.Query(ctx, p, w, wantTotal)
+	case 2:
+		real := p.Filter
+		var predCalls int64
+		hooked := &CompiledFilter{
+			pred: func(rec any) bool {
+				// Gate only the FIRST predicate call (record 0): computeMatchBitset
+				// calls this once per record, but secondStarted must close exactly
+				// once, and only the very first call needs to block -- gate is
+				// closed by the test afterward, so every later <-b.gate receive
+				// (this call and, if the gate opened mid-scan, none of the rest,
+				// since it never blocks past the closed channel) is a no-op.
+				if atomic.AddInt64(&predCalls, 1) == 1 {
+					close(b.secondStarted)
+					<-b.gate
+				}
+				return real.Match(rec)
+			},
+			key: real.Key(),
+		}
+		hp := &CompiledPlan{Filter: hooked, Transform: p.Transform, Columns: p.Columns, filterKey: hooked.Key()}
+		return b.Backend.Query(ctx, hp, w, wantTotal)
+	default:
+		return b.Backend.Query(ctx, p, w, wantTotal)
+	}
+}
+
 // TestEngine_Cancel_SupersedesDuplicateRequestID: a second QueryRows
 // registering under the SAME RequestID as a still-running first one
 // supersedes it (begin's documented "reused id means supersede" behavior,
@@ -404,13 +529,21 @@ func TestEngine_Cancel_UnknownRequestID(t *testing.T) {
 // once both requests finish -- second's own release would simply find
 // nothing left to delete. The only observable difference the generation
 // token makes is DURING the overlap: with the token, second's entry must
-// still be there the instant first (superseded, so it aborts fast -- at
-// most one cancelCheckStride into its scan) finishes, while second (a full,
-// un-early-stopped wantTotal scan over the same 50000 records) is still
-// genuinely running. So this test deliberately reads inFlightCount() in
-// that exact window, between "first is confirmed done" and "second is
+// still be there the instant first (superseded) finishes, while second is
+// still genuinely running. So this test deliberately reads inFlightCount()
+// in that exact window, between "first is confirmed done" and "second is
 // confirmed done" -- where a naive release would have already (wrongly)
 // dropped to 0, but the generation-checked one has not.
+//
+// MINOR-1 review fix: that window used to be a real wall-clock race (~0.2ms
+// for first to abort vs ~2.4ms for second's full scan -- a ~10x margin, not
+// the large one originally claimed), fragile under a GC pause or scheduler
+// stall, especially under this suite's -count=2 no-flakes gate on Windows.
+// twoPhaseGateBackend removes the timing dependency entirely: second's scan
+// is held at record 0 (via <-gate) until the test has already read
+// inFlightCount(), so that read can never race with second's completion --
+// it is now impossible for second to have finished by the time it happens,
+// no matter how slow the machine is.
 func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 	maps := manyRecords(50000)
 	path := writeNDJSONFile(t, maps)
@@ -423,18 +556,26 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 		return QueryRequest{RequestID: "dup", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}
 	}
 
+	e.mu.Lock()
+	real := e.backends[res.Handle]
+	gb := &twoPhaseGateBackend{Backend: real, firstStarted: make(chan struct{}), secondStarted: make(chan struct{}), gate: make(chan struct{})}
+	e.backends[res.Handle] = gb
+	e.mu.Unlock()
+
 	firstDone := make(chan error, 1)
 	go func() {
 		_, qerr := e.QueryRows(context.Background(), req())
 		firstDone <- qerr
 	}()
 	waitForInFlight(t, e, 1)
+	<-gb.firstStarted // first's Query call has genuinely begun -- so the goroutine started below is unambiguously "call #2"
 
 	secondDone := make(chan error, 1)
 	go func() {
 		_, qerr := e.QueryRows(context.Background(), req())
 		secondDone <- qerr
 	}()
+	<-gb.secondStarted // second's scan has genuinely begun, blocked at record 0 -- it cannot have finished by the time inFlightCount() is read below
 
 	var firstErr error
 	select {
@@ -451,12 +592,14 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 
 	// THE generation-token assertion: immediately after the superseded first
 	// request has finished (and run its own deferred release), the registry
-	// must still show ONE in-flight request -- the second's, which has not
-	// finished yet. A naive (non-generation-checked) release would have
-	// already deleted it here, wrongly reporting 0.
+	// must still show ONE in-flight request -- the second's, which is
+	// guaranteed (via gb.secondStarted, above) to still be blocked at record
+	// 0. A naive (non-generation-checked) release would have already deleted
+	// it here, wrongly reporting 0.
 	if n := e.inFlightCount(); n != 1 {
 		t.Fatalf("inFlightCount() = %d immediately after the superseded first request finished, want 1 (second's registry entry must survive first's release -- the generation-token invariant)", n)
 	}
+	close(gb.gate) // release second's scan; only now may it proceed to completion
 
 	var secondErr error
 	select {
@@ -623,5 +766,98 @@ func TestOpenIngestBackend_CancelsMidIngest(t *testing.T) {
 	}
 	if stream.calls != cancelCheckStride {
 		t.Fatalf("stream.calls = %d, want %d (the loop must stop at the very next stride check after cancel, not keep reading)", stream.calls, cancelCheckStride)
+	}
+}
+
+// --- IMPORTANT-1: OpenSource must re-check ctx after RowCount -------------
+
+// openSourceEOFStream is a readers.RecordStream test double for
+// TestEngine_OpenSource_CancelledDuringRowCount_NotRegistered: unlike
+// fakeRecordStream above (which never reaches io.EOF, used to prove ingest
+// ABORTS mid-scan), this one returns exactly n real records then io.EOF
+// forever after, so openIngestBackend completes NORMALLY (a valid memBackend,
+// nil error) -- but onLast fires synchronously on the nth (final) call, in
+// the SAME goroutine, letting a test cancel a real context deterministically
+// before the loop's very next iteration ever observes io.EOF. n is chosen
+// far below cancelCheckStride, so the ingest loop's only stride check (at
+// n=0) passes while ctx is still live, and no further check happens before
+// EOF -- reproducing the exact window the finding describes: the backend
+// finishes building successfully while ctx is already Done.
+type openSourceEOFStream struct {
+	n      int
+	calls  int
+	onLast func()
+}
+
+func (f *openSourceEOFStream) Next() (any, error) {
+	f.calls++
+	if f.calls > f.n {
+		return nil, io.EOF
+	}
+	if f.calls == f.n && f.onLast != nil {
+		f.onLast()
+	}
+	return map[string]any{"n": f.calls}, nil
+}
+
+func (f *openSourceEOFStream) Skipped() int { return 0 }
+
+// TestEngine_OpenSource_CancelledDuringRowCount_NotRegistered is IMPORTANT-1's
+// regression test. TestEngine_OpenSource_HonorsCancelledContext (above) only
+// covers a ctx cancelled BEFORE OpenSource ever starts, which openBackend's
+// own ctx.Err() guard catches long before RowCount is reached -- it proves
+// nothing about the window this test targets: ctx dying AFTER openBackend has
+// already built a valid Backend, but before/during the backend.RowCount(ctx)
+// call OpenSource makes next. Pre-fix, OpenSource never re-checks ctx after
+// RowCount, so it returns a "successful" (err == nil) OpenResult -- with
+// RowEstimate/RowExact collapsed to memBackend.RowCount's own (0, false)
+// dead-ctx contract, indistinguishable from an empty source -- AND registers
+// the backend's handle, leaking it (only CloseSource, which a caller holding
+// a seemingly-fine-but-actually-cancelled result has no reason to call, would
+// ever release it).
+//
+// openReaderStream (source.go) is substituted for the duration of this test
+// with openSourceEOFStream: it returns 3 real records then io.EOF, firing a
+// REAL context.CancelFunc synchronously on the 3rd (last) call. Because the
+// ctx passed to OpenSource here is a genuine *context.cancelCtx
+// (context.WithCancel(context.Background())), Engine.begin's own
+// context.WithCancel(ctx) child is registered as that ctx's direct child
+// SYNCHRONOUSLY at Engine.begin's call time (context.propagateCancel: a
+// *cancelCtx parent propagates to a child derived directly from it with no
+// goroutine involved) -- so calling cancel() from inside the ingest loop
+// cancels OpenSource's derived ctx immediately, in the same goroutine, with
+// no sleep and no timing race at all.
+func TestEngine_OpenSource_CancelledDuringRowCount_NotRegistered(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.ndjson")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	callerCtx, callerCancel := context.WithCancel(context.Background())
+	defer callerCancel()
+
+	stream := &openSourceEOFStream{n: 3}
+	stream.onLast = func() { callerCancel() }
+
+	orig := openReaderStream
+	openReaderStream = func(f readers.Format, s readers.Source) (readers.RecordStream, func() error, error) {
+		return stream, func() error { return nil }, nil
+	}
+	defer func() { openReaderStream = orig }()
+
+	e := NewEngine()
+	res, err := e.OpenSource(callerCtx, OpenRequest{Path: path, Format: "ndjson"})
+	if err == nil {
+		t.Fatalf("OpenSource(ctx cancelled during ingest tail, caught at RowCount) error = nil, want non-nil; res = %#v", res)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenSource error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if res.Handle != "" {
+		t.Fatalf("OpenSource Handle = %q, want empty (must not return a populated OpenResult on this cancellation)", res.Handle)
+	}
+	if n := len(e.backends); n != 0 {
+		t.Fatalf("len(e.backends) = %d, want 0 (a Backend built under a ctx that died before OpenSource's post-RowCount check must not be registered -- it would otherwise leak, reachable by no handle)", n)
 	}
 }

@@ -76,6 +76,12 @@ type parquetBackend struct {
 // decoded record via one full scan (consistent with mem/rescan/sqlBackend:
 // "you may run the existing profiler over the rows ... OR a lighter
 // per-column pass" -- this runs the real profiler for sidebar consistency).
+//
+// That full scan is cancellable: it runs through pb.scan(ctx, 0, ...), which
+// checks ctx every cancelCheckStride rows exactly like every other scan this
+// backend runs (Query/Count/Export), so a ctx that dies during this initial
+// profiling pass aborts newParquetBackend with an error rather than running
+// to completion uncancellably.
 func newParquetBackend(ctx context.Context, path string) (*parquetBackend, error) {
 	if path == "" {
 		return nil, fmt.Errorf("query: parquet cannot be read from stdin; provide a file path")
@@ -211,6 +217,15 @@ func (p *parquetBackend) scan(ctx context.Context, startRow int64, fn scanFunc) 
 
 	buf := make([]any, parquetBatchSize)
 	idx := startRow
+	// Hoisted above the outer loop (MINOR-4 review fix): the per-row check
+	// below only fires for i in [0,n), so a zero-row file (or a file whose
+	// row groups are all empty) would otherwise call gr.Read at least once
+	// and return via the n==0 branch without ever consulting ctx at all,
+	// silently ignoring an already-cancelled ctx. This check catches that
+	// case unconditionally, before the first Read.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for {
 		n, rerr := gr.Read(buf)
 		for i := 0; i < n; i++ {

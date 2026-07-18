@@ -67,6 +67,12 @@ type sqlBackend struct {
 // "you may run the existing profiler over the rows via the sqlitereader
 // stream, OR a lighter per-column pass"; this runs the real profiler, for
 // consistency with mem/rescan's sidebar structure map).
+//
+// That full pass is cancellable: it runs through sb.scan(ctx, ...), which
+// checks ctx every cancelCheckStride rows exactly like every other scan this
+// backend runs (Query/Count/Export), so a ctx that dies during this initial
+// profiling pass aborts newSQLBackend with an error rather than running to
+// completion uncancellably.
 func newSQLBackend(ctx context.Context, path, table string) (*sqlBackend, error) {
 	if path == "" {
 		return nil, fmt.Errorf("query: sqlite cannot be read from stdin; provide a file path")

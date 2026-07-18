@@ -11,12 +11,13 @@ import (
 
 // Engine is the handle registry behind the shape data-explorer's query
 // surface (spec §2/§8): OpenSource builds/selects a Backend for a source and
-// returns an opaque handle string; QueryRows/CloseSource (and, in later
-// tasks, CountMatches/Codegen/ExportQuery/GetCell/Cancel) look the backend up
-// by that handle. A mutex guards only the registry map itself -- once a
-// Backend is looked up, its own methods handle their own concurrency (spec
-// §8: "each scan opens its own file handle, so ops on one handle run
-// concurrently; a mutex guards only the caches").
+// returns an opaque handle string; QueryRows/CloseSource/Cancel (and, in
+// later tasks, CountMatches/Codegen/ExportQuery/GetCell) look the backend/
+// in-flight request up by that handle/RequestID. A mutex guards only the
+// registry maps themselves -- once a Backend is looked up, its own methods
+// handle their own concurrency (spec §8: "each scan opens its own file
+// handle, so ops on one handle run concurrently; a mutex guards only the
+// caches").
 type Engine struct {
 	mu       sync.Mutex
 	backends map[string]Backend
@@ -242,6 +243,16 @@ func adaptTopValues(vs []profile.ValueCount) []ValueCount {
 // (openBackend, source.go), and registers it under a new handle (spec
 // §1/§2). A stdin path ("" or "-") is rejected: a stateless/re-scannable
 // engine needs a real, re-openable path (spec §2).
+//
+// ctx is threaded through the whole open (openBackend's per-format
+// constructor and the RowCount call below), and -- via req.RequestID -- is
+// registered in the Engine's Cancel registry exactly like QueryRows'
+// (e.begin/Engine.Cancel, spec §8): opening a large sqlite/parquet file or
+// ingesting a large JSON/CSV source runs a full pass before a handle is ever
+// returned, and that pass must be cancellable exactly like a query is. A ctx
+// that dies at ANY point up to and including the RowCount call below (not
+// just inside openBackend) makes OpenSource return an error and register
+// nothing -- see the ctx.Err() re-check after RowCount.
 func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, error) {
 	if req.Path == "" || req.Path == "-" {
 		return OpenResult{}, fmt.Errorf("query: OpenSource: a real file path is required (stdin/empty rejected, spec §2)")
@@ -255,6 +266,18 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 	}
 
 	n, exact := backend.RowCount(ctx)
+	// IMPORTANT-1 review fix: RowCount collapses a dead ctx to (0, false) per
+	// its documented contract (see e.g. memBackend.RowCount) rather than
+	// erroring, so without this re-check a ctx that dies anywhere between
+	// openBackend returning and RowCount running would otherwise fall
+	// through to a "successful" (err == nil) OpenResult -- indistinguishable
+	// from a genuinely empty source -- AND register backend's handle, which
+	// nothing would ever CloseSource, leaking it. Close it and report the
+	// cancellation instead of registering.
+	if err := ctx.Err(); err != nil {
+		backend.Close()
+		return OpenResult{}, err
+	}
 	var warnings []string
 	if tier == "rescan" {
 		warnings = append(warnings, "large file — streaming mode (totals are estimates)")
@@ -275,7 +298,12 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 }
 
 // QueryRows compiles req's Filter/Transform against the handle's Backend and
-// runs Query over the requested window (spec §2/§8).
+// runs Query over the requested window (spec §2/§8). ctx is threaded into
+// the Backend.Query call, and -- via req.RequestID -- is registered in the
+// Engine's Cancel registry for the duration of the call (e.begin/
+// Engine.Cancel, spec §8), so a caller can interrupt a scan already in
+// progress (e.g. the GUI's stale-scroll/"stop counting" paths) rather than
+// only a request that has not started yet.
 func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error) {
 	backend, err := e.lookup(req.Handle)
 	if err != nil {

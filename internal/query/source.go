@@ -18,6 +18,18 @@ import (
 // source downgrades from memBackend to rescanBackend.
 const DefaultMemBudgetBytes int64 = 512 << 20
 
+// openReaderStream is openBackend's JSON/CSV stream constructor
+// (readers.Open in production). It is a package-level var rather than a
+// direct call so IMPORTANT-1's OpenSource-level regression test
+// (TestEngine_OpenSource_CancelledDuringRowCount_NotRegistered, engine_test.go)
+// can substitute a synchronous, EOF-terminated fake stream: one that lets
+// openIngestBackend complete normally (a valid Backend, nil error) while
+// firing a real context cancellation on its very last record, deterministically
+// reproducing "ctx already Done by the time OpenSource calls
+// backend.RowCount" with no sleep and no goroutine race. Production code
+// never reassigns this.
+var openReaderStream = readers.Open
+
 // budgetBytesOf resolves req.BudgetMB (spec §8: "0 ⇒ 512") to a byte budget.
 func budgetBytesOf(req OpenRequest) int64 {
 	mb := req.BudgetMB
@@ -56,6 +68,13 @@ func fileSizeOf(path string) int64 {
 // already takes, and for the JSON/CSV path the very same open stream is
 // handed straight to the ingest pass rather than reopening the file a second
 // time just to detect its format.
+//
+// ctx is threaded into every branch: openIngestBackend's ingest loop (see its
+// own doc comment for the stride discipline), and newSQLBackend/
+// newParquetBackend's initial profiling scan. A ctx that is already
+// cancelled (or dies partway through) makes this function return before a
+// handle is ever built, so Engine.OpenSource (its only caller) never
+// registers a Backend for a cancelled open.
 func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format readers.Format, tier string, err error) {
 	src, closeSrc, err := pipeline.OpenSource(req.Path)
 	if err != nil {
@@ -70,7 +89,7 @@ func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format 
 
 	switch format {
 	case readers.FormatJSON, readers.FormatCSV:
-		stream, closeStream, oerr := readers.Open(format, src)
+		stream, closeStream, oerr := openReaderStream(format, src)
 		if oerr != nil {
 			return nil, format, "", fmt.Errorf("query: open reader for %s: %w", req.Path, oerr)
 		}
