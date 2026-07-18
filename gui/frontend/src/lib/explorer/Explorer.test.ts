@@ -20,8 +20,10 @@
 // return value from an isolated helper.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import Explorer from "./Explorer.svelte";
 import { explorer } from "./store";
+import { pageRowsFor } from "./paging";
 import { OpenSource, QueryRows, CloseSource } from "../../../wailsjs/go/main/App";
 
 vi.mock("../../../wailsjs/go/main/App", () => ({
@@ -31,8 +33,11 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   Cancel: vi.fn(),
 }));
 
-function makeColumn(path: string): any {
-  return { path, name: path, type: "string", nullable: true, presence: 1, distinct: 1, container: false, index: 0 };
+function makeColumn(path: string, over: Record<string, unknown> = {}): any {
+  return {
+    path, name: path, type: "string", nullable: true, presence: 1, distinct: 1,
+    container: false, index: 0, ...over,
+  };
 }
 
 function makeField(path: string): any {
@@ -212,5 +217,175 @@ describe("Explorer", () => {
 
     expect(target.textContent).toContain("No columns detected");
     expect(target.textContent).toContain("7");
+  });
+
+  // Obligation 3 (A2): DataTable's `columns` prop must be $explorer.columns
+  // DIRECTLY, never a filtered/derived subset (e.g. dropping `container`
+  // columns for display) -- see Explorer.svelte's comment at the DataTable
+  // call site. A filtered subset would desync two things at once: the
+  // rendered column/header count (fewer headers than real columns) AND the
+  // cell-index alignment (row.cells[c] indexes into the FULL column set the
+  // backend actually queried, not the filtered one DataTable would then be
+  // iterating). Nothing before T9 asserted either half of this.
+  it("passes $explorer.columns to DataTable unfiltered, keeping the rendered column count and the fetch window in agreement (A2)", async () => {
+    const columns = [
+      makeColumn("id"),
+      makeColumn("meta", { container: true }), // a container column: the case a naive filter would drop
+      makeColumn("meta.detail"),
+    ];
+    const fields = columns.map((c) => makeField(c.path));
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h4", columns, fields));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("wide.ndjson");
+    await tick();
+    await tick();
+
+    // Rendered column count: DataTable sets aria-colcount straight from its
+    // `columns` prop length. If Explorer.svelte filtered container columns
+    // out before passing them down, this would read 2, not 3.
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    expect(viewportEl).toBeTruthy();
+    expect(viewportEl.getAttribute("aria-colcount")).toBe(String(columns.length));
+
+    // Fetch window: the page size requested from the backend must be keyed
+    // off the SAME column count the table renders, per pageRowsFor's whole
+    // reason for existing (T5's cross-file invariant note) -- a fetch window
+    // computed off a different column count than the render window can
+    // silently disagree without either side visibly breaking.
+    const lastCall = vi.mocked(QueryRows).mock.calls.at(-1)?.[0] as any;
+    expect(lastCall.limit).toBe(pageRowsFor(columns.length));
+  });
+
+  // A3: StatusBar itself has direct-prop tests (StatusBar.test.ts), but
+  // nothing pinned the WIRING -- the exact `$explorer.*` expression each
+  // Explorer.svelte -> StatusBar prop binds to. Swapping
+  // `totalExact={$explorer.totalExact}` for `totalExact={!$explorer.sampled}`
+  // passed every test that existed before T9, because every fixture used so
+  // far happens to have `sampled` and `totalExact` moving together (rescan:
+  // sampled=true/totalExact=false; memory: sampled=false/totalExact=true) --
+  // the two booleans were never exercised as independent. These fixtures
+  // deliberately decouple them.
+  describe("StatusBar wiring (A3)", () => {
+    it("wires totalExact straight through, independent of sampled", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h5", columns, fields);
+      res.sampled = false; // NOT sampled...
+      res.rowEstimate = 42;
+      res.rowExact = false; // ...yet still inexact -- isolates totalExact from sampled
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      // total/totalExact must come from rsTotal/rsTotalExact only when
+      // rsTotal >= 0 (paging.ts's reconcileEof); rsTotal: -1 here so the
+      // landed page does not clobber the inexact 42 set by open().
+      const rs = rowSetFor(columns);
+      rs.total = -1;
+      rs.totalExact = false;
+      rs.truncated = false;
+      vi.mocked(QueryRows).mockResolvedValue(rs);
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("weird.ndjson");
+      await tick();
+      await tick();
+
+      expect(get(explorer).sampled).toBe(false);
+      expect(get(explorer).totalExact).toBe(false);
+
+      const metric = target.querySelector(".metric.mono") as HTMLElement;
+      // Regression: a `totalExact={!$explorer.sampled}` mis-wiring reads
+      // `!false === true` here and would render "42 rows" with no tilde --
+      // the one failure mode the spec forbids (presenting an estimate as
+      // exact).
+      expect(metric.textContent).toBe("~42 rows");
+    });
+
+    it("wires columnsTruncated and totalPaths straight through", async () => {
+      const columns = [makeColumn("a"), makeColumn("b")];
+      const fields = [makeField("a"), makeField("b")];
+      const res = openResultFor("h6", columns, fields);
+      res.columnsTruncated = true;
+      res.totalPaths = 50;
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      const rs = rowSetFor(columns);
+      // store.ts's ensurePages overwrites columnsTruncated/totalPaths from
+      // EVERY landed RowSet (engine.go: these travel with each page, not
+      // just open()), so the mocked page must carry the same values or the
+      // very first page fetched after open() would immediately clobber them
+      // back to this RowSet's defaults (false/columns.length).
+      rs.columnsTruncated = true;
+      rs.totalPaths = 50;
+      vi.mocked(QueryRows).mockResolvedValue(rs);
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("wide2.ndjson");
+      await tick();
+      await tick();
+
+      const columnsMetric = target.querySelectorAll(".metric.mono")[1] as HTMLElement;
+      // Regression: hardcoding columnsTruncated=false, or swapping totalPaths
+      // for columnCount, would render "2 columns" instead.
+      expect(columnsMetric.textContent).toBe("showing 2 of 50 columns");
+    });
+
+    it("wires warnings straight through, even when NOT sampled (A3's paired StatusBar gate fix)", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h7", columns, fields);
+      res.sampled = false;
+      res.warnings = ["a hypothetical non-rescan warning"];
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("warned.ndjson");
+      await tick();
+      await tick();
+
+      // Regression: warnings={[]} (or any other constant/empty binding)
+      // would leave this null regardless of the gate fix.
+      expect(target.textContent).toContain("a hypothetical non-rescan warning");
+    });
+  });
+
+  // A5: a mid-scroll page-fetch failure must render as a dismissible bar
+  // ABOVE the still-mounted table, never replace the whole pane the way the
+  // full-screen `status === "error"` branch does. This is the end-to-end DOM
+  // check; store.test.ts pins the underlying state transition in isolation.
+  it("renders a role=alert bar above the table on a mid-scroll page-fetch failure, without unmounting the table (A5)", async () => {
+    const columns = [makeColumn("id")];
+    const fields = [makeField("id")];
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h8", columns, fields));
+    vi.mocked(QueryRows).mockResolvedValueOnce(rowSetFor(columns)); // open()'s own ensurePages(0,0)
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("scrolled.ndjson");
+    await tick();
+    await tick();
+
+    expect(target.querySelector(".viewport")).toBeTruthy(); // sanity: table is up
+    expect(target.querySelector(".page-error-bar")).toBeNull(); // sanity: no bar yet
+
+    vi.mocked(QueryRows).mockRejectedValueOnce(new Error("network hiccup"));
+    await explorer.ensurePages(1000, 1000); // a page far from the one already cached
+    await tick();
+
+    const bar = target.querySelector(".page-error-bar");
+    expect(bar).toBeTruthy();
+    expect(bar!.getAttribute("role")).toBe("alert");
+    expect(bar!.textContent).toContain("network hiccup");
+    // The regression this guards against: Explorer.svelte used to render
+    // `$explorer.status === "error"` as a FULL-PANE replacement. That branch
+    // must not have been taken, and the table (with its already-fetched
+    // page) must still be mounted underneath the bar.
+    expect(target.querySelector(".viewport")).toBeTruthy();
+    expect(target.querySelector(".error-shell")).toBeNull();
+
+    const dismissBtn = bar!.querySelector("button.dismiss") as HTMLButtonElement;
+    dismissBtn.click();
+    await tick();
+    expect(target.querySelector(".page-error-bar")).toBeNull(); // dismissed
+    expect(target.querySelector(".viewport")).toBeTruthy(); // table still there
   });
 });
