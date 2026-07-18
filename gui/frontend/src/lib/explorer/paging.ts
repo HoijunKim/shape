@@ -74,10 +74,39 @@ export function reconcileEof(input: EofReconcileInput): { total: number; totalEx
   // true -> false.
   if (truncated && !totalExact) {
     total = pageEnd;
-    // An entirely empty page past EOF bounds the end from above but does
-    // not prove exactness; the next fetch converges. A short non-empty
-    // page (or an empty page 0) is exact.
-    totalExact = rowsLength > 0 || page === 0;
+    // A short NON-EMPTY page (rowsLength > 0) is always exact: the rows it
+    // did return prove that many matches exist beyond its offset, and being
+    // short proves no more do -- together pinning the total exactly. Page 0
+    // returning empty is exact for a different, simpler reason: at offset 0,
+    // "0 rows" can only mean the file truly has 0 matches (a match count
+    // can't be negative), so there is no ambiguity to resolve.
+    //
+    // I-A1: an EMPTY page past EOF at page > 0 is neither of those. In
+    // isolation it proves only `total <= pageEnd` -- offset could be far
+    // past the true end (e.g. a bad rescan-tier fileSize/avgBytes seed let
+    // the scrollbar reach somewhere nowhere near reality), so page > 0 alone
+    // must NOT be trusted as exact (an earlier version of this comment
+    // claimed "the next fetch converges" -- that is false whenever the file
+    // is page-aligned: if the true row count is an exact multiple of
+    // pageRows, no page is EVER short-and-non-empty, so the `rowsLength > 0`
+    // case above never fires and the total was stuck inexact forever).
+    //
+    // It CAN be trusted when `priorTotal === pageEnd + pageRows`. That exact
+    // equality only arises one way: the immediately preceding page landed as
+    // a FULL (non-truncated) page whose real, PROVEN end is this page's
+    // offset (pageEnd, since rowsLength is 0 here), and its landing pushed
+    // the running estimate forward by one more page via the projection in
+    // the `else` branch below (`pageEnd + pageRows`) -- i.e. priorTotal
+    // encodes that prior page's proven end plus one page width. A full page
+    // proves rows [its offset, its offset+pageRows) truly exist (a genuine
+    // lower bound, not a guess); THIS page proves nothing exists beyond that
+    // same offset. Together they pin the total at exactly `pageEnd`. An
+    // unrelated total (e.g. the original fileSize/avgBytes seed, or a
+    // scrollbar jump straight to some other far-off empty page) essentially
+    // never lands on that exact integer by coincidence, so this is not a
+    // blanket "trust every empty page" rule -- it only fires for the
+    // contiguous, sequential-scroll case the bug report actually describes.
+    totalExact = rowsLength > 0 || page === 0 || priorTotal === pageEnd + pageRows;
   } else if (!totalExact && pageEnd >= total) {
     total = pageEnd + pageRows; // full page at the tail: more to come
   }

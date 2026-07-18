@@ -151,4 +151,43 @@ describe("reconcileEof (I2)", () => {
     expect(out.total).toBe(100);
     expect(out.totalExact).toBe(true);
   });
+
+  // I-A1: a page-aligned rescan-tier file (true row count an exact multiple
+  // of pageRows) never produces a short-non-empty page -- the tail page is
+  // always full, and the page after it is always entirely empty. Before this
+  // fix, `totalExact` could only ever become true via `rowsLength > 0` or
+  // `page === 0`, neither of which ever fires here, so the store converged
+  // on the right NUMBER (500,000) but rendered `~500,000` forever. This is
+  // the concrete T=500,000 P=200 scenario from the bug report: page 2499
+  // (the true last page, [499800, 500000)) landed FULL and pushed the
+  // running total to 500200 via the sibling `else if` branch's
+  // `pageEnd + pageRows` projection; page 2500 ([500000, 500200)) then lands
+  // empty.
+  it("closes the tilde for a page-aligned exact-multiple file once the immediately-following empty page confirms the prior full page's proven end (I-A1)", () => {
+    const out = reconcileEof({
+      page: 2500, pageRows: 200, rowsLength: 0, truncated: true,
+      rsTotal: -1, rsTotalExact: false,
+      priorTotal: 500200, priorTotalExact: false, // set by page 2499's full-page projection
+    });
+    expect(out.total).toBe(500000); // pageEnd: page*pageRows + 0
+    expect(out.totalExact).toBe(true); // MUST turn the tilde off, not stay stuck forever
+  });
+
+  // Guardrail for the fix above: it must not regress into "trust ANY empty
+  // page at page > 0", which would be unsound -- an empty page far past a
+  // wildly-wrong estimate (e.g. a bad rescan-tier fileSize/avgBytes seed
+  // that let the scrollbar jump way past the true end) only proves
+  // `total <= pageEnd`, not `total === pageEnd`. Here priorTotal (an
+  // unrelated seed estimate) does NOT satisfy `pageEnd + pageRows`, so the
+  // page must be treated the same as before this fix: an upper bound only.
+  it("does NOT trust an empty page at page > 0 when priorTotal does not match the proven-full-page signature (guards against over-trusting every empty page)", () => {
+    const out = reconcileEof({
+      page: 500, pageRows: 200, rowsLength: 0, truncated: true,
+      rsTotal: -1, rsTotalExact: false,
+      priorTotal: 100000, // unrelated to pageEnd(100000) + pageRows(200) = 100200
+      priorTotalExact: false,
+    });
+    expect(out.total).toBe(100000); // still snaps to the upper bound
+    expect(out.totalExact).toBe(false); // but must NOT claim exactness
+  });
 });
