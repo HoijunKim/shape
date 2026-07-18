@@ -1253,6 +1253,113 @@ func TestEngine_QueryRows_ReportsColumnTruncation(t *testing.T) {
 	}
 }
 
+// TestEngine_QueryRows_SelectTransform_UntruncatedProjection: naming exactly
+// 2 paths in Transform.Select over a source wide enough to truncate the base
+// ColumnModel must NOT surface the base model's truncation on the PROJECTED
+// RowSet -- Select is authoritative and unbounded (spec/columns.go's
+// MaxColumns doc comment: naming a path explicitly in Select overrides the
+// cap), so ColumnsTruncated must be false and TotalPaths must describe the
+// projected (2-column) set, not the uncapped base-path count.
+func TestEngine_QueryRows_SelectTransform_UntruncatedProjection(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	path := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{
+		Handle:    res.Handle,
+		Transform: Transform{Select: []ColumnSpec{{Path: "field000"}, {Path: "field001"}}},
+		Offset:    0,
+		Limit:     1,
+		WantTotal: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if len(rs.Columns) != 2 {
+		t.Fatalf("len(rs.Columns) = %d, want 2 (the selected paths)", len(rs.Columns))
+	}
+	if rs.ColumnsTruncated {
+		t.Fatalf("rs.ColumnsTruncated = true, want false (Select is an explicit, unbounded projection)")
+	}
+	if rs.TotalPaths != len(rs.Columns) {
+		t.Fatalf("rs.TotalPaths = %d, want %d (== len(rs.Columns): projected set is not truncated)", rs.TotalPaths, len(rs.Columns))
+	}
+}
+
+// TestEngine_QueryRows_IdentityTransform_ReportsBaseTruncation pins that the
+// Select/Drop fix above did not disturb the identity-transform case the
+// ColumnsTruncated/TotalPaths field pair exists for: an explicit empty
+// Transform{} (no Select, no Drop) leaves the base column set unchanged, so
+// the base ColumnModel's own truncation must still come through unchanged.
+func TestEngine_QueryRows_IdentityTransform_ReportsBaseTruncation(t *testing.T) {
+	wide := []map[string]any{wideFixtureRecord(MaxColumns + 10)}
+	path := writeNDJSONFile(t, wide)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{
+		Handle:    res.Handle,
+		Transform: Transform{}, // explicit identity: no Select, no Drop
+		Offset:    0,
+		Limit:     1,
+		WantTotal: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if !rs.ColumnsTruncated {
+		t.Fatalf("rs.ColumnsTruncated = false, want true (identity transform: base model's truncation must still show through)")
+	}
+	if rs.TotalPaths != MaxColumns+10 {
+		t.Fatalf("rs.TotalPaths = %d, want %d (uncapped base count, identity transform)", rs.TotalPaths, MaxColumns+10)
+	}
+}
+
+// TestEngine_QueryRows_DropTransform_NarrowSource_TotalPathsAfterDrop: a Drop
+// transform over a narrow (well under MaxColumns) source must report
+// TotalPaths as the POST-drop column count, not the pre-drop base count --
+// the base model was never truncated, but Drop still changed what
+// rs.Columns actually contains, and TotalPaths must describe THAT.
+func TestEngine_QueryRows_DropTransform_NarrowSource_TotalPathsAfterDrop(t *testing.T) {
+	narrow := fixtureRecords() // "name", "age", "even" -- well under MaxColumns
+	path := writeNDJSONFile(t, narrow)
+
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{
+		Handle:    res.Handle,
+		Transform: Transform{Drop: []string{"age"}},
+		Offset:    0,
+		Limit:     1,
+		WantTotal: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if rs.ColumnsTruncated {
+		t.Fatalf("rs.ColumnsTruncated = true, want false (narrow source, Drop transform)")
+	}
+	if len(rs.Columns) != 2 {
+		t.Fatalf("len(rs.Columns) = %d, want 2 (base 3 minus dropped \"age\")", len(rs.Columns))
+	}
+	if rs.TotalPaths != len(rs.Columns) {
+		t.Fatalf("rs.TotalPaths = %d, want %d (== len(rs.Columns) post-drop, not the pre-drop base count)", rs.TotalPaths, len(rs.Columns))
+	}
+}
+
 // TestOpenResult_JSONShape asserts tag conformance: the frontend reads these
 // exact field names off the wire (spec §8's DTO boundary), so a marshaled
 // OpenResult's raw JSON must contain "columnsTruncated"/"totalPaths", not

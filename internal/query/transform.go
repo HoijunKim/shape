@@ -44,6 +44,31 @@ type Transform struct {
 	FlattenObjects bool         `json:"flattenObjects"`
 }
 
+// isIdentityTransform reports whether t leaves the base ColumnModel's column
+// set unchanged: Select empty (nothing projected/reordered/renamed/un-capped)
+// AND Drop empty (nothing removed) -- exactly CompileTransform's own "Select
+// empty, Drop empty" case (rule 2 in its doc comment below), which returns
+// cm.Columns unchanged. Engine.QueryRows uses this to decide whose
+// truncation numbers a RowSet should carry: the base ColumnModel's
+// (cm.Truncated/cm.TotalPaths) when identity, or the projected column set's
+// own (never truncated, TotalPaths == len(rs.Columns)) otherwise -- see
+// QueryRows.
+//
+// FlattenObjects is deliberately NOT part of this predicate. Per Transform's
+// doc comment above, FlattenObjects is accepted and carried through the API
+// surface but does not yet gate any distinct collapsed/un-flattened rendering
+// of the base set -- CompileTransform (below) never reads t.FlattenObjects at
+// all -- so today its value cannot make the output column set differ from
+// the base one. Folding it into isIdentityTransform would report a
+// non-identity transform for a Transform{FlattenObjects: true} that in fact
+// produces byte-for-byte the same columns as Transform{}, which is wrong by
+// this predicate's own definition ("leaves the column set unchanged"). If
+// FlattenObjects is later wired into CompileTransform to actually gate a
+// distinct rendering, this predicate must be revisited alongside that change.
+func isIdentityTransform(t Transform) bool {
+	return len(t.Select) == 0 && len(t.Drop) == 0
+}
+
 // outCol is one compiled output column: segs are the compiled path segments
 // Project resolves against each record, and col is the full Column metadata
 // (including its display name, After Select's As-or-leaf-name rule; equal to

@@ -29,12 +29,31 @@ type RowSet struct {
 	Truncated  bool     `json:"truncated"` // fewer than Limit rows: EOF reached
 	ElapsedMs  int64    `json:"elapsedMs"`
 
-	// ColumnsTruncated and TotalPaths surface spec §3's wide-data bound: the
-	// column set is capped at MaxColumns (keeping highest-presence first, then
-	// first-seen), so a source with more distinct paths than that reports
-	// ColumnsTruncated=true and TotalPaths = the uncapped count. The UI shows
-	// "showing 512 of N columns". Note this is NOT RowSet.Truncated, which
-	// means "fewer rows than Limit: EOF reached".
+	// ColumnsTruncated and TotalPaths describe whatever RowSet.Columns
+	// actually contains (spec §3's wide-data bound). Every Backend.Query sets
+	// Columns from CompiledTransform.Columns() -- the query's PROJECTED
+	// column set -- which equals the source's base ColumnModel only when the
+	// query's Transform is an identity (no Select, no Drop -- see
+	// isIdentityTransform, transform.go); Engine.QueryRows picks which
+	// meaning applies per call:
+	//
+	//   - Identity Transform: Columns IS the base column set, capped at
+	//     MaxColumns (keeping highest-presence first, then first-seen), so
+	//     these fields report the base ColumnModel's own cap:
+	//     ColumnsTruncated=true and TotalPaths = the uncapped path count when
+	//     the source has more distinct paths than MaxColumns; otherwise
+	//     ColumnsTruncated=false and TotalPaths == len(Columns).
+	//   - Any other Transform (Select and/or Drop non-empty): the projection
+	//     is an explicit, un-capped column set -- naming a path in Select
+	//     overrides MaxColumns entirely (see its doc comment, columns.go),
+	//     and Drop only ever removes columns from an already-uncapped base
+	//     set -- so ColumnsTruncated is always false and TotalPaths always ==
+	//     len(Columns): the truncation these fields describe is, by
+	//     definition, about Columns itself, never a set the caller can't see.
+	//
+	// The UI shows "showing 512 of N columns" only in the first case. Note
+	// this pair is NOT RowSet.Truncated (above), which means "fewer rows than
+	// Limit: EOF reached".
 	ColumnsTruncated bool `json:"columnsTruncated"`
 	TotalPaths       int  `json:"totalPaths"`
 }

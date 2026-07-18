@@ -138,12 +138,16 @@ type OpenResult struct {
 	RowExact    bool       `json:"rowExact"`
 	Warnings    []string   `json:"warnings,omitempty"`
 
-	// ColumnsTruncated and TotalPaths surface spec §3's wide-data bound: the
-	// column set is capped at MaxColumns (keeping highest-presence first, then
-	// first-seen), so a source with more distinct paths than that reports
-	// ColumnsTruncated=true and TotalPaths = the uncapped count. The UI shows
-	// "showing 512 of N columns". Note this is NOT RowSet.Truncated, which
-	// means "fewer rows than Limit: EOF reached".
+	// ColumnsTruncated and TotalPaths surface spec §3's wide-data bound:
+	// OpenResult.Columns is always the source's base ColumnModel (OpenSource
+	// has no Transform -- unlike RowSet.Columns, see backend.go, which is a
+	// Transform's PROJECTED output and so needs its own, conditional version
+	// of this comment). The base column set is capped at MaxColumns (keeping
+	// highest-presence first, then first-seen), so a source with more
+	// distinct paths than that reports ColumnsTruncated=true and TotalPaths =
+	// the uncapped count; otherwise ColumnsTruncated=false and TotalPaths ==
+	// len(Columns). The UI shows "showing 512 of N columns". Note this is NOT
+	// RowSet.Truncated, which means "fewer rows than Limit: EOF reached".
 	ColumnsTruncated bool `json:"columnsTruncated"`
 	TotalPaths       int  `json:"totalPaths"`
 }
@@ -379,9 +383,27 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	if err != nil {
 		return RowSet{}, err
 	}
-	if cm := backend.Columns(); cm != nil {
-		rs.ColumnsTruncated = cm.Truncated
-		rs.TotalPaths = cm.TotalPaths
+	// every Backend.Query sets RowSet.Columns from
+	// p.Transform.Columns() -- the PROJECTED column set -- not from
+	// backend.Columns() (the base ColumnModel). Stamping cm.Truncated/
+	// cm.TotalPaths unconditionally here (as before this fix) described the
+	// base model regardless of what rs.Columns actually held: a narrowing
+	// Transform.Select would report ColumnsTruncated/TotalPaths for a base
+	// set the caller never sees, and -- worse -- would report
+	// ColumnsTruncated=true for a Select naming a path beyond MaxColumns even
+	// though naming it explicitly is BY DEFINITION not truncated (see the
+	// MaxColumns doc comment, columns.go). Only an identity Transform (see
+	// isIdentityTransform) leaves rs.Columns equal to the base column set, so
+	// only then do the base model's numbers describe rs.Columns; otherwise
+	// rs.Columns IS the ground truth and is never truncated.
+	if isIdentityTransform(req.Transform) {
+		if cm := backend.Columns(); cm != nil {
+			rs.ColumnsTruncated = cm.Truncated
+			rs.TotalPaths = cm.TotalPaths
+		}
+	} else {
+		rs.ColumnsTruncated = false
+		rs.TotalPaths = len(rs.Columns)
 	}
 	return rs, nil
 }

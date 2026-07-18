@@ -473,3 +473,39 @@ func TestCompiledPlan_FilterKey_LooksCanonical(t *testing.T) {
 		t.Fatalf("FilterKey() = %q, want a canonical opaque token (no raw JSON/whitespace)", key)
 	}
 }
+
+// --- isIdentityTransform ------------------------------------------------------
+
+// TestIsIdentityTransform covers every Transform field's effect on the
+// predicate Engine.QueryRows uses to decide whose truncation numbers
+// (base ColumnModel vs. projected column set) to stamp onto a RowSet: a
+// Transform is "identity" (leaves the base column set unchanged) iff both
+// Select and Drop are empty. FlattenObjects is deliberately NOT part of the
+// predicate: per Transform's doc comment (transform.go) and CompileTransform's
+// implementation, FlattenObjects is accepted and carried through the API
+// surface but does not yet gate any distinct rendering of the base set --
+// CompileTransform never reads it -- so today it cannot affect whether the
+// output column set differs from the base one, regardless of its value.
+func TestIsIdentityTransform(t *testing.T) {
+	cases := []struct {
+		name string
+		t    Transform
+		want bool
+	}{
+		{"zero value", Transform{}, true},
+		{"select non-empty", Transform{Select: []ColumnSpec{{Path: "a"}}}, false},
+		{"drop non-empty", Transform{Drop: []string{"a"}}, false},
+		{"select and drop both non-empty", Transform{Select: []ColumnSpec{{Path: "a"}}, Drop: []string{"b"}}, false},
+		{"flattenObjects true, otherwise zero", Transform{FlattenObjects: true}, true},
+		{"flattenObjects false, otherwise zero", Transform{FlattenObjects: false}, true},
+		{"flattenObjects true with select", Transform{Select: []ColumnSpec{{Path: "a"}}, FlattenObjects: true}, false},
+		{"flattenObjects true with drop", Transform{Drop: []string{"a"}, FlattenObjects: true}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isIdentityTransform(c.t); got != c.want {
+				t.Fatalf("isIdentityTransform(%#v) = %v, want %v", c.t, got, c.want)
+			}
+		})
+	}
+}
