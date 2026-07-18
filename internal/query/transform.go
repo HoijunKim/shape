@@ -239,15 +239,17 @@ type CompiledPlan struct {
 	Transform *CompiledTransform
 	Columns   *ColumnModel
 
-	filterKey string // canonical (Filter,Transform) hash; see FilterKey
+	filterKey string // canonical Filter-only hash (== Filter.Key()); see FilterKey
 }
 
-// FilterKey returns a canonical, stable string key for p's (Filter,
-// Transform) pair, suitable for the bitset/cursor/count caches described in
-// spec §4 (memBackend's per-FilterKey match bitset, rescanBackend's
-// (FilterKey,endOffset) cursor cache, and CountMatches' per-FilterKey
-// memoization): identical logical Filter+Transform inputs always produce
-// the same key, and any difference in either produces a different key.
+// FilterKey returns a canonical, stable string key for p's Filter alone
+// (Transform plays no part), suitable for the bitset/cursor/count caches
+// described in spec §4 (memBackend's per-FilterKey match bitset,
+// rescanBackend's (FilterKey,endOffset) cursor cache, and CountMatches'
+// per-FilterKey memoization): identical logical Filter inputs always produce
+// the same key, any difference in the Filter produces a different key, and
+// the key is exactly p.Filter.Key() -- see canonicalFilterKey for why the key
+// is filter-only.
 func (p *CompiledPlan) FilterKey() string {
 	if p == nil {
 		return ""
@@ -256,10 +258,10 @@ func (p *CompiledPlan) FilterKey() string {
 }
 
 // CompilePlan compiles f and t against cm and bundles the results into a
-// CompiledPlan, precomputing its canonical FilterKey. Compilation errors
-// from either CompileFilter or CompileTransform are returned as-is (wrapped
-// with context); nothing about key computation itself can fail (canonical
-// key encoding never touches map iteration -- see canonicalPlanKey).
+// CompiledPlan, taking its canonical FilterKey off the compiled filter.
+// Compilation errors from either CompileFilter or CompileTransform are
+// returned as-is (wrapped with context); nothing about key computation
+// itself can fail here (CompileFilter already computed and validated it).
 func CompilePlan(f Filter, t Transform, cm *ColumnModel) (*CompiledPlan, error) {
 	cf, err := CompileFilter(f, cm)
 	if err != nil {
@@ -269,26 +271,22 @@ func CompilePlan(f Filter, t Transform, cm *ColumnModel) (*CompiledPlan, error) 
 	if err != nil {
 		return nil, fmt.Errorf("query: compile plan: transform: %w", err)
 	}
-	key, err := canonicalPlanKey(f, t)
-	if err != nil {
-		return nil, fmt.Errorf("query: compile plan: filter key: %w", err)
-	}
-	return &CompiledPlan{Filter: cf, Transform: ct, Columns: cm, filterKey: key}, nil
+	return &CompiledPlan{Filter: cf, Transform: ct, Columns: cm, filterKey: cf.Key()}, nil
 }
 
-// canonicalPlanKey renders (f, t) as canonical JSON and returns the hex-
-// encoded SHA-256 digest. Filter and Transform contain only structs/slices/
-// scalars (no maps), so encoding/json's field-order-following marshal is
-// already deterministic for a given Go value -- no map-iteration dependence
-// enters the key, and identical logical input (down to slice element order,
-// which IS semantically significant here: Select's order is the output
-// order) always yields the same bytes, hence the same digest.
-func canonicalPlanKey(f Filter, t Transform) (string, error) {
-	payload := struct {
-		Filter    Filter    `json:"filter"`
-		Transform Transform `json:"transform"`
-	}{f, t}
-	b, err := json.Marshal(payload)
+// canonicalFilterKey renders f as canonical JSON and returns the hex-encoded
+// SHA-256 digest. Filter contains only structs/slices/scalars (no maps), so
+// encoding/json's field-order-following marshal is already deterministic --
+// no map-iteration dependence enters the key, and identical logical input
+// (down to slice element order) always yields the same bytes.
+//
+// The key is FILTER-ONLY on purpose: it keys match bitsets, and only the
+// Filter determines which records match. Keying it on (Filter, Transform) --
+// as the pre-E2 canonicalPlanKey did -- split one logical bitset across as
+// many cache entries as there were transforms over it, and gave Count (which
+// never has a Transform) no way to share Query's entry at all.
+func canonicalFilterKey(f Filter) (string, error) {
+	b, err := json.Marshal(f)
 	if err != nil {
 		return "", err
 	}

@@ -302,6 +302,59 @@ func TestCompiledTransform_Project_AlignedRow(t *testing.T) {
 	}
 }
 
+// --- CompiledFilter.Key -------------------------------------------------------
+
+func TestCompiledFilter_Key_SameLogicalFilterSameKey(t *testing.T) {
+	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
+	a, err := CompileFilter(f, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(a) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(f, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(b) error = %v, want nil", err)
+	}
+	if a == b {
+		t.Fatalf("fixture invalid: a and b are the same *CompiledFilter pointer")
+	}
+	if a.Key() != b.Key() {
+		t.Fatalf("Key() differs for two compiles of the identical logical Filter: %q != %q", a.Key(), b.Key())
+	}
+}
+
+func TestCompiledFilter_Key_DifferentFilterDifferentKey(t *testing.T) {
+	f1 := Filter{Conditions: []Condition{{Path: "age", Op: OpGt, Value: Value{Kind: ValNumber, Num: 10}}}}
+	f2 := Filter{Conditions: []Condition{{Path: "age", Op: OpGt, Value: Value{Kind: ValNumber, Num: 20}}}}
+	a, err := CompileFilter(f1, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(f1) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(f2, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(f2) error = %v, want nil", err)
+	}
+	if a.Key() == b.Key() {
+		t.Fatalf("Key() identical for filters differing only in Condition.Value.Num: %q", a.Key())
+	}
+}
+
+func TestCompiledFilter_Key_EmptyFilterStable(t *testing.T) {
+	a, err := CompileFilter(Filter{}, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(empty) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(Filter{}, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(empty) second call error = %v, want nil", err)
+	}
+	if a.Key() == "" {
+		t.Fatalf("Key() = empty string for the empty (match-all) Filter, want a non-empty stable key")
+	}
+	if a.Key() != b.Key() {
+		t.Fatalf("Key() not stable across two compiles of Filter{}: %q != %q", a.Key(), b.Key())
+	}
+}
+
 // --- CompiledPlan / FilterKey -------------------------------------------------
 
 func testColumnModel(t *testing.T) *ColumnModel {
@@ -354,22 +407,24 @@ func TestCompiledPlan_FilterKey_DistinctForDifferentFilter(t *testing.T) {
 	}
 }
 
-func TestCompiledPlan_FilterKey_DistinctForDifferentTransform(t *testing.T) {
+// TestCompiledPlan_FilterKey_IgnoresTransform pins the E2 behavior change:
+// FilterKey is now filter-only, so two CompiledPlans over the identical
+// Filter but DIFFERENT Transforms must share one key -- Query and Count share
+// one match bitset regardless of what a Transform later projects.
+func TestCompiledPlan_FilterKey_IgnoresTransform(t *testing.T) {
 	cm := testColumnModel(t)
-	f := Filter{}
-	t1 := Transform{}
-	t2 := Transform{Select: []ColumnSpec{{Path: "name"}}}
+	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
 
-	p1, err := CompilePlan(f, t1, cm)
+	p1, err := CompilePlan(f, Transform{}, cm)
 	if err != nil {
 		t.Fatalf("CompilePlan(t1) error = %v, want nil", err)
 	}
-	p2, err := CompilePlan(f, t2, cm)
+	p2, err := CompilePlan(f, Transform{Select: []ColumnSpec{{Path: "name"}}}, cm)
 	if err != nil {
 		t.Fatalf("CompilePlan(t2) error = %v, want nil", err)
 	}
-	if p1.FilterKey() == p2.FilterKey() {
-		t.Fatalf("FilterKey() identical for different transforms: %q", p1.FilterKey())
+	if p1.FilterKey() != p2.FilterKey() {
+		t.Fatalf("FilterKey() differs across Transforms over the identical Filter: %q != %q, want equal (filter-only key)", p1.FilterKey(), p2.FilterKey())
 	}
 }
 
@@ -401,11 +456,11 @@ func TestCompilePlan_ErrorPropagatesFromFilter(t *testing.T) {
 	}
 }
 
-// canonicalPlanKeyUsesJSON is a light sanity check that FilterKey does not
-// depend on map iteration: build the same logical Filter twice from
-// independently-constructed (but deeply equal) values and confirm the key
-// matches, and that it looks like a canonical hex digest (no whitespace, no
-// raw JSON leaking through).
+// TestCompiledPlan_FilterKey_LooksCanonical is a light sanity check that
+// FilterKey does not depend on map iteration: build the same logical Filter
+// twice from independently-constructed (but deeply equal) values and confirm
+// the key matches, and that it looks like a canonical hex digest (no
+// whitespace, no raw JSON leaking through).
 func TestCompiledPlan_FilterKey_LooksCanonical(t *testing.T) {
 	cm := testColumnModel(t)
 	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
