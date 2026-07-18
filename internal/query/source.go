@@ -1,6 +1,7 @@
 package query
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,7 +56,7 @@ func fileSizeOf(path string) int64 {
 // already takes, and for the JSON/CSV path the very same open stream is
 // handed straight to the ingest pass rather than reopening the file a second
 // time just to detect its format.
-func openBackend(req OpenRequest) (backend Backend, format readers.Format, tier string, err error) {
+func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format readers.Format, tier string, err error) {
 	src, closeSrc, err := pipeline.OpenSource(req.Path)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("query: open %s: %w", req.Path, err)
@@ -74,16 +75,16 @@ func openBackend(req OpenRequest) (backend Backend, format readers.Format, tier 
 			return nil, format, "", fmt.Errorf("query: open reader for %s: %w", req.Path, oerr)
 		}
 		defer closeStream()
-		backend, tier, err = openIngestBackend(req.Path, format, req.Format, req.CSVRaw, stream, budgetBytesOf(req))
+		backend, tier, err = openIngestBackend(ctx, req.Path, format, req.Format, req.CSVRaw, stream, budgetBytesOf(req))
 		return backend, format, tier, err
 	case readers.FormatSQLite:
-		sb, serr := newSQLBackend(req.Path, req.Table)
+		sb, serr := newSQLBackend(ctx, req.Path, req.Table)
 		if serr != nil {
 			return nil, format, "", fmt.Errorf("query: open sqlite backend for %s: %w", req.Path, serr)
 		}
 		return sb, format, "sqlite", nil
 	case readers.FormatParquet:
-		pb, perr := newParquetBackend(req.Path)
+		pb, perr := newParquetBackend(ctx, req.Path)
 		if perr != nil {
 			return nil, format, "", fmt.Errorf("query: open parquet backend for %s: %w", req.Path, perr)
 		}
@@ -106,7 +107,14 @@ func openBackend(req OpenRequest) (backend Backend, format readers.Format, tier 
 // rawFormat/csvRaw are threaded through to a downgraded rescanBackend so a
 // later re-scan reopens the path with the identical readers.Source knobs
 // this ingest pass used (see rescan.go's rescanBackend doc comment).
-func openIngestBackend(path string, format readers.Format, rawFormat string, csvRaw bool, stream readers.RecordStream, budgetBytes int64) (Backend, string, error) {
+//
+// ctx is checked every cancelCheckStride records (rescan.go's constant,
+// reused here rather than redeclared) at the TOP of the loop -- including
+// n=0, so an already-cancelled ctx returns before stream.Next() is ever
+// called -- the same stride discipline rescanBackend.scan/sqlBackend.scan/
+// parquetBackend.scan already use, so opening a large JSON/CSV source is
+// cancellable exactly like every other tier's scans are.
+func openIngestBackend(ctx context.Context, path string, format readers.Format, rawFormat string, csvRaw bool, stream readers.RecordStream, budgetBytes int64) (Backend, string, error) {
 	if budgetBytes <= 0 {
 		budgetBytes = DefaultMemBudgetBytes
 	}
@@ -119,7 +127,12 @@ func openIngestBackend(path string, format readers.Format, rawFormat string, csv
 	var sizeEstimate int64
 	overBudget := false
 
-	for {
+	for n := 0; ; n++ {
+		if n%cancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, "", err
+			}
+		}
 		rec, nerr := stream.Next()
 		if errors.Is(nerr, io.EOF) {
 			break

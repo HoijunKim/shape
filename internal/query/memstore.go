@@ -112,8 +112,12 @@ func (m *memBackend) Columns() *ColumnModel { return m.cm }
 // Profile returns the sidebar structure map computed at open.
 func (m *memBackend) Profile() profile.ProfileResult { return m.prof }
 
-// RowCount returns the exact record count: every record is already in RAM.
-func (m *memBackend) RowCount() (n int64, exact bool) {
+// RowCount returns the exact record count: every record is already in RAM. A
+// cancelled ctx returns (0, false).
+func (m *memBackend) RowCount(ctx context.Context) (n int64, exact bool) {
+	if ctx.Err() != nil {
+		return 0, false
+	}
 	return int64(len(m.records)), true
 }
 

@@ -90,8 +90,11 @@ func (r *rescanBackend) Columns() *ColumnModel { return r.cm }
 func (r *rescanBackend) Profile() profile.ProfileResult { return r.prof }
 
 // RowCount returns the fileSize/avgBytes ESTIMATE, never exact (spec §4:
-// "RowCount: (estimate, false)").
-func (r *rescanBackend) RowCount() (n int64, exact bool) {
+// "RowCount: (estimate, false)"). A cancelled ctx returns (0, false).
+func (r *rescanBackend) RowCount(ctx context.Context) (n int64, exact bool) {
+	if ctx.Err() != nil {
+		return 0, false
+	}
 	return r.rowEstimate, false
 }
 

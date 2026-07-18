@@ -21,11 +21,83 @@ type Engine struct {
 	mu       sync.Mutex
 	backends map[string]Backend
 	next     uint64
+
+	// inflight maps a caller-supplied RequestID to the CancelFunc of the ctx
+	// that request is running under, so Cancel(requestID) can interrupt a
+	// long scan from another goroutine (the GUI's stale-scroll and
+	// "stop counting" paths, spec §8). Entries are removed when the request
+	// returns; an empty RequestID is never registered. gen distinguishes two
+	// requests that reused the same id, so a finishing older request cannot
+	// unregister the newer one that superseded it.
+	inflight map[string]inflightEntry
+	gen      uint64
+}
+
+type inflightEntry struct {
+	cancel context.CancelFunc
+	gen    uint64
 }
 
 // NewEngine returns an empty Engine with no open sources.
 func NewEngine() *Engine {
-	return &Engine{backends: make(map[string]Backend)}
+	return &Engine{
+		backends: make(map[string]Backend),
+		inflight: make(map[string]inflightEntry),
+	}
+}
+
+// begin derives a cancellable ctx for requestID and registers it. The returned
+// release function cancels the derived ctx and unregisters it, and is safe to
+// call exactly once via defer. An empty requestID is not registered (the
+// request is simply uncancellable) but still gets its own derived ctx, so the
+// release path is uniform. Registering a requestID that is already in flight
+// cancels the older one: a caller reusing an id means "supersede", which is
+// exactly what a fast scroll wants.
+func (e *Engine) begin(ctx context.Context, requestID string) (context.Context, func()) {
+	cctx, cancel := context.WithCancel(ctx)
+	if requestID == "" {
+		return cctx, cancel
+	}
+	e.mu.Lock()
+	if prev, ok := e.inflight[requestID]; ok {
+		prev.cancel()
+	}
+	e.gen++
+	myGen := e.gen
+	e.inflight[requestID] = inflightEntry{cancel: cancel, gen: myGen}
+	e.mu.Unlock()
+
+	return cctx, func() {
+		e.mu.Lock()
+		// Only unregister if this request still owns the id: a newer request
+		// may have superseded it, and that entry must survive.
+		if cur, ok := e.inflight[requestID]; ok && cur.gen == myGen {
+			delete(e.inflight, requestID)
+		}
+		e.mu.Unlock()
+		cancel()
+	}
+}
+
+// Cancel interrupts the in-flight request registered under requestID (spec
+// §8). It returns an error if no such request is running -- which is a normal
+// race (the request may have just finished), so callers may ignore it.
+func (e *Engine) Cancel(requestID string) error {
+	e.mu.Lock()
+	entry, ok := e.inflight[requestID]
+	e.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("query: Cancel: no in-flight request %q", requestID)
+	}
+	entry.cancel()
+	return nil
+}
+
+// inFlightCount reports how many requests are registered. Test-only.
+func (e *Engine) inFlightCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.inflight)
 }
 
 // OpenRequest is the OpenSource request DTO (spec §8). Format is an explicit
@@ -33,11 +105,19 @@ func NewEngine() *Engine {
 // readers.DetectFormat. BudgetMB <= 0 defaults to 512 (spec's
 // DefaultMemBudgetBytes).
 type OpenRequest struct {
-	Path     string `json:"path"`
-	Format   string `json:"format,omitempty"`
-	Table    string `json:"table,omitempty"`
-	CSVRaw   bool   `json:"csvRaw,omitempty"`
-	BudgetMB int    `json:"budgetMB,omitempty"`
+	// RequestID, if non-empty, registers this open with the Engine's cancel
+	// registry (Engine.Cancel, spec §8) under the same requestId ->
+	// requestID path QueryRequest uses. This is a documented deviation from
+	// spec §8 (which has no RequestID on OpenRequest): opening a large
+	// sqlite/parquet file runs a full-file profiling pass before it ever
+	// returns a handle, and that pass should be cancellable exactly like a
+	// query is.
+	RequestID string `json:"requestId,omitempty"`
+	Path      string `json:"path"`
+	Format    string `json:"format,omitempty"`
+	Table     string `json:"table,omitempty"`
+	CSVRaw    bool   `json:"csvRaw,omitempty"`
+	BudgetMB  int    `json:"budgetMB,omitempty"`
 }
 
 // OpenResult is the OpenSource response DTO (spec §8). Tier reports which
@@ -162,17 +242,19 @@ func adaptTopValues(vs []profile.ValueCount) []ValueCount {
 // (openBackend, source.go), and registers it under a new handle (spec
 // §1/§2). A stdin path ("" or "-") is rejected: a stateless/re-scannable
 // engine needs a real, re-openable path (spec §2).
-func (e *Engine) OpenSource(req OpenRequest) (OpenResult, error) {
+func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, error) {
 	if req.Path == "" || req.Path == "-" {
 		return OpenResult{}, fmt.Errorf("query: OpenSource: a real file path is required (stdin/empty rejected, spec §2)")
 	}
+	ctx, release := e.begin(ctx, req.RequestID)
+	defer release()
 
-	backend, format, tier, err := openBackend(req)
+	backend, format, tier, err := openBackend(ctx, req)
 	if err != nil {
 		return OpenResult{}, err
 	}
 
-	n, exact := backend.RowCount()
+	n, exact := backend.RowCount(ctx)
 	var warnings []string
 	if tier == "rescan" {
 		warnings = append(warnings, "large file — streaming mode (totals are estimates)")
@@ -194,7 +276,7 @@ func (e *Engine) OpenSource(req OpenRequest) (OpenResult, error) {
 
 // QueryRows compiles req's Filter/Transform against the handle's Backend and
 // runs Query over the requested window (spec §2/§8).
-func (e *Engine) QueryRows(req QueryRequest) (RowSet, error) {
+func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error) {
 	backend, err := e.lookup(req.Handle)
 	if err != nil {
 		return RowSet{}, err
@@ -203,7 +285,9 @@ func (e *Engine) QueryRows(req QueryRequest) (RowSet, error) {
 	if err != nil {
 		return RowSet{}, fmt.Errorf("query: QueryRows: %w", err)
 	}
-	return backend.Query(context.Background(), plan, Window{Offset: req.Offset, Limit: req.Limit}, req.WantTotal)
+	ctx, release := e.begin(ctx, req.RequestID)
+	defer release()
+	return backend.Query(ctx, plan, Window{Offset: req.Offset, Limit: req.Limit}, req.WantTotal)
 }
 
 // CloseSource closes and unregisters handle's Backend. Calling QueryRows (or

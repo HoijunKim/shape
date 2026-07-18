@@ -126,7 +126,7 @@ func TestMemBackend_ColumnsAndProfile(t *testing.T) {
 func TestMemBackend_RowCount(t *testing.T) {
 	maps := fixtureRecords()
 	mb, _ := newTestMemBackend(t, maps)
-	n, exact := mb.RowCount()
+	n, exact := mb.RowCount(context.Background())
 	if n != int64(len(maps)) || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (%d, true)", n, exact, len(maps))
 	}

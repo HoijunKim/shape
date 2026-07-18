@@ -76,7 +76,7 @@ type parquetBackend struct {
 // decoded record via one full scan (consistent with mem/rescan/sqlBackend:
 // "you may run the existing profiler over the rows ... OR a lighter
 // per-column pass" -- this runs the real profiler for sidebar consistency).
-func newParquetBackend(path string) (*parquetBackend, error) {
+func newParquetBackend(ctx context.Context, path string) (*parquetBackend, error) {
 	if path == "" {
 		return nil, fmt.Errorf("query: parquet cannot be read from stdin; provide a file path")
 	}
@@ -105,7 +105,7 @@ func newParquetBackend(path string) (*parquetBackend, error) {
 	sourceOrder := parquetSchemaOrder(pf.Schema().Fields(), "")
 	disc := newColumnDiscoverer()
 	prof := profile.NewProfiler()
-	if serr := pb.scan(context.Background(), 0, func(_ int64, rec any) (bool, error) {
+	if serr := pb.scan(ctx, 0, func(_ int64, rec any) (bool, error) {
 		disc.Observe(rec)
 		prof.AddRecord(rec)
 		return false, nil
@@ -307,8 +307,13 @@ func (p *parquetBackend) Profile() profile.ProfileResult { return p.prof }
 
 // RowCount returns the footer's exact row count (spec §4: "(footerTotal,
 // true)" -- always exact, since Parquet's metadata carries a real row
-// count, no sampling involved).
-func (p *parquetBackend) RowCount() (n int64, exact bool) { return p.total, true }
+// count, no sampling involved). A cancelled ctx returns (0, false).
+func (p *parquetBackend) RowCount(ctx context.Context) (n int64, exact bool) {
+	if ctx.Err() != nil {
+		return 0, false
+	}
+	return p.total, true
+}
 
 // Query splits on whether the compiled filter is empty, exactly like
 // sqlBackend.Query (sqlbackend.go):

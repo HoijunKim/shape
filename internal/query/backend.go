@@ -59,8 +59,9 @@ type Backend interface {
 
 	// RowCount returns the source's total record count and whether that
 	// count is exact (true for mem/sqlite/parquet; false -- an estimate --
-	// for rescanBackend past its memory budget).
-	RowCount() (n int64, exact bool)
+	// for rescanBackend past its memory budget). A cancelled ctx returns
+	// (0, false).
+	RowCount(ctx context.Context) (n int64, exact bool)
 
 	// Query runs p (a compiled Filter+Transform) over the source and
 	// returns the window [w.Offset, w.Offset+w.Limit) of MATCHING,

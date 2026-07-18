@@ -1,11 +1,16 @@
 package query
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/hoijun-kim/shape/internal/profile"
 	"github.com/hoijun-kim/shape/internal/readers"
@@ -36,7 +41,7 @@ func TestEngine_OpenSource_SmallNDJSON_MemoryTier(t *testing.T) {
 	path := writeNDJSONFile(t, maps)
 
 	e := NewEngine()
-	res, err := e.OpenSource(OpenRequest{Path: path})
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
 	if err != nil {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
@@ -65,7 +70,7 @@ func TestEngine_OpenSource_SmallNDJSON_MemoryTier(t *testing.T) {
 		t.Fatalf("Warnings = %#v, want none (memory tier is not the over-budget case)", res.Warnings)
 	}
 
-	rs, err := e.QueryRows(QueryRequest{Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true})
+	rs, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true})
 	if err != nil {
 		t.Fatalf("QueryRows error = %v, want nil", err)
 	}
@@ -94,7 +99,7 @@ func TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant(t *testing.T) {
 
 	e := NewEngine()
 
-	memRes, err := e.OpenSource(OpenRequest{Path: path}) // default (512 MiB) budget
+	memRes, err := e.OpenSource(context.Background(), OpenRequest{Path: path}) // default (512 MiB) budget
 	if err != nil {
 		t.Fatalf("OpenSource(default budget) error = %v, want nil", err)
 	}
@@ -102,7 +107,7 @@ func TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant(t *testing.T) {
 		t.Fatalf("OpenSource(default budget) Tier = %q, want \"memory\"", memRes.Tier)
 	}
 
-	rescanRes, err := e.OpenSource(OpenRequest{Path: path, BudgetMB: 1})
+	rescanRes, err := e.OpenSource(context.Background(), OpenRequest{Path: path, BudgetMB: 1})
 	if err != nil {
 		t.Fatalf("OpenSource(BudgetMB=1) error = %v, want nil", err)
 	}
@@ -128,11 +133,11 @@ func TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant(t *testing.T) {
 	req := func(handle string) QueryRequest {
 		return QueryRequest{Handle: handle, Filter: evenFilter(), Offset: 100, Limit: 20, WantTotal: true}
 	}
-	memRS, err := e.QueryRows(req(memRes.Handle))
+	memRS, err := e.QueryRows(context.Background(), req(memRes.Handle))
 	if err != nil {
 		t.Fatalf("QueryRows(memory) error = %v, want nil", err)
 	}
-	rescanRS, err := e.QueryRows(req(rescanRes.Handle))
+	rescanRS, err := e.QueryRows(context.Background(), req(rescanRes.Handle))
 	if err != nil {
 		t.Fatalf("QueryRows(rescan) error = %v, want nil", err)
 	}
@@ -165,7 +170,7 @@ func TestEngine_QueryRows_AfterCloseSource_ErrorsCleanly(t *testing.T) {
 	path := writeNDJSONFile(t, maps)
 
 	e := NewEngine()
-	res, err := e.OpenSource(OpenRequest{Path: path})
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
 	if err != nil {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
@@ -173,7 +178,7 @@ func TestEngine_QueryRows_AfterCloseSource_ErrorsCleanly(t *testing.T) {
 		t.Fatalf("CloseSource error = %v, want nil", err)
 	}
 
-	if _, err := e.QueryRows(QueryRequest{Handle: res.Handle, Limit: 10}); err == nil {
+	if _, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Limit: 10}); err == nil {
 		t.Fatalf("QueryRows after CloseSource error = nil, want non-nil")
 	}
 
@@ -189,7 +194,7 @@ func TestEngine_QueryRows_AfterCloseSource_ErrorsCleanly(t *testing.T) {
 func TestEngine_OpenSource_RejectsEmptyAndStdinPath(t *testing.T) {
 	e := NewEngine()
 	for _, p := range []string{"", "-"} {
-		if _, err := e.OpenSource(OpenRequest{Path: p}); err == nil {
+		if _, err := e.OpenSource(context.Background(), OpenRequest{Path: p}); err == nil {
 			t.Fatalf("OpenSource(Path=%q) error = nil, want non-nil (spec §2: stdin/empty rejected)", p)
 		}
 	}
@@ -277,8 +282,346 @@ func TestEngine_OpenSource_SQLiteAndParquet_EmptyFileErrors(t *testing.T) {
 			t.Fatalf("write dummy %s file: %v", ext, err)
 		}
 		e := NewEngine()
-		if _, err := e.OpenSource(OpenRequest{Path: path}); err == nil {
+		if _, err := e.OpenSource(context.Background(), OpenRequest{Path: path}); err == nil {
 			t.Fatalf("OpenSource(%s) error = nil, want non-nil (empty file is not a valid %s source; parquet is also still stubbed, Task 8)", ext, ext)
 		}
+	}
+}
+
+// --- E2 Task 2: ctx threading + the Cancel registry (I3, spec §8) ----------
+
+// TestEngine_QueryRows_HonorsCancelledContext passes an already-cancelled
+// ctx: the top-level "if err := ctx.Err()" guard every Backend.Query
+// implementation already has (memstore.go/rescan.go/sqlbackend.go/
+// parquetbackend.go) must surface as context.Canceled through QueryRows,
+// proving ctx genuinely reaches the backend rather than QueryRows silently
+// swapping in context.Background() (engine.go:206, pre-fix).
+func TestEngine_QueryRows_HonorsCancelledContext(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := e.QueryRows(ctx, QueryRequest{Handle: res.Handle, Limit: 10}); err == nil {
+		t.Fatalf("QueryRows(cancelled ctx) error = nil, want non-nil")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatalf("QueryRows(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+}
+
+// waitForInFlight spins on e.inFlightCount() (a mutex-guarded map length
+// read, not a fixed timer) until it reports n, or fails the test after a
+// generous deadline. This is deliberately NOT a sleep-based synchronization:
+// it polls the engine's REAL registry state, so it succeeds as soon as the
+// other goroutine has actually registered (or fails loudly on a genuine
+// hang) rather than gambling on a guessed delay.
+func waitForInFlight(t *testing.T, e *Engine, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if e.inFlightCount() == n {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatalf("inFlightCount() never reached %d within the 5s deadline (got %d)", n, e.inFlightCount())
+}
+
+// TestEngine_Cancel_CancelsInFlightQuery is the mid-flight case (as opposed
+// to TestEngine_QueryRows_HonorsCancelledContext's pre-cancelled short-
+// circuit, which never exercises a backend's stride check): it starts
+// QueryRows on a large mem source in a goroutine under RequestID "r1", waits
+// (waitForInFlight) until the engine actually reports "r1" registered, then
+// calls Cancel("r1") from the main goroutine -- proving Cancel can interrupt
+// a scan already in progress, not just a request that hasn't started yet.
+// manyRecords(50000) gives computeMatchBitset's scan a multi-millisecond
+// window (measured ~2-3ms locally) to be "in flight" in, which -- given
+// waitForInFlight/Cancel are a handful of near-instantaneous mutex
+// operations by comparison -- makes missing the window astronomically
+// unlikely without relying on any sleep or fixed timer.
+func TestEngine_Cancel_CancelsInFlightQuery(t *testing.T) {
+	maps := manyRecords(50000)
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, qerr := e.QueryRows(context.Background(), QueryRequest{RequestID: "r1", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true})
+		done <- qerr
+	}()
+
+	waitForInFlight(t, e, 1)
+	if err := e.Cancel("r1"); err != nil {
+		t.Fatalf("Cancel(r1) error = %v, want nil (r1 must be registered)", err)
+	}
+
+	select {
+	case qerr := <-done:
+		if qerr == nil {
+			t.Fatalf("QueryRows(cancelled mid-flight) error = nil, want non-nil")
+		}
+		if !errors.Is(qerr, context.Canceled) {
+			t.Fatalf("QueryRows(cancelled mid-flight) error = %v, want errors.Is(err, context.Canceled)", qerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("QueryRows never returned after Cancel(r1)")
+	}
+}
+
+// TestEngine_Cancel_UnknownRequestID covers Cancel's "normal race" error
+// path (spec §8): cancelling an id nothing is registered under must error
+// (mentioning the id, for a useful log/response) rather than panic.
+func TestEngine_Cancel_UnknownRequestID(t *testing.T) {
+	e := NewEngine()
+	err := e.Cancel("no-such-request")
+	if err == nil {
+		t.Fatalf("Cancel(unknown) error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "no-such-request") {
+		t.Fatalf("Cancel(unknown) error = %q, want it to mention the requestID", err.Error())
+	}
+}
+
+// TestEngine_Cancel_SupersedesDuplicateRequestID: a second QueryRows
+// registering under the SAME RequestID as a still-running first one
+// supersedes it (begin's documented "reused id means supersede" behavior,
+// engine.go) -- the first must be cancelled, the second must complete
+// normally, and (the generation-token invariant) the first's own deferred
+// release must NOT delete the second's now-current registry entry.
+//
+// The last point needs its own mid-flight check, not just an end-of-test
+// inFlightCount()==0: a NAIVE release (unconditionally deleting e.inflight
+// [requestID], no generation check) would ALSO end up at inFlightCount()==0
+// once both requests finish -- second's own release would simply find
+// nothing left to delete. The only observable difference the generation
+// token makes is DURING the overlap: with the token, second's entry must
+// still be there the instant first (superseded, so it aborts fast -- at
+// most one cancelCheckStride into its scan) finishes, while second (a full,
+// un-early-stopped wantTotal scan over the same 50000 records) is still
+// genuinely running. So this test deliberately reads inFlightCount() in
+// that exact window, between "first is confirmed done" and "second is
+// confirmed done" -- where a naive release would have already (wrongly)
+// dropped to 0, but the generation-checked one has not.
+func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
+	maps := manyRecords(50000)
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+	req := func() QueryRequest {
+		return QueryRequest{RequestID: "dup", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, qerr := e.QueryRows(context.Background(), req())
+		firstDone <- qerr
+	}()
+	waitForInFlight(t, e, 1)
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, qerr := e.QueryRows(context.Background(), req())
+		secondDone <- qerr
+	}()
+
+	var firstErr error
+	select {
+	case firstErr = <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("first QueryRows never returned after being superseded")
+	}
+	if firstErr == nil {
+		t.Fatalf("QueryRows(first, superseded) error = nil, want non-nil (should have been cancelled by the second registration)")
+	}
+	if !errors.Is(firstErr, context.Canceled) {
+		t.Fatalf("QueryRows(first, superseded) error = %v, want errors.Is(err, context.Canceled)", firstErr)
+	}
+
+	// THE generation-token assertion: immediately after the superseded first
+	// request has finished (and run its own deferred release), the registry
+	// must still show ONE in-flight request -- the second's, which has not
+	// finished yet. A naive (non-generation-checked) release would have
+	// already deleted it here, wrongly reporting 0.
+	if n := e.inFlightCount(); n != 1 {
+		t.Fatalf("inFlightCount() = %d immediately after the superseded first request finished, want 1 (second's registry entry must survive first's release -- the generation-token invariant)", n)
+	}
+
+	var secondErr error
+	select {
+	case secondErr = <-secondDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("second QueryRows never returned")
+	}
+	if secondErr != nil {
+		t.Fatalf("QueryRows(second, superseding) error = %v, want nil", secondErr)
+	}
+	if n := e.inFlightCount(); n != 0 {
+		t.Fatalf("inFlightCount() = %d after both requests finished, want 0", n)
+	}
+}
+
+// TestEngine_QueryRows_EmptyRequestIDStillRuns: an empty RequestID means "do
+// not track this request at all" (engine.go's begin doc comment) -- it must
+// still run to completion and return rows, but never appear in the registry
+// and never be cancellable via Cancel.
+func TestEngine_QueryRows_EmptyRequestIDStillRuns(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	rs, err := e.QueryRows(context.Background(), QueryRequest{RequestID: "", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true})
+	if err != nil {
+		t.Fatalf("QueryRows(RequestID=\"\") error = %v, want nil", err)
+	}
+	if len(rs.Rows) == 0 {
+		t.Fatalf("QueryRows(RequestID=\"\") returned 0 rows, want > 0")
+	}
+	if n := e.inFlightCount(); n != 0 {
+		t.Fatalf("inFlightCount() = %d after an empty-RequestID query, want 0 (never registered)", n)
+	}
+	if err := e.Cancel(""); err == nil {
+		t.Fatalf("Cancel(\"\") error = nil, want non-nil (an empty RequestID is never registered/cancellable)")
+	}
+}
+
+// TestEngine_Cancel_ReleasesRegistryOnCompletion: after a normal (uncancelled)
+// QueryRows completes, its RequestID must no longer be in the registry (no
+// leak), so a subsequent Cancel on that same id errors.
+func TestEngine_Cancel_ReleasesRegistryOnCompletion(t *testing.T) {
+	maps := fixtureRecords()
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource error = %v, want nil", err)
+	}
+
+	if _, err := e.QueryRows(context.Background(), QueryRequest{RequestID: "r1", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}); err != nil {
+		t.Fatalf("QueryRows error = %v, want nil", err)
+	}
+	if n := e.inFlightCount(); n != 0 {
+		t.Fatalf("inFlightCount() = %d after a completed query, want 0 (no leak)", n)
+	}
+	if err := e.Cancel("r1"); err == nil {
+		t.Fatalf("Cancel(r1) after completion error = nil, want non-nil (r1 must no longer be registered)")
+	}
+}
+
+// TestEngine_OpenSource_HonorsCancelledContext covers all four OpenSource
+// tiers (ndjson/csv -> ingest [memory tier], sqlite, parquet): an
+// already-cancelled ctx must make OpenSource return context.Canceled and an
+// EMPTY OpenResult, never a populated one, proving ctx reaches openBackend's
+// per-tier constructor (openIngestBackend's n=0 stride check; newSQLBackend/
+// newParquetBackend's profiling-pass scan, whose own idx=0 stride check
+// fires before any row is read).
+func TestEngine_OpenSource_HonorsCancelledContext(t *testing.T) {
+	maps := fixtureRecords()
+	ndjsonPath := writeNDJSONFile(t, maps)
+	csvPath := writeCSVFile(t, []string{"name", "age", "even"}, maps)
+	sqlitePath := makeSQLiteFixture(t,
+		"CREATE TABLE t (name TEXT, idx INTEGER, even INTEGER)",
+		sqlInsertStatements("t", []string{"name", "idx", "even"}, sqlNameParityRows())...,
+	)
+	parquetPath := writeParquetFixture(t, parquetNameParityRows(), 0)
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"ndjson", ndjsonPath},
+		{"csv", csvPath},
+		{"sqlite", sqlitePath},
+		{"parquet", parquetPath},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := NewEngine()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			res, err := e.OpenSource(ctx, OpenRequest{Path: c.path})
+			if err == nil {
+				t.Fatalf("OpenSource(%s, cancelled ctx) error = nil, want non-nil; res = %#v", c.name, res)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("OpenSource(%s, cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", c.name, err)
+			}
+			if res.Handle != "" {
+				t.Fatalf("OpenSource(%s, cancelled ctx) Handle = %q, want empty (no populated OpenResult on a cancelled open)", c.name, res.Handle)
+			}
+		})
+	}
+}
+
+// fakeRecordStream is a readers.RecordStream test double for
+// TestOpenIngestBackend_CancelsMidIngest: its Next() never returns io.EOF (so
+// the ingest loop can only ever end via the ctx stride check under test), and
+// it invokes onCall exactly once per call with the 1-based call number, used
+// to fire the test's cancel() deterministically on a specific call -- the
+// same "no sleep, no goroutine timing" discipline cancelAfterNCalls
+// (memstore_test.go) and countCancelConn (sqlbackend_test.go:437) use for
+// their respective backends, applied here at the readers.RecordStream seam.
+type fakeRecordStream struct {
+	calls  int
+	onCall func(call int)
+}
+
+func (f *fakeRecordStream) Next() (any, error) {
+	f.calls++
+	if f.onCall != nil {
+		f.onCall(f.calls)
+	}
+	return map[string]any{"n": f.calls}, nil
+}
+
+func (f *fakeRecordStream) Skipped() int { return 0 }
+
+// TestOpenIngestBackend_CancelsMidIngest calls openIngestBackend directly
+// (bypassing OpenSource/openBackend) with a fakeRecordStream that never
+// reaches EOF, firing cancel() on exactly the 4096th Next() call -- the call
+// immediately preceding the loop's n=4096 "n%cancelCheckStride==0" check
+// (n=0's Next() is call 1, ..., n=4095's Next() is call 4096; the very next
+// iteration, n=4096, is the first opportunity the loop has to observe the
+// cancellation). This is deliberately NOT an NDJSON fixture + time.Sleep
+// goroutine cancel: openIngestBackend exposes no progress signal and the
+// only check points are n=0 and n=4096, so a sleep-aimed cancel lands either
+// before n=0 (never reaching the stride check at all) or after this fake
+// stream's unbounded EOF-less loop would just spin forever -- neither
+// proves the mid-ingest stride check works. DefaultMemBudgetBytes is passed
+// so the over-budget break (a tiny map per record, nowhere near 512 MiB by
+// call 4096) cannot end the loop first.
+func TestOpenIngestBackend_CancelsMidIngest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &fakeRecordStream{}
+	stream.onCall = func(call int) {
+		if call == cancelCheckStride {
+			cancel()
+		}
+	}
+
+	_, _, err := openIngestBackend(ctx, "fake-path.ndjson", readers.FormatJSON, "", false, stream, DefaultMemBudgetBytes)
+	if err == nil {
+		t.Fatalf("openIngestBackend(cancelled mid-ingest) error = nil, want non-nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("openIngestBackend(cancelled mid-ingest) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if stream.calls != cancelCheckStride {
+		t.Fatalf("stream.calls = %d, want %d (the loop must stop at the very next stride check after cancel, not keep reading)", stream.calls, cancelCheckStride)
 	}
 }

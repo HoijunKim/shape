@@ -67,7 +67,7 @@ type sqlBackend struct {
 // "you may run the existing profiler over the rows via the sqlitereader
 // stream, OR a lighter per-column pass"; this runs the real profiler, for
 // consistency with mem/rescan's sidebar structure map).
-func newSQLBackend(path, table string) (*sqlBackend, error) {
+func newSQLBackend(ctx context.Context, path, table string) (*sqlBackend, error) {
 	if path == "" {
 		return nil, fmt.Errorf("query: sqlite cannot be read from stdin; provide a file path")
 	}
@@ -100,7 +100,7 @@ func newSQLBackend(path, table string) (*sqlBackend, error) {
 
 	disc := newColumnDiscoverer()
 	prof := profile.NewProfiler()
-	if serr := sb.scan(context.Background(), func(_ int64, rec any) (bool, error) {
+	if serr := sb.scan(ctx, func(_ int64, rec any) (bool, error) {
 		disc.Observe(rec)
 		prof.AddRecord(rec)
 		return false, nil
@@ -354,11 +354,12 @@ func (s *sqlBackend) Columns() *ColumnModel { return s.cm }
 func (s *sqlBackend) Profile() profile.ProfileResult { return s.prof }
 
 // RowCount returns SQLite's exact COUNT(*) (spec §4/§8: always exact for
-// sqlBackend). A query failure (e.g. a connection already Closed) reports
-// (0,false) rather than panicking -- RowCount never errors per the Backend
-// interface's signature.
-func (s *sqlBackend) RowCount() (n int64, exact bool) {
-	n, err := s.rowCountSQL(context.Background())
+// sqlBackend). A query failure -- including a cancelled ctx, which
+// rowCountSQL's QueryRowContext rejects immediately -- reports (0,false)
+// rather than panicking (RowCount never errors per the Backend interface's
+// signature).
+func (s *sqlBackend) RowCount(ctx context.Context) (n int64, exact bool) {
+	n, err := s.rowCountSQL(ctx)
 	if err != nil {
 		return 0, false
 	}
@@ -413,12 +414,11 @@ func (s *sqlBackend) queryUnfiltered(ctx context.Context, p *CompiledPlan, w Win
 		ElapsedMs: time.Since(start).Milliseconds(),
 	}
 	if wantTotal {
-		// Use s.rowCountSQL(ctx) directly rather than s.RowCount() -- RowCount
-		// has no ctx parameter (Backend interface) and always runs its COUNT(*)
-		// against context.Background(), which would make a wantTotal query's
-		// COUNT uncancellable even though the caller's ctx is right here. A
-		// cancelled/timed-out COUNT must propagate ctx.Err() out of Query, the
-		// same way queryWindowSQL's own ctx-bound query already does above.
+		// s.rowCountSQL(ctx), not s.RowCount(ctx): RowCount collapses any
+		// error (including a cancelled ctx) to (0,false), but a
+		// cancelled/timed-out COUNT here must propagate ctx.Err() itself out
+		// of Query, the same way queryWindowSQL's own ctx-bound query already
+		// does above.
 		n, err := s.rowCountSQL(ctx)
 		if err != nil {
 			return RowSet{}, err
