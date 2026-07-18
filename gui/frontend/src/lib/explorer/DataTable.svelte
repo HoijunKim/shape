@@ -5,8 +5,7 @@
   import { createEventDispatcher, onMount } from "svelte";
   import { explorer } from "./store";
   import type { Column, Row } from "./types";
-  import { CellKind } from "./types";
-  import { columnWidths, prefixSums } from "./widths";
+  import { columnWidths, prefixSums, columnAt, rowWindow, alignForKind, clamp } from "./widths";
   import CellView from "./CellView.svelte";
 
   export let columns: Column[] = [];
@@ -23,7 +22,9 @@
 
   let viewportEl: HTMLDivElement;
 
-  // Visible window, recomputed by recomputeRange() on scroll/mount/resize.
+  // Visible window, recomputed by recomputeRange() on scroll, mount, resize,
+  // a `columns` identity change, or `total` changing (see the `safeTotal`
+  // reactive trigger below -- finding (a)).
   let firstRow = 0;
   let lastRow = -1;
   let firstCol = 0;
@@ -36,30 +37,22 @@
   $: contentWidth = GUTTER_W + totalWidth;
   $: contentHeight = HEADER_H + safeTotal * ROW_H;
 
-  function clamp(v: number, lo: number, hi: number): number {
-    return Math.max(lo, Math.min(hi, v));
-  }
+  // columnAt/rowWindow (the row/column window math) and alignForKind live in
+  // widths.ts, not here -- vitest can't reach pure functions buried in a
+  // .svelte file, and this is the highest boundary-risk arithmetic in the
+  // table (binary search edges, total <= 0, a shrinking total, 512 columns).
 
-  // Cell-kind, not column-type, decides alignment (spec §3's table is keyed
-  // on kind: a `null` inside an otherwise-numeric column still renders
-  // left-aligned, so this can't be precomputed once per column).
-  function alignForKind(kind: CellKind): "left" | "right" {
-    return kind === CellKind.INT || kind === CellKind.FLOAT ? "right" : "left";
-  }
-
-  // Binary search over the prefix-sum array for the column whose span
-  // contains x: the greatest i such that prefix[i] <= x.
-  function columnAt(x: number): number {
-    const n = widths.length;
-    if (n === 0) return 0;
-    let lo = 0;
-    let hi = n - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (prefix[mid] <= x) lo = mid; else hi = mid - 1;
-    }
-    return lo;
-  }
+  // Tracks the range last actually requested from the store, so a scroll
+  // tick that doesn't change the visible row window (e.g. pure horizontal
+  // scroll on a wide table) doesn't re-call ensurePages() -- finding (b):
+  // ensurePages() unconditionally writes a fresh object to the store even
+  // in the all-cached case (to flip `fetching`), and Svelte's
+  // safe_not_equal invalidates on that object identity alone, which would
+  // otherwise force every visible CellView to re-run its reactive
+  // statements on every rAF tick regardless of whether the row window
+  // actually moved.
+  let lastRequestedFirst = -1;
+  let lastRequestedLast = -2; // sentinel below lastRequestedFirst: the first real range always fires
 
   function recomputeRange(): void {
     if (!viewportEl) return;
@@ -68,25 +61,44 @@
     const clientHeight = viewportEl.clientHeight;
     const clientWidth = viewportEl.clientWidth;
 
-    if (safeTotal <= 0) {
-      firstRow = 0;
-      lastRow = -1;
-    } else {
-      const maxRow = safeTotal - 1;
-      firstRow = clamp(Math.floor(scrollTop / ROW_H) - OVERSCAN_ROWS, 0, maxRow);
-      lastRow = clamp(Math.ceil((scrollTop + clientHeight) / ROW_H) + OVERSCAN_ROWS, 0, maxRow);
-    }
+    const win = rowWindow(scrollTop, clientHeight, safeTotal, ROW_H, OVERSCAN_ROWS);
+    firstRow = win.firstRow;
+    lastRow = win.lastRow;
 
     if (columns.length === 0) {
       firstCol = 0;
       lastCol = -1;
     } else {
       const maxCol = columns.length - 1;
-      firstCol = clamp(columnAt(scrollLeft) - OVERSCAN_COLS, 0, maxCol);
-      lastCol = clamp(columnAt(scrollLeft + clientWidth) + OVERSCAN_COLS, 0, maxCol);
+      // scrollLeft/scrollTop are used directly here (not offset by
+      // GUTTER_W/HEADER_H) even though column c's content starts at
+      // GUTTER_W + prefix[c] and row content starts at HEADER_H + i*ROW_H.
+      // That's intentional, not a missed offset: the sticky gutter/header
+      // occlude exactly GUTTER_W/HEADER_H of content at the leading edge,
+      // and that occlusion offset exactly cancels the content's own
+      // GUTTER_W/HEADER_H starting offset -- e.g. at scrollTop=S the first
+      // row NOT hidden behind the sticky header sits at content-y
+      // S + HEADER_H, which is row index (S + HEADER_H - HEADER_H) / ROW_H
+      // = S / ROW_H, exactly today's formula. Concretely, at ROW_H=28,
+      // HEADER_H=32, scrollTop=56: row 2 (content-y [88,116)) is the first
+      // row below the header (header covers content-y [56,88)), and
+      // floor(56/28) = 2 -- matches with no adjustment. So this is not
+      // "absorbed by overscan", it's exact; OVERSCAN_ROWS/OVERSCAN_COLS
+      // give genuine extra margin beyond the boundary, not compensation
+      // for a missing correction. (Verified against the symmetric column
+      // case too, via GUTTER_W the same way.)
+      firstCol = clamp(columnAt(scrollLeft, prefix) - OVERSCAN_COLS, 0, maxCol);
+      lastCol = clamp(columnAt(scrollLeft + clientWidth, prefix) + OVERSCAN_COLS, 0, maxCol);
     }
 
-    if (lastRow >= firstRow) void explorer.ensurePages(firstRow, lastRow);
+    if (
+      lastRow >= firstRow &&
+      (firstRow !== lastRequestedFirst || lastRow !== lastRequestedLast)
+    ) {
+      lastRequestedFirst = firstRow;
+      lastRequestedLast = lastRow;
+      void explorer.ensurePages(firstRow, lastRow);
+    }
   }
 
   let rafId = 0;
@@ -98,11 +110,36 @@
     });
   }
 
+  // Finding (a): `total` can SHRINK after mount -- paging.ts's reconcileEof
+  // optimistically projects `total = pageEnd + pageRows` on the rescan tier
+  // (totalExact === false) and corrects it down once the true EOF page
+  // lands. firstRow/lastRow were otherwise only recomputed on scroll,
+  // mount, resize, or a `columns` identity change -- never on a bare
+  // `total` change -- so without this trigger a shrink left lastRow
+  // pointing past the new end: rows [newTotal, lastRow] kept rendering as
+  // skeletons that could never resolve (no such row/page exists to land).
+  // recomputeRange() re-reads the live scrollTop/clientHeight itself, so no
+  // scroll event is needed for this to take effect.
+  $: safeTotal, recomputeRange();
+
   // A new file opened (columns is a fresh array reference from store.open())
   // -- reset scroll to the origin and recompute against the new shape.
   let prevColumns: Column[] | null = null;
   $: if (columns !== prevColumns) {
     prevColumns = columns;
+    // This block's own re-run trigger is textually `columns` alone;
+    // recomputeRange() below reads `widths`/`prefix` (via columnAt), which
+    // are recomputed from `columns` by the reactive statements above. That
+    // ordering held before only because of source position -- reference
+    // them directly so Svelte's dependency graph enforces it explicitly,
+    // not by accident of where this block sits in the file (finding (e)).
+    void widths;
+    void prefix;
+    // A new file also invalidates any previously-requested range: reset it
+    // so the fetch for row 0 of the NEW file isn't skipped merely because
+    // it happens to numerically match the OLD file's last-requested range.
+    lastRequestedFirst = -1;
+    lastRequestedLast = -2;
     if (viewportEl) {
       viewportEl.scrollTop = 0;
       viewportEl.scrollLeft = 0;
@@ -114,7 +151,10 @@
     recomputeRange();
     const onResize = () => recomputeRange();
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   });
 
   // Reactivity trigger (M5/T5): the store's page cache is invisible to
@@ -122,8 +162,13 @@
   // calls rowAt(), or a landed page never repaints.
   $: visibleRows = (() => {
     void $explorer.version;
+    // Finding (a) backstop: firstRow/lastRow are kept correct by the
+    // safeTotal trigger above, but this clamp holds even if that ever fails
+    // to fire (e.g. recomputeRange() bails out early because viewportEl
+    // isn't bound yet) -- never iterate past the current total.
+    const effectiveLastRow = Math.min(lastRow, safeTotal - 1);
     const out: { i: number; row: Row | null }[] = [];
-    for (let i = firstRow; i <= lastRow; i++) {
+    for (let i = firstRow; i <= effectiveLastRow; i++) {
       out.push({ i, row: explorer.rowAt(i).row });
     }
     return out;
@@ -213,7 +258,7 @@
               role="gridcell"
               style="left:{GUTTER_W + prefix[c]}px; width:{widths[c]}px; height:{ROW_H}px;"
             >
-              {#if row}
+              {#if row && row.cells[c]}
                 <CellView cell={row.cells[c]} align={alignForKind(row.cells[c].kind)} />
               {:else}
                 <span class="skeleton-bar"></span>
@@ -325,6 +370,8 @@
   .data-cell {
     position: absolute;
     top: 0;
+    display: flex;
+    align-items: center;
     box-sizing: border-box;
     overflow: hidden;
     border-right: 1px solid var(--border);
