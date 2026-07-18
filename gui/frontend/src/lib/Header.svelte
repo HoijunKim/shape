@@ -94,6 +94,14 @@
     color: var(--border);
   }
 
+  /* A3: matches StatusBar's .tier rule -- the same `tier` string (e.g.
+     "memory"/"rescan") is rendered lowercase here and uppercased there; this
+     keeps the two presentations consistent. */
+  .tier {
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
   .format {
     text-transform: uppercase;
     letter-spacing: 0.02em;

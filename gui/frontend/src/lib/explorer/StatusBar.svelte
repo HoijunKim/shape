@@ -39,11 +39,17 @@
     {/if}
   </div>
 
-  <!-- Obligation carried from earlier reviews: when the source is sampled,
-       the warnings strings render VERBATIM -- in particular the streaming-
-       mode string, which a Go test matches byte-for-byte, so it is never
-       reworded or wrapped in extra punctuation here. -->
-  {#if sampled && warnings.length > 0}
+  <!-- Obligation carried from earlier reviews: the warnings strings render
+       VERBATIM -- in particular the streaming-mode string, which a Go test
+       (TestEngine_OpenSource_RescanTier_StreamingWarningExact) matches
+       byte-for-byte, so it is never reworded or wrapped in extra punctuation
+       here.
+       A3: gated on `warnings.length > 0` alone, not `sampled && ...` -- every
+       warning that exists today happens to be a rescan-tier (sampled) one,
+       but nothing about `warnings` itself is sampled-specific, and gating on
+       `sampled` would silently swallow any future non-rescan warning the
+       backend adds. -->
+  {#if warnings.length > 0}
     <div class="warnings" role="note">
       {#each warnings as w (w)}
         <span class="warning">{w}</span>
