@@ -334,20 +334,27 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 	}
 
 	handle := e.register(backend)
-	cm := backend.Columns()
-	return OpenResult{
-		Handle:           handle,
-		Format:           string(format),
-		Tier:             tier,
-		Columns:          cm.Columns,
-		Profile:          adaptProfile(backend.Profile()),
-		Sampled:          tier == "rescan",
-		RowEstimate:      n,
-		RowExact:         exact,
-		Warnings:         warnings,
-		ColumnsTruncated: cm.Truncated,
-		TotalPaths:       cm.TotalPaths,
-	}, nil
+	res := OpenResult{
+		Handle:      handle,
+		Format:      string(format),
+		Tier:        tier,
+		Profile:     adaptProfile(backend.Profile()),
+		Sampled:     tier == "rescan",
+		RowEstimate: n,
+		RowExact:    exact,
+		Warnings:    warnings,
+	}
+	// CQ-7 review fix: guard backend.Columns() the same way QueryRows does
+	// (engine.go) rather than dereferencing it unconditionally -- every real
+	// Backend always returns a non-nil ColumnModel today, so this is
+	// defense-in-depth, but it should be the SAME posture in both places
+	// rather than QueryRows alone being defensive.
+	if cm := backend.Columns(); cm != nil {
+		res.Columns = cm.Columns
+		res.ColumnsTruncated = cm.Truncated
+		res.TotalPaths = cm.TotalPaths
+	}
+	return res, nil
 }
 
 // QueryRows compiles req's Filter/Transform against the handle's Backend and

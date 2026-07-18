@@ -3,9 +3,13 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/profile"
@@ -884,37 +888,102 @@ func TestResolveCol_OutOfRangeIndexIsCellMissing(t *testing.T) {
 
 // --- AllCellKindValues -------------------------------------------------------
 
+// parseCellKindConsts parses filename (a .go source file in this package)
+// with go/parser and returns the set of CellKind values declared by any
+// `const` spec whose explicit type is CellKind -- e.g. `CellMissing CellKind
+// = "missing"` -- by reading the string literal actually assigned to each
+// one. This makes the const block itself (not a hand-maintained copy of it)
+// the source of truth TestAllCellKindValues_CoversEveryKind checks against:
+// a ninth CellKind constant added to the block and forgotten in
+// AllCellKindValues changes what this function returns, without anyone
+// having to remember to update a second, unlinked list.
+func parseCellKindConsts(t *testing.T, filename string) map[CellKind]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parser.ParseFile(%q) error = %v", filename, err)
+	}
+
+	declared := make(map[CellKind]bool)
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			typeIdent, ok := vs.Type.(*ast.Ident)
+			if !ok || typeIdent.Name != "CellKind" {
+				continue // not a `<name> CellKind = "..."` spec
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					t.Fatalf("CellKind const %s in %q has no value expression", name.Name, filename)
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("CellKind const %s in %q is not a string literal: %#v", name.Name, filename, vs.Values[i])
+				}
+				val, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("CellKind const %s in %q: unquote %s: %v", name.Name, filename, lit.Value, err)
+				}
+				declared[CellKind(val)] = true
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatalf("parsed 0 CellKind consts from %q -- the AST walk likely no longer matches the const block's shape", filename)
+	}
+	return declared
+}
+
 // TestAllCellKindValues_CoversEveryKind is a compile-time-adjacent guard: a
 // future ninth CellKind added to the const block (columns.go) but forgotten
-// here would otherwise silently ship a TS union missing a member (Wails'
-// EnumBind generates its TypeScript enum FROM this slice, Task 4) -- this
-// test catches that omission at test time instead.
+// in AllCellKindValues would otherwise silently ship a TS union missing a
+// member (Wails' EnumBind generates its TypeScript enum FROM this slice,
+// Task 4) -- this test catches that omission at test time instead.
+//
+// The set it checks against is parsed directly out of columns.go's CellKind
+// const block (parseCellKindConsts, via go/parser/go/ast), not a second
+// hand-maintained list: a hardcoded `want` map here would only ever go out of
+// sync WITH the very omission this test exists to catch, since both the
+// const block and a hardcoded want map are edited by hand with no compiler-
+// enforced link between them (see the CQ-1 finding this replaces). Parsing
+// the real source is the only way an added-but-unregistered CellKind is
+// guaranteed to break this test.
 func TestAllCellKindValues_CoversEveryKind(t *testing.T) {
-	if len(AllCellKindValues) != 8 {
-		t.Fatalf("len(AllCellKindValues) = %d, want 8", len(AllCellKindValues))
-	}
-	want := map[CellKind]bool{
-		CellMissing: true, CellNull: true, CellBool: true, CellInt: true,
-		CellFloat: true, CellString: true, CellObject: true, CellArray: true,
-	}
+	declared := parseCellKindConsts(t, "columns.go")
+
 	got := make(map[CellKind]bool, len(AllCellKindValues))
 	for _, v := range AllCellKindValues {
 		if v.TSName == "" {
 			t.Fatalf("AllCellKindValues entry for %q has an empty TSName", v.Value)
 		}
+		if got[v.Value] {
+			t.Fatalf("AllCellKindValues has a duplicate Value entry: %q", v.Value)
+		}
 		got[v.Value] = true
 	}
-	if len(got) != len(AllCellKindValues) {
-		t.Fatalf("AllCellKindValues has duplicate Value entries: %d distinct of %d total", len(got), len(AllCellKindValues))
+
+	// Redundant tripwire derived from the parsed set (not a hardcoded
+	// number): a mismatched count alone pinpoints "something's missing or
+	// extra" before the per-key loops below identify which.
+	if len(got) != len(declared) {
+		t.Fatalf("AllCellKindValues has %d distinct entries, want %d (one per CellKind const declared in columns.go)", len(got), len(declared))
 	}
-	for k := range want {
+	for k := range declared {
 		if !got[k] {
-			t.Fatalf("AllCellKindValues missing %q", k)
+			t.Fatalf("AllCellKindValues missing %q (declared as a CellKind const in columns.go but not listed here)", k)
 		}
 	}
 	for k := range got {
-		if !want[k] {
-			t.Fatalf("AllCellKindValues has unexpected %q not in the known CellKind set", k)
+		if !declared[k] {
+			t.Fatalf("AllCellKindValues has %q, which is not declared as a CellKind const in columns.go", k)
 		}
 	}
 }

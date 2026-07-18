@@ -296,13 +296,16 @@ func (m *memBackend) matchBitsetFor(ctx context.Context, cf *CompiledFilter) (*b
 // match-all, so an empty filter naturally yields an all-set bitset here with
 // no special-casing.
 //
-// ctx is checked every cancelCheckStride records (mirroring Export's
-// discipline): a cancelled/expired ctx aborts the scan and returns the error
-// with a nil bitset, so a caller changing filters in the GUI can cancel a
-// large cold scan (up to the full 512 MiB record budget, potentially
-// regex-driven) instead of blocking until it completes.
+// ctx is checked every cancelCheckStride records -- the SAME package-level
+// constant rescan.go declares (not a locally shadowed copy: CQ-6 review fix,
+// since a function-local const of the same name agreeing with the shared one
+// only by coincidence would let a future change to one silently diverge from
+// the other, breaking tests that assert against the package-level constant
+// with a misleading message): a cancelled/expired ctx aborts the scan and
+// returns the error with a nil bitset, so a caller changing filters in the
+// GUI can cancel a large cold scan (up to the full 512 MiB record budget,
+// potentially regex-driven) instead of blocking until it completes.
 func (m *memBackend) computeMatchBitset(ctx context.Context, f *CompiledFilter) (*bitset, error) {
-	const cancelCheckStride = 4096
 	bs := newBitset(len(m.records))
 	for i, rec := range m.records {
 		if i%cancelCheckStride == 0 {

@@ -26,6 +26,15 @@ func evenFilter() Filter {
 	return Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
 }
 
+// notEvenFilter is evenFilter's complement: the same "even" bool path with
+// the opposite operand, so its CompiledFilter.Key() always differs from
+// evenFilter()'s (see TestEngine_Cancel_SupersedesDuplicateRequestID's CQ-3
+// fix, which relies on that to keep two concurrent requests from ever
+// colliding on the same memBackend.matchCache entry).
+func notEvenFilter() Filter {
+	return Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: false}}}}
+}
+
 func nameColumnIndex(t *testing.T, cols []Column) int {
 	t.Helper()
 	for i, c := range cols {
@@ -545,6 +554,23 @@ func (b *twoPhaseGateBackend) Query(ctx context.Context, p *CompiledPlan, w Wind
 // inFlightCount(), so that read can never race with second's completion --
 // it is now impossible for second to have finished by the time it happens,
 // no matter how slow the machine is.
+//
+// CQ-3 review fix: pre-fix, both requests were built from the SAME req()
+// closure -- same RequestID ("dup") AND the same evenFilter() -- so their
+// CompiledFilter.Key()s were identical too. twoPhaseGateBackend deliberately
+// lets the first request's scan run ungated; if that scan won the race and
+// finished (populating memBackend.matchCache under that shared key) before
+// the second request's Query call ran, the second became a cache HIT:
+// computeMatchBitset never ran, gb.secondStarted never closed, and the test
+// blocked on the 30s backstop below -- an empirically ~1-in-12 flake. The
+// test's actual subject (begin's generation token, keyed on RequestID) is
+// completely indifferent to which filter each request carries, so giving the
+// second request a DIFFERENT filter (notEvenFilter) makes its
+// CompiledFilter.Key() always differ from the first's: matchBitsetFor always
+// misses for it, computeMatchBitset always runs, gb.secondStarted always
+// closes. The race is gone with no new synchronization machinery, and the
+// backstop below is now dead code on the happy path -- kept at 5s (down from
+// 30s) purely as a hang detector, matching this test's other backstops.
 func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 	maps := manyRecords(50000)
 	path := writeNDJSONFile(t, maps)
@@ -553,8 +579,8 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
-	req := func() QueryRequest {
-		return QueryRequest{RequestID: "dup", Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}
+	req := func(f Filter) QueryRequest {
+		return QueryRequest{RequestID: "dup", Handle: res.Handle, Filter: f, Offset: 0, Limit: 10, WantTotal: true}
 	}
 
 	e.mu.Lock()
@@ -565,7 +591,7 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 
 	firstDone := make(chan error, 1)
 	go func() {
-		_, qerr := e.QueryRows(context.Background(), req())
+		_, qerr := e.QueryRows(context.Background(), req(evenFilter()))
 		firstDone <- qerr
 	}()
 	waitForInFlight(t, e, 1)
@@ -573,24 +599,20 @@ func TestEngine_Cancel_SupersedesDuplicateRequestID(t *testing.T) {
 
 	secondDone := make(chan error, 1)
 	go func() {
-		_, qerr := e.QueryRows(context.Background(), req())
+		_, qerr := e.QueryRows(context.Background(), req(notEvenFilter()))
 		secondDone <- qerr
 	}()
 	// second's scan has genuinely begun, blocked at record 0 -- it cannot have
-	// finished by the time inFlightCount() is read below. Guarded by a
-	// generous timeout backstop (NOT a timing-aimed cancel): second's hooked
-	// filter reuses real.Key(), so if the first (ungated) request's scan ever
-	// wins the race and populates memBackend.matchCache under that same key
-	// first, second's Query becomes a cache hit, computeMatchBitset never
-	// runs, gb.secondStarted never closes, and an untimed receive here would
-	// hang forever instead of failing cleanly -- exactly the class of defect
-	// found and fixed elsewhere in this file (a cancel landing before the
-	// call it targets, proving nothing). On a lost race this reports a clean,
-	// diagnosable test failure instead of a hung CI job.
+	// finished by the time inFlightCount() is read below. This is now a pure
+	// happens-before guarantee, not a race: second uses notEvenFilter (see
+	// above), whose CompiledFilter.Key() always differs from first's
+	// evenFilter(), so second's Query can never become a memBackend.matchCache
+	// hit regardless of how the first (ungated) request's scan and this one
+	// interleave. The 5s wait below is a pure backstop against a genuine hang.
 	select {
 	case <-gb.secondStarted:
-	case <-time.After(30 * time.Second):
-		t.Fatal("gb.secondStarted never closed within 30s: second's Query call never reached computeMatchBitset (the first request's ungated scan likely won the cache race first)")
+	case <-time.After(5 * time.Second):
+		t.Fatal("gb.secondStarted never closed within 5s: second's Query call never reached computeMatchBitset")
 	}
 
 	var firstErr error
@@ -1038,6 +1060,19 @@ func TestEngine_CountMatches_Cancellable(t *testing.T) {
 // here via the package-internal *memBackend field, exactly like Task 1's own
 // tests do) -- proving CountMatches keys on the same CompiledFilter.Key() as
 // Query rather than maintaining its own, separate cache.
+//
+// CQ-4 review fix: len(matchCache)==1 alone proves same-KEY, not FREE -- it
+// would pass identically if CountMatches re-scanned from scratch and
+// matchBitsetFor's double-checked lock (memstore.go) simply collapsed the
+// duplicate result into the same cache entry the first scan already wrote.
+// The actual claim under test is "counting a filter already scrolled costs
+// no scan", so this wraps the primed backend in gatedCountingCountBackend
+// (already used by TestEngine_CountMatches_Cancellable) with its gate
+// pre-closed -- it only needs to COUNT predicate calls, never gate them --
+// and asserts CountMatches' own Count call makes ZERO of them: a pure cache
+// hit never invokes the compiled predicate at all (matchBitsetFor returns
+// straight from its lock-held cache check), so any non-zero count proves a
+// real re-scan happened.
 func TestEngine_CountMatches_SharesQueryBitset(t *testing.T) {
 	maps := fixtureRecords()
 	path := writeNDJSONFile(t, maps)
@@ -1050,13 +1085,23 @@ func TestEngine_CountMatches_SharesQueryBitset(t *testing.T) {
 	if _, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: evenFilter(), Offset: 0, Limit: 10, WantTotal: true}); err != nil {
 		t.Fatalf("QueryRows error = %v, want nil", err)
 	}
+
+	e.mu.Lock()
+	real := e.backends[res.Handle]
+	gb := &gatedCountingCountBackend{Backend: real, started: make(chan struct{}), gate: make(chan struct{})}
+	close(gb.gate) // never actually gating here: this test only counts calls
+	e.backends[res.Handle] = gb
+	e.mu.Unlock()
+
 	if _, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: evenFilter()}); err != nil {
 		t.Fatalf("CountMatches error = %v, want nil", err)
 	}
 
-	e.mu.Lock()
-	mb, ok := e.backends[res.Handle].(*memBackend)
-	e.mu.Unlock()
+	if calls := atomic.LoadInt64(&gb.calls); calls != 0 {
+		t.Fatalf("CountMatches predicate calls = %d, want 0 (the filter's match bitset was already computed by the preceding QueryRows; sharing the cache must make this a pure hit, not a re-scan)", calls)
+	}
+
+	mb, ok := real.(*memBackend)
 	if !ok {
 		t.Fatalf("backend is not a *memBackend")
 	}
@@ -1066,6 +1111,24 @@ func TestEngine_CountMatches_SharesQueryBitset(t *testing.T) {
 	if entries != 1 {
 		t.Fatalf("matchCache has %d entries after QueryRows then CountMatches over the same logical Filter, want 1 (shared cache, keyed on CompiledFilter.Key())", entries)
 	}
+}
+
+// fakeInexactCountBackend wraps a real Backend, forcing Count to always
+// report a fixed total with exact=false regardless of what the wrapped
+// backend would have computed. TestEngine_CountMatches_RescanTierExactFlag
+// uses this (CQ-5 review fix) to prove CountMatches genuinely THREADS
+// Backend.Count's own Exact return through to CountResult.Exact: the test's
+// happy-path assertion alone (Exact == true against a real rescanBackend)
+// would pass identically if CountMatches hardcoded Exact: true, since
+// rescanBackend.Count's own contract happens to always return exact=true on
+// an uncancelled scan.
+type fakeInexactCountBackend struct {
+	Backend
+	total int64
+}
+
+func (f *fakeInexactCountBackend) Count(ctx context.Context, cf *CompiledFilter) (int64, bool, error) {
+	return f.total, false, nil
 }
 
 // TestEngine_CountMatches_RescanTierExactFlag: on a source forced to the
@@ -1095,6 +1158,25 @@ func TestEngine_CountMatches_RescanTierExactFlag(t *testing.T) {
 	}
 	if !cr.Exact {
 		t.Fatalf("Exact = false, want true (rescanBackend.Count's own contract: an uncancelled full scan is always exact)")
+	}
+
+	// CQ-5 review fix: substitute a fake backend whose Count always reports
+	// exact=false, and confirm CountMatches' result reflects THAT rather than
+	// a hardcoded true -- discriminating what the assertions above cannot.
+	e.mu.Lock()
+	real := e.backends[res.Handle]
+	e.backends[res.Handle] = &fakeInexactCountBackend{Backend: real, total: 999}
+	e.mu.Unlock()
+
+	cr2, err := e.CountMatches(context.Background(), CountRequest{Handle: res.Handle, Filter: evenFilter()})
+	if err != nil {
+		t.Fatalf("CountMatches(fake inexact backend) error = %v, want nil", err)
+	}
+	if cr2.Total != 999 {
+		t.Fatalf("Total = %d, want 999 (threaded from the fake backend's Count)", cr2.Total)
+	}
+	if cr2.Exact {
+		t.Fatalf("Exact = true, want false (CountMatches must thread Backend.Count's own Exact return rather than hardcode true)")
 	}
 }
 
