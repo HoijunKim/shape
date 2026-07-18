@@ -1,55 +1,47 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ProfileFile, SchemaJSON, OpenFileDialog, SaveText } from "../wailsjs/go/main/App";
+  import { SchemaJSON, OpenFileDialog, SaveText } from "../wailsjs/go/main/App";
   import { OnFileDrop, OnFileDropOff } from "../wailsjs/runtime/runtime";
-  import type { visual } from "../wailsjs/go/models";
   import Header from "./lib/Header.svelte";
-  import FileDrop from "./lib/FileDrop.svelte";
-  import KpiRow from "./lib/KpiRow.svelte";
-  import FieldGrid from "./lib/FieldGrid.svelte";
-  import FieldDetail from "./lib/FieldDetail.svelte";
+  import Explorer from "./lib/explorer/Explorer.svelte";
+  import { explorer } from "./lib/explorer/store";
 
-  let model: visual.VisualModel | null = null;
-  let selected: visual.FieldCard | null = null;
-  let loading = false;
-  let error = "";
+  // T8: the P3 dashboard (KpiRow/FieldGrid/FieldDetail) and the ProfileFile
+  // binding are no longer routed to here -- Explorer (backed by the
+  // OpenSource/QueryRows query engine) is the only view after a file opens.
+  // Those components stay in the repo, compiling and tested, per the locked
+  // product decision; they are simply not imported any more.
   let theme: "light" | "dark" = "light";
-  // The path last successfully profiled — needed because SchemaJSON takes a
-  // source file path, not the model's display name.
-  let currentPath = "";
+  // Export failures are a distinct, narrower concern from an explorer open()
+  // failure (which the store already tracks as $explorer.error/status
+  // itself, rendered by Explorer's own error state) -- kept as a small local
+  // alert here rather than folded into the store.
+  let exportError = "";
 
-  async function load(path: string) {
+  async function load(path: string): Promise<void> {
     if (!path) return;
-    loading = true;
-    error = "";
-    try {
-      model = await ProfileFile(path);
-      currentPath = path;
-      selected = model.fields?.[0] ?? null;
-    } catch (e) {
-      error = String(e);
-    } finally {
-      loading = false;
-    }
+    await explorer.open(path);
   }
 
-  async function open() {
+  async function open(): Promise<void> {
     // OpenFileDialog resolves to "" when the user cancels; load() no-ops on
     // an empty path, so cancellation is silently ignored.
     await load(await OpenFileDialog());
   }
 
-  async function exportSchema() {
-    if (!currentPath) return;
+  async function exportSchema(): Promise<void> {
+    const path = $explorer.path;
+    if (!path) return;
+    exportError = "";
     try {
-      const schema = await SchemaJSON(currentPath);
+      const schema = await SchemaJSON(path);
       await SaveText("schema.json", schema);
     } catch (e) {
-      error = String(e);
+      exportError = String(e);
     }
   }
 
-  function toggleTheme() {
+  function toggleTheme(): void {
     theme = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
   }
@@ -63,10 +55,10 @@
       if (paths?.length === 1) {
         load(paths[0]);
       } else if (paths?.length >= 2) {
-        // SEAM for Task 8 (two-file visual diff): drop target should call
+        // SEAM for a future two-file visual diff: drop target should call
         // DiffFiles(paths[0], paths[1]) and switch to a DiffView. Until that
-        // lands, just profile the first dropped file so a two-file drop
-        // still does something useful rather than nothing.
+        // lands, just open the first dropped file so a two-file drop still
+        // does something useful rather than nothing.
         load(paths[0]);
       }
     }, true);
@@ -77,8 +69,10 @@
 
 <main class="app">
   <Header
-    summary={model?.summary ?? null}
-    canExport={!!model}
+    path={$explorer.path}
+    tier={$explorer.tier}
+    format={$explorer.format}
+    canExport={$explorer.status === "ready"}
     {theme}
     on:open={open}
     on:export={exportSchema}
@@ -86,33 +80,11 @@
   />
 
   <div class="body">
-    {#if error}
-      <p class="error" role="alert">{error}</p>
+    {#if exportError}
+      <p class="error" role="alert">{exportError}</p>
     {/if}
 
-    {#if loading}
-      <div class="loading">Profiling…</div>
-    {:else if !model}
-      <FileDrop on:open={open} />
-    {:else}
-      <div class="dashboard">
-        <KpiRow kpis={model.kpis} />
-        <div class="split">
-          <div class="grid-pane">
-            <FieldGrid
-              fields={model.fields}
-              selectedPath={selected?.path ?? ""}
-              on:select={(e) => (selected = e.detail)}
-            />
-          </div>
-          {#if selected}
-            <div class="detail-pane">
-              <FieldDetail card={selected} />
-            </div>
-          {/if}
-        </div>
-      </div>
-    {/if}
+    <Explorer on:open={open} />
   </div>
 </main>
 
@@ -130,8 +102,13 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    overflow-x: hidden;
+    /* Explorer (and its FileDrop/skeleton/error states) own their own
+       internal scrolling -- DataTable's sticky header/gutter in particular
+       depend on ITS `.viewport` being the nearest scrolling ancestor. `.body`
+       must stay a plain bounded flex container, not a second scrollable
+       layer, or the table's sticky bits and `.body`'s own scrollbar fight
+       each other. */
+    overflow: hidden;
   }
 
   .error {
@@ -142,58 +119,5 @@
     color: var(--status-critical);
     font-size: 13px;
     border-bottom: 1px solid var(--border);
-  }
-
-  .loading {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    font-size: 14px;
-  }
-
-  .dashboard {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-5);
-    min-width: 0;
-    max-width: 100%;
-    padding: var(--space-5);
-    box-sizing: border-box;
-  }
-
-  .split {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-4);
-    min-width: 0;
-    width: 100%;
-  }
-
-  .grid-pane {
-    flex: 1 1 0%;
-    min-width: 0;
-  }
-
-  .detail-pane {
-    flex: 0 0 380px;
-    min-width: 0;
-    max-width: 420px;
-  }
-
-  /* Below this width the grid and the cockpit detail stack instead of
-     sitting side by side, so the page never needs to scroll horizontally. */
-  @media (max-width: 900px) {
-    .split {
-      flex-direction: column;
-    }
-
-    .detail-pane {
-      flex: 1 1 auto;
-      max-width: 100%;
-      width: 100%;
-    }
   }
 </style>
