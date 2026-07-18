@@ -5,6 +5,7 @@
   import { createEventDispatcher, onMount } from "svelte";
   import { explorer } from "./store";
   import type { Column, Row } from "./types";
+  import { CellKind } from "./types";
   import { columnWidths, prefixSums, columnAt, rowWindow, alignForKind, clamp } from "./widths";
   import CellView from "./CellView.svelte";
 
@@ -87,14 +88,26 @@
       // give genuine extra margin beyond the boundary, not compensation
       // for a missing correction. (Verified against the symmetric column
       // case too, via GUTTER_W the same way.)
+      //
+      // NOTE this exactness is a LEADING-edge property only. The trailing
+      // edge is deliberately over-inclusive: ceil((S + clientHeight)/ROW_H)
+      // overshoots the true last visible row by about HEADER_H/ROW_H + 1
+      // (~2.1 rows), and columnAt(scrollLeft + clientWidth) is over-inclusive
+      // by up to GUTTER_W (~1 column). Both over-render, never under-render.
+      // So the trailing edge already carries ~2-3 rows of implicit slack on
+      // top of OVERSCAN_ROWS -- do not trim the overscan constants believing
+      // the trailing figure is tight.
       firstCol = clamp(columnAt(scrollLeft, prefix) - OVERSCAN_COLS, 0, maxCol);
       lastCol = clamp(columnAt(scrollLeft + clientWidth, prefix) + OVERSCAN_COLS, 0, maxCol);
     }
 
-    if (
-      lastRow >= firstRow &&
-      (firstRow !== lastRequestedFirst || lastRow !== lastRequestedLast)
-    ) {
+    if (lastRow < firstRow) {
+      // Empty window (total went to 0). Forget the memo: if total grows back
+      // to the same range later, the request must fire again rather than be
+      // suppressed as a duplicate.
+      lastRequestedFirst = -1;
+      lastRequestedLast = -2;
+    } else if (firstRow !== lastRequestedFirst || lastRow !== lastRequestedLast) {
       lastRequestedFirst = firstRow;
       lastRequestedLast = lastRow;
       void explorer.ensurePages(firstRow, lastRow);
@@ -162,13 +175,17 @@
   // calls rowAt(), or a landed page never repaints.
   $: visibleRows = (() => {
     void $explorer.version;
-    // Finding (a) backstop: firstRow/lastRow are kept correct by the
-    // safeTotal trigger above, but this clamp holds even if that ever fails
-    // to fire (e.g. recomputeRange() bails out early because viewportEl
-    // isn't bound yet) -- never iterate past the current total.
+    // Finding (a) backstop. The safeTotal trigger above is the actual fix;
+    // this clamp exists because THIS statement has no declared dependency
+    // edge to it -- firstRow/lastRow are assigned inside recomputeRange(), so
+    // Svelte's topological sorter cannot see them, and the two statements are
+    // ordered only by source position. Move this block above that trigger and
+    // it would render one stale frame; the clamp is what contains that.
+    // Never iterate past the current total.
+    const effectiveFirstRow = clamp(firstRow, 0, Math.max(0, safeTotal - 1));
     const effectiveLastRow = Math.min(lastRow, safeTotal - 1);
     const out: { i: number; row: Row | null }[] = [];
-    for (let i = firstRow; i <= effectiveLastRow; i++) {
+    for (let i = effectiveFirstRow; i <= effectiveLastRow; i++) {
       out.push({ i, row: explorer.rowAt(i).row });
     }
     return out;
@@ -260,6 +277,13 @@
             >
               {#if row && row.cells[c]}
                 <CellView cell={row.cells[c]} align={alignForKind(row.cells[c].kind)} />
+              {:else if row}
+                <!-- Row landed but this column has no cell. That is a real
+                     absence, not a pending fetch, so it must NOT render as a
+                     skeleton (a skeleton promises "will resolve"; this never
+                     will). Render it the same way a genuinely missing value
+                     is rendered. -->
+                <CellView cell={{ kind: CellKind.MISSING }} align="left" />
               {:else}
                 <span class="skeleton-bar"></span>
               {/if}
