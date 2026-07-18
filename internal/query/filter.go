@@ -88,7 +88,12 @@ type CompiledFilter struct {
 // Key returns a canonical, stable cache key for the Filter this predicate was
 // compiled from: two CompiledFilters compiled from the same logical Filter
 // always share a key, and any difference in the Filter produces a different
-// one. A nil *CompiledFilter returns "".
+// one. A nil *CompiledFilter returns "". "" is reserved for the match-all/nil
+// case: any CompiledFilter that carries a non-nil pred MUST have its key set
+// by CompileFilter (never hand-built with key left as the zero value), or it
+// will silently alias whatever is cached under the match-all "" key and
+// callers keyed on it (e.g. memBackend's matchCache) will return the WRONG
+// answer for it.
 func (cf *CompiledFilter) Key() string {
 	if cf == nil {
 		return ""

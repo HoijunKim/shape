@@ -384,7 +384,7 @@ func TestCompiledPlan_FilterKey_StableForIdenticalInput(t *testing.T) {
 		t.Fatalf("FilterKey() = empty string, want a non-empty canonical key")
 	}
 	if p1.FilterKey() != p2.FilterKey() {
-		t.Fatalf("FilterKey() not stable: %q != %q for identical (Filter,Transform)", p1.FilterKey(), p2.FilterKey())
+		t.Fatalf("FilterKey() not stable: %q != %q for two CompilePlan calls over the identical Filter", p1.FilterKey(), p2.FilterKey())
 	}
 }
 
