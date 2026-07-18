@@ -81,6 +81,21 @@
         />
       </div>
       <div class="main">
+        <!-- A5: a MID-SCROLL page-fetch failure must be non-destructive -- it
+             must not discard an already-rendered grid or the user's scroll
+             position (unlike `status === "error"` above, which owns the
+             whole pane and is reserved for an open()-time failure). This bar
+             sits above whichever branch below is showing (almost always the
+             DataTable one, since a page fetch only ever happens once the
+             file is open); dismissing it never touches the store's real
+             data, and Retry re-requests the same row range that failed. -->
+        {#if $explorer.pageError}
+          <div class="page-error-bar" role="alert">
+            <span class="msg">{$explorer.pageError}</span>
+            <button class="retry" on:click={() => explorer.retryPageError()}>Retry</button>
+            <button class="dismiss" on:click={() => explorer.dismissPageError()} aria-label="Dismiss">✕</button>
+          </div>
+        {/if}
         {#if $explorer.columns.length === 0}
           <div class="empty-state">
             <p>No columns detected</p>
@@ -238,6 +253,36 @@
     min-width: 0;
     min-height: 0;
     position: relative;
+  }
+
+  .page-error-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 5; /* above DataTable's sticky header (z-index 3) and corner (4) */
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    background: var(--status-critical-bg);
+    color: var(--status-critical);
+    font-size: 12px;
+    border-bottom: 1px solid var(--status-critical);
+  }
+
+  .page-error-bar .msg {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-error-bar button {
+    flex-shrink: 0;
+    padding: 2px var(--space-2);
+    font-size: 12px;
   }
 
   .empty-state {

@@ -24,12 +24,20 @@ export interface ExplorerState {
   focusPath: string;    // sidebar-selected column path, "" = none
   fetching: boolean;
   version: number;      // bumps whenever a page lands, so views re-read the cache
+  // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
+  // failure, which still owns the whole pane via `status`/`error`) must be
+  // non-destructive -- it must NOT discard an already-rendered grid or the
+  // user's scroll position. "" = no page error outstanding; Explorer.svelte
+  // renders this as a dismissible/retryable `role="alert"` bar ABOVE the
+  // still-mounted DataTable, never in place of it.
+  pageError: string;
 }
 
 const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
+  pageError: "",
 };
 
 function createExplorer() {
@@ -41,6 +49,12 @@ function createExplorer() {
   const inflight = new Map<number, string>(); // page index -> requestId
   let seq = 0;
   let gen = 0; // bumps on open()/close(); a fetch from an older gen must not touch state
+  // A5: the most recent range passed to ensurePages(), so retryPageError()
+  // can re-request the SAME range a failed fetch belonged to without
+  // Explorer.svelte (which has no idea what row range DataTable last
+  // scrolled to) needing to supply one.
+  let lastFirst = 0;
+  let lastLast = 0;
 
   async function open(path: string): Promise<void> {
     const prev = get({ subscribe });
@@ -83,6 +97,8 @@ function createExplorer() {
    *  or in flight. Pages already in flight are left alone; pages no longer
    *  needed are cancelled, so a fast scroll does not queue dead work. */
   async function ensurePages(first: number, last: number): Promise<void> {
+    lastFirst = first;
+    lastLast = last;
     const s = get({ subscribe });
     if (s.status !== "ready" || !s.handle) return;
     const myGen = gen;
@@ -149,8 +165,20 @@ function createExplorer() {
         // anything superseded), so surface it rather than swallowing it --
         // silently discarding it would leave this page's rows as permanent,
         // unexplained, unretriable skeletons.
+        //
+        // A5: this is a MID-SCROLL page fetch, not the open()-time one -- by
+        // the time we get here `status` is already "ready" and a grid may
+        // already be fully rendered with the user scrolled deep into it.
+        // Flipping `status` to "error" (as this used to) would have
+        // Explorer.svelte replace the WHOLE pane with the full-screen error
+        // state, discarding that rendered grid and the scroll position for
+        // one failed page. Record the failure in `pageError` instead --
+        // status/handle/columns/cache are all left exactly as they were, so
+        // the table stays mounted and everything already fetched stays
+        // visible; Explorer.svelte renders this as a dismissible/retryable
+        // bar above it, never in place of it.
         if (myGen !== gen || inflight.get(page) !== reqId) return;
-        update((st) => ({ ...st, status: "error", error: String(e) }));
+        update((st) => ({ ...st, pageError: String(e) }));
       } finally {
         if (inflight.get(page) === reqId) inflight.delete(page);
         if (myGen === gen && inflight.size === 0) update((st) => ({ ...st, fetching: false })); // M4
@@ -169,6 +197,26 @@ function createExplorer() {
 
   function focus(path: string): void { update((s) => ({ ...s, focusPath: path })); }
 
+  /** A5: dismisses a mid-scroll page-fetch error bar without retrying. The
+   *  page that failed is not cached and not in flight (the `finally` above
+   *  always clears it), so it stays an unresolved skeleton until the user
+   *  scrolls it back into view (which re-requests it the normal way) or
+   *  calls retryPageError(). */
+  function dismissPageError(): void {
+    update((s) => ({ ...s, pageError: "" }));
+  }
+
+  /** A5: clears the error bar and re-requests the same row range the failed
+   *  fetch belonged to (lastFirst/lastLast), so "Retry" tries again
+   *  immediately rather than waiting for the user to scroll. Returns the
+   *  underlying ensurePages() promise (rather than firing-and-forgetting it)
+   *  so a caller that cares when the retry actually lands -- e.g. a test --
+   *  can await it; Explorer.svelte's Retry button does not need to. */
+  function retryPageError(): Promise<void> {
+    update((s) => ({ ...s, pageError: "" }));
+    return ensurePages(lastFirst, lastLast);
+  }
+
   async function close(): Promise<void> {
     const s = get({ subscribe });
     if (s.handle) { await CloseSource(s.handle).catch(() => {}); }
@@ -177,7 +225,7 @@ function createExplorer() {
     set({ ...empty });
   }
 
-  return { subscribe, open, ensurePages, rowAt, focus, close };
+  return { subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError };
 }
 
 export const explorer = createExplorer();

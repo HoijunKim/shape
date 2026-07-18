@@ -90,3 +90,73 @@ describe("open() generation guard (C1)", () => {
     expect(s.handle).toBe("handle-B");
   });
 });
+
+describe("mid-scroll page-fetch failure is non-destructive (A5)", () => {
+  it("sets pageError without flipping status to 'error', and leaves the already-cached page readable", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("handle-1"));
+    // open()'s own ensurePages(0, 0) succeeds and lands one real row.
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: -1, totalExact: false,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+
+    await explorer.open("file.ndjson");
+    expect(get(explorer).status).toBe("ready");
+    expect(explorer.rowAt(0).row).not.toBeNull(); // sanity: page 0 really landed
+
+    // A later, mid-scroll fetch for a DIFFERENT page (pageRowsFor(0) === 200,
+    // so row 300 is page 1) fails.
+    vi.mocked(QueryRows).mockRejectedValueOnce(new Error("boom: backend closed"));
+    await explorer.ensurePages(300, 300);
+
+    const s = get(explorer);
+    // The one thing this finding requires: no full-pane error takeover.
+    expect(s.status).toBe("ready");
+    expect(s.error).toBe("");
+    expect(s.handle).toBe("handle-1"); // unchanged -- CloseSource was never called
+    expect(s.pageError).toContain("boom: backend closed");
+    // The already-landed page must still be there -- a mid-scroll failure on
+    // a DIFFERENT page must not evict or clear anything already fetched.
+    expect(explorer.rowAt(0).row).not.toBeNull();
+  });
+
+  it("retryPageError() clears the bar and re-requests the same range that failed", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("handle-2"));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    await explorer.open("file2.ndjson");
+
+    vi.mocked(QueryRows).mockRejectedValueOnce(new Error("transient"));
+    await explorer.ensurePages(300, 300);
+    expect(get(explorer).pageError).toContain("transient");
+
+    const callsBefore = vi.mocked(QueryRows).mock.calls.length;
+    // pageRowsFor(0) === 200, so row 300 is offset 100 within page 1
+    // ([200, 400)) -- the landed row must sit at array position 100 to be
+    // the one rowAt(300) actually reads.
+    const page1Rows = Array.from({ length: 101 }, (_, i) => ({ index: 200 + i, cells: [] }));
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: page1Rows, offset: 200, total: -1, totalExact: false,
+      scanned: 101, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.retryPageError();
+
+    expect(get(explorer).pageError).toBe(""); // bar cleared
+    expect(vi.mocked(QueryRows).mock.calls.length).toBe(callsBefore + 1); // re-requested, not just dismissed
+    expect(explorer.rowAt(300).row).not.toBeNull(); // and the retry actually landed the row
+  });
+
+  it("dismissPageError() clears the bar without re-fetching", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("handle-3"));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    await explorer.open("file3.ndjson");
+
+    vi.mocked(QueryRows).mockRejectedValueOnce(new Error("transient"));
+    await explorer.ensurePages(300, 300);
+    expect(get(explorer).pageError).toContain("transient");
+
+    const callsBefore = vi.mocked(QueryRows).mock.calls.length;
+    explorer.dismissPageError();
+    expect(get(explorer).pageError).toBe("");
+    expect(vi.mocked(QueryRows).mock.calls.length).toBe(callsBefore); // no new fetch
+  });
+});
