@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/profile"
@@ -942,7 +943,7 @@ func parseCellKindConsts(t *testing.T, filename string) map[CellKind]bool {
 
 			typ, values := vs.Type, vs.Values
 			if typ == nil && values == nil {
-				if lastType == nil {
+				if lastType == nil && lastValues == nil {
 					t.Fatalf("const spec %v in %q uses implicit repetition with no preceding spec to inherit from", vs.Names, filename)
 				}
 				typ, values = lastType, lastValues
@@ -951,6 +952,20 @@ func parseCellKindConsts(t *testing.T, filename string) map[CellKind]bool {
 
 			typeIdent, ok := typ.(*ast.Ident)
 			if !ok || typeIdent.Name != "CellKind" {
+				// A Cell-prefixed const that did NOT resolve to an explicit
+				// CellKind type is the one shape that could smuggle in a new
+				// kind unseen -- e.g. `CellFoo = CellKind("foo")`, whose Type
+				// is nil and whose Values are non-nil, so it never reaches the
+				// repetition branch above. Hard-fail rather than skip: this
+				// guard's whole purpose is that an added-but-unregistered kind
+				// cannot pass silently.
+				for _, name := range vs.Names {
+					if strings.HasPrefix(name.Name, "Cell") {
+						t.Fatalf("const %s in %q is Cell-prefixed but has no explicit CellKind type; "+
+							"declare it as `%s CellKind = \"...\"` so this exhaustiveness guard can see it",
+							name.Name, filename, name.Name)
+					}
+				}
 				continue // not a `<name> CellKind = "..."` spec (explicit or inherited)
 			}
 			for i, name := range vs.Names {

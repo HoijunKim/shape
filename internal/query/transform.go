@@ -48,11 +48,18 @@ type Transform struct {
 // set unchanged: Select empty (nothing projected/reordered/renamed/un-capped)
 // AND Drop empty (nothing removed) -- exactly CompileTransform's own "Select
 // empty, Drop empty" case (rule 2 in its doc comment below), which returns
-// cm.Columns unchanged. Engine.QueryRows uses this to decide whose
-// truncation numbers a RowSet should carry: the base ColumnModel's
-// (cm.Truncated/cm.TotalPaths) when identity, or the projected column set's
-// own (never truncated, TotalPaths == len(rs.Columns)) otherwise -- see
-// QueryRows.
+// cm.Columns unchanged.
+//
+// This predicate is NOT what decides whose truncation numbers a RowSet
+// carries. That rule keys on Select alone (see Engine.QueryRows): a Drop-only
+// transform is non-identity by this predicate, yet still inherits the base
+// ColumnModel's cm.Truncated/cm.TotalPaths, because Drop subtracts from the
+// already-capped cm.Columns and so can never reach a path MaxColumns
+// excluded. Only a non-empty Select is an explicitly un-capped projection.
+//
+// It currently has no production caller; it is retained as the tested,
+// literal statement of "this Transform changes nothing" for CompileTransform's
+// rule 2 and for future callers that genuinely need identity, not Select-empty.
 //
 // FlattenObjects is deliberately NOT part of this predicate. Per Transform's
 // doc comment above, FlattenObjects is accepted and carried through the API
