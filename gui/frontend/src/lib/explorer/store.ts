@@ -1,7 +1,7 @@
 import { writable, get } from "svelte/store";
 import { OpenSource, QueryRows, CloseSource, Cancel } from "../../../wailsjs/go/main/App";
 import type { Column, FieldDTO, OpenResult, RowSet } from "./types";
-import { PageCache, pageRowsFor, pagesForRange, rowLocation } from "./paging";
+import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
 
@@ -34,20 +34,36 @@ const empty: ExplorerState = {
 
 function createExplorer() {
   const { subscribe, set, update } = writable<ExplorerState>({ ...empty });
-  let cache = new PageCache(8);
-  let inflight = new Map<number, string>(); // page index -> requestId
+  // M5: both open() and close() reset these the same way (mutate via .clear(),
+  // never reassign) so there is exactly one PageCache/Map instance for the
+  // store's lifetime and no asymmetry between the two reset paths to trip on.
+  const cache = new PageCache(8);
+  const inflight = new Map<number, string>(); // page index -> requestId
   let seq = 0;
   let gen = 0; // bumps on open()/close(); a fetch from an older gen must not touch state
 
   async function open(path: string): Promise<void> {
     const prev = get({ subscribe });
     if (prev.handle) { void CloseSource(prev.handle).catch(() => {}); }
-    gen++;
-    cache = new PageCache(8);
-    inflight = new Map();
+    const myGen = ++gen; // C1: a fetch (here, this whole open()) from an older gen must not touch state
+    cache.clear();
+    inflight.clear();
     set({ ...empty, status: "opening", path });
     try {
       const res: OpenResult = await OpenSource({ path, format: "", table: "", csvRaw: false, budgetMB: 0, requestId: "" } as any);
+      if (myGen !== gen) {
+        // A newer open()/close() landed while this OpenSource() call was in
+        // flight -- e.g. the user opened file B before file A finished
+        // opening. This result belongs to a file the user has already
+        // navigated away from and must not overwrite B's state (nor `path`,
+        // which already reads B). The backend handle this open() produced is
+        // otherwise never closed -- the next open() only closes the CURRENT
+        // state's handle, which by now belongs to someone else -- so close
+        // it here or it leaks (up to a 512MiB in-memory store, or a live
+        // sqlite connection).
+        void CloseSource(res.handle).catch(() => {});
+        return;
+      }
       update((s) => ({
         ...s, status: "ready", handle: res.handle, tier: res.tier, format: res.format,
         warnings: res.warnings ?? [], fields: res.profile?.fields ?? [], columns: res.columns ?? [],
@@ -58,6 +74,7 @@ function createExplorer() {
       }));
       await ensurePages(0, 0);
     } catch (e) {
+      if (myGen !== gen) return; // superseded: a healthy newer file must not be marked errored by this one's failure
       update((s) => ({ ...s, status: "error", error: String(e) }));
     }
   }
@@ -102,30 +119,18 @@ function createExplorer() {
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
         cache.set(page, rs);
 
-        // EOF reconciliation. On the rescan tier `total` starts as
-        // fileSize/avgBytes (spec §4) -- an estimate that misses in BOTH
-        // directions and is systematically LOW, because avgBytes is the decoded
-        // in-memory size per record while fileSize is on-disk bytes
-        // (source.go:146). The backend never corrects it. A landed page is
-        // ground truth for its own range, so use it: a short page (rs.truncated)
-        // pins the real end; a full page at the current tail proves at least one
-        // more page exists. Without this the scrollbar addresses rows that do
-        // not exist (permanent skeletons, indistinguishable from a hung fetch)
-        // or hides rows that do. On the exact tiers it is a no-op: pageEnd
-        // already equals total on the last page.
-        const pageEnd = page * pageRows + rs.rows.length;
+        // EOF reconciliation (I2): a landed page can only ever IMPROVE the
+        // store's total, never downgrade one the backend already gave us
+        // exactly -- see reconcileEof's doc comment in paging.ts for why (an
+        // overscan/prefetch past EOF also comes back truncated, and treating
+        // that as new information would shrink a correct total into a
+        // phantom one).
         update((st) => {
-          let total = rs.total >= 0 ? rs.total : st.total;
-          let totalExact = rs.total >= 0 ? rs.totalExact : st.totalExact;
-          if (rs.truncated) {
-            total = pageEnd;
-            // An entirely empty page past EOF bounds the end from above but does
-            // not prove exactness; the next fetch converges. A short non-empty
-            // page (or an empty page 0) is exact.
-            totalExact = rs.rows.length > 0 || page === 0;
-          } else if (!totalExact && pageEnd >= total) {
-            total = pageEnd + pageRows; // full page at the tail: more to come
-          }
+          const { total, totalExact } = reconcileEof({
+            page, pageRows, rowsLength: rs.rows.length, truncated: rs.truncated,
+            rsTotal: rs.total, rsTotalExact: rs.totalExact,
+            priorTotal: st.total, priorTotalExact: st.totalExact,
+          });
           return {
             ...st, total, totalExact,
             columnsTruncated: rs.columnsTruncated, totalPaths: rs.totalPaths,
@@ -137,13 +142,18 @@ function createExplorer() {
         // must never write to the new file's state. CloseSource does NOT cancel
         // in-flight queries (engine.go: the handle is simply deleted), so such a
         // fetch fails with "unknown handle" or a backend-closed error, never
-        // "context canceled" -- the sentinel below would miss it.
+        // "context canceled" -- so a sentinel matching that string would never
+        // catch the supersede case it might look like it's for (M6: removed;
+        // this file used to have one). A genuine error here belongs to the
+        // still-current file (the gen/reqId guard above already returned for
+        // anything superseded), so surface it rather than swallowing it --
+        // silently discarding it would leave this page's rows as permanent,
+        // unexplained, unretriable skeletons.
         if (myGen !== gen || inflight.get(page) !== reqId) return;
-        if (String(e).includes("context canceled")) return; // expected on supersede
         update((st) => ({ ...st, status: "error", error: String(e) }));
       } finally {
         if (inflight.get(page) === reqId) inflight.delete(page);
-        if (inflight.size === 0) update((st) => ({ ...st, fetching: false }));
+        if (myGen === gen && inflight.size === 0) update((st) => ({ ...st, fetching: false })); // M4
       }
     }));
   }

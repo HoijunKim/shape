@@ -32,6 +32,58 @@ export function rowLocation(index: number, pageRows: number): { page: number; of
   return { page, offset: index - page * pageRows };
 }
 
+export interface EofReconcileInput {
+  page: number;             // page index this RowSet answers
+  pageRows: number;         // rows requested per page
+  rowsLength: number;       // rs.rows.length actually returned
+  truncated: boolean;       // rs.truncated
+  rsTotal: number;          // rs.total (-1 = backend did not supply one)
+  rsTotalExact: boolean;    // rs.totalExact, meaningful only when rsTotal >= 0
+  priorTotal: number;       // st.total before this page landed
+  priorTotalExact: boolean; // st.totalExact before this page landed
+}
+
+/** Reconciles the store's total/totalExact against one landed page.
+ *  Extracted from store.ts's ensurePages so the EOF arithmetic (I2) has its
+ *  own unit test independent of the Wails bridge.
+ *
+ *  On the rescan tier `total` starts as fileSize/avgBytes (spec S4) -- an
+ *  estimate that misses in both directions and that the backend never
+ *  corrects. A landed page is ground truth for its own range: a short page
+ *  (truncated) pins the real end; a full page at the current tail proves at
+ *  least one more page exists. Without this the scrollbar addresses rows
+ *  that do not exist (permanent skeletons) or hides rows that do.
+ *
+ *  rs.total/rs.totalExact are authoritative whenever the backend supplied
+ *  them (rsTotal >= 0). store.ts's page fetches always pass wantTotal:
+ *  false, so this is normally a no-op EXCEPT on the memory tier, where
+ *  internal/query/memstore.go ignores wantTotal and always returns the exact
+ *  count with TotalExact: true on every single page -- so for that tier
+ *  rsTotal is >= 0 on every call, not just when wantTotal is requested. */
+export function reconcileEof(input: EofReconcileInput): { total: number; totalExact: boolean } {
+  const { page, pageRows, rowsLength, truncated, rsTotal, rsTotalExact, priorTotal, priorTotalExact } = input;
+  let total = rsTotal >= 0 ? rsTotal : priorTotal;
+  let totalExact = rsTotal >= 0 ? rsTotalExact : priorTotalExact;
+  const pageEnd = page * pageRows + rowsLength;
+  // I2: `!totalExact` guards this branch using the value already reconciled
+  // above (backend-authoritative when rsTotal >= 0, else the prior value) --
+  // a landed page can only ever IMPROVE the total, never downgrade one the
+  // store already holds exactly. Without this guard, an overscan/prefetch
+  // page requested past EOF also comes back truncated with 0 rows, and would
+  // shrink a correct total into a phantom `pageEnd` and flip totalExact
+  // true -> false.
+  if (truncated && !totalExact) {
+    total = pageEnd;
+    // An entirely empty page past EOF bounds the end from above but does
+    // not prove exactness; the next fetch converges. A short non-empty
+    // page (or an empty page 0) is exact.
+    totalExact = rowsLength > 0 || page === 0;
+  } else if (!totalExact && pageEnd >= total) {
+    total = pageEnd + pageRows; // full page at the tail: more to come
+  }
+  return { total, totalExact };
+}
+
 /** LRU cache of fetched pages, so scrolling back is instant and memory stays
  *  bounded regardless of how far the user scrolls. */
 export class PageCache {

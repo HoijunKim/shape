@@ -25,4 +25,19 @@ describe("buildTree", () => {
     const t = buildTree([f("b"), f("a")]);
     expect(t.map((n) => n.name)).toEqual(["b", "a"]);
   });
+  // M7: depth >= 3 was previously uncovered -- the `siblings = node.children`
+  // descent (tree.ts:34) is the only non-trivial line in the function, and a
+  // bug that attached grandchildren to `roots` instead of their parent would
+  // pass every test above.
+  it("attaches grandchildren under their parent, not under roots, at depth >= 3", () => {
+    const t = buildTree([f("a.b.c"), f("a.b.d"), f("a.e")]);
+    expect(t.map((n) => n.name)).toEqual(["a"]); // exactly one root
+    const a = t[0];
+    expect(a.children.map((n) => n.name)).toEqual(["b", "e"]);
+    const b = a.children[0];
+    expect(b.field).toBe(null); // synthetic interior node, no field of its own
+    expect(b.children.map((n) => n.name)).toEqual(["c", "d"]);
+    expect(b.children.map((n) => n.path)).toEqual(["a.b.c", "a.b.d"]);
+    expect(a.children[1].children).toEqual([]); // "a.e" is a leaf
+  });
 });
