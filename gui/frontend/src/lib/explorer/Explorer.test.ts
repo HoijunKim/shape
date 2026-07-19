@@ -347,6 +347,86 @@ describe("Explorer", () => {
       // would leave this null regardless of the gate fix.
       expect(target.textContent).toContain("a hypothetical non-rescan warning");
     });
+
+    it("wires tier straight through", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h8-tier", columns, fields);
+      res.tier = "rescan";
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("tiered.ndjson");
+      await tick();
+      await tick();
+
+      // Regression: `tier=""` (or any other constant/empty binding) would
+      // leave `.tier` unrendered (StatusBar.svelte's `{#if tier}` gate).
+      expect(target.querySelector(".tier")?.textContent).toBe("rescan");
+    });
+
+    // T9 IMPORTANT-3: `rowsLoaded={$explorer.version > 0}` (Explorer.svelte)
+    // is the only thing standing between a rescan-tier `fileSize/avgBytes`
+    // pre-open estimate that floors to 0 and the UI confidently lying "0
+    // rows" before the first page has even landed to confirm it
+    // (rowCount.ts's `total === 0 && !rowsLoaded` branch). Mutating the prop
+    // to a hardcoded `true` survived the entire pre-T9 suite because no
+    // fixture ever sat in that exact state (total: 0, totalExact: false,
+    // no page landed yet). `fetching` gets the same before/after treatment
+    // here for free, since both flip on the same page-landing boundary.
+    it("wires rowsLoaded and fetching straight through: 'counting...' (not '0 rows') before the first page lands, then flips once it does", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h9-rowsloaded", columns, fields);
+      res.tier = "rescan";
+      res.sampled = true;
+      res.rowEstimate = 0; // a rescan-tier fileSize/avgBytes estimate that floors to 0
+      res.rowExact = false;
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+
+      // Defer QueryRows's resolution so the "open() succeeded, but no page
+      // has landed yet" window is directly observable rather than flashing
+      // by within a single microtask.
+      let resolveFirstPage!: (rs: unknown) => void;
+      const firstPage = new Promise((resolve) => { resolveFirstPage = resolve; });
+      vi.mocked(QueryRows).mockReturnValueOnce(firstPage as any);
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      const openPromise = explorer.open("empty-estimate.ndjson"); // not awaited: ensurePages(0,0) is left pending
+      await Promise.resolve();
+      await tick();
+      await tick();
+
+      // Sanity: open() itself resolved (status is "ready") and the pending
+      // page fetch is in flight -- both required for this window to mean
+      // anything.
+      expect(get(explorer).status).toBe("ready");
+      expect(get(explorer).version).toBe(0);
+
+      // fetching wiring: the open()-triggered ensurePages(0,0) call has not
+      // resolved yet.
+      expect(target.querySelector(".loading")).toBeTruthy();
+      // rowsLoaded wiring: total is 0, totalExact is false, and no page has
+      // landed -- must defer to "counting...", never claim "0 rows" (or,
+      // per formatRowCount, "~0 rows").
+      const metric = target.querySelector(".metric.mono") as HTMLElement;
+      expect(metric.textContent).toBe("counting…");
+
+      resolveFirstPage(rowSetFor(columns)); // total: 10, totalExact: true
+      await openPromise;
+      await tick();
+      await tick();
+
+      // Regression: a hardcoded `fetching={false}` would already have hidden
+      // the pip above; a hardcoded `fetching={true}` fails here instead.
+      expect(target.querySelector(".loading")).toBeNull();
+      // Regression: a hardcoded `rowsLoaded={true}` would have already
+      // failed the pre-load assertion above (it would have shown "~0 rows"
+      // instead of "counting..."), proving the flip below is driven by the
+      // real store field, not a constant.
+      expect((target.querySelector(".metric.mono") as HTMLElement).textContent).toBe("10 rows");
+    });
   });
 
   // A5: a mid-scroll page-fetch failure must render as a dismissible bar
