@@ -64,7 +64,20 @@ function createExplorer() {
     inflight.clear();
     set({ ...empty, status: "opening", path });
     try {
-      const res: OpenResult = await OpenSource({ path, format: "", table: "", csvRaw: false, budgetMB: 0, requestId: "" } as any);
+      // I-1: send a per-open unique, monotonically-increasing requestId
+      // (`open${myGen}`) rather than "". Wails runs every binding call in its
+      // own goroutine, so two overlapping OpenSource calls can race to reach
+      // Go's own ordering bookkeeping in EITHER order -- completion order
+      // alone (which the openSeq guard already handles) isn't the only place
+      // that race can hide; the goroutines can also race for which one's
+      // bookkeeping runs first, independent of which one JS actually issued
+      // first. myGen is already correctly ordered (JS is single-threaded, so
+      // it's incremented in real call order); encoding it into requestId
+      // lets Go key its own ordering off that authoritative value instead of
+      // off Go-side arrival order, closing that race at the source rather
+      // than trying to out-guess goroutine scheduling. See gui/app.go's
+      // resolveOpenSeq for the Go side of this fix.
+      const res: OpenResult = await OpenSource({ path, format: "", table: "", csvRaw: false, budgetMB: 0, requestId: `open${myGen}` } as any);
       if (myGen !== gen) {
         // A newer open()/close() landed while this OpenSource() call was in
         // flight -- e.g. the user opened file B before file A finished

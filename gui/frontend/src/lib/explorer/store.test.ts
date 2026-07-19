@@ -52,6 +52,23 @@ describe("open() generation guard (C1)", () => {
     const openA = explorer.open("fileA"); // gen -> 1, OpenSource("fileA") pending
     const openB = explorer.open("fileB"); // gen -> 2; prev.handle === "" here, so A is NOT closed by open(B)
 
+    // I-1: each open() must send its own gen, not a constant "", as
+    // requestId -- that's what lets Go's resolveOpenSeq key ordering off the
+    // client's already-correctly-ordered counter instead of off Go-side
+    // goroutine arrival order. A regression back to requestId: "" would not
+    // be caught by this suite's other assertions (the mocked OpenSource here
+    // ignores its argument entirely), only by inspecting the calls directly.
+    // `gen` is module-level state that this describe block's earlier tests
+    // (in file execution order) may have already advanced -- close() bumps
+    // it but never resets it to 0 -- so this asserts the shape and the
+    // relative step (B's gen is exactly one more than A's), not literal
+    // "open1"/"open2" values.
+    const reqIdA = (vi.mocked(OpenSource).mock.calls[0][0] as any).requestId as string;
+    const reqIdB = (vi.mocked(OpenSource).mock.calls[1][0] as any).requestId as string;
+    expect(reqIdA).toMatch(/^open\d+$/);
+    expect(reqIdB).toMatch(/^open\d+$/);
+    expect(Number(reqIdB.slice("open".length))).toBe(Number(reqIdA.slice("open".length)) + 1);
+
     b.resolve(openResult("handle-B"));
     await openB;
     expect(get(explorer).path).toBe("fileB");

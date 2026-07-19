@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/hoijun-kim/shape/internal/diff"
@@ -39,7 +41,18 @@ type App struct {
 
 	mu      sync.Mutex
 	handle  string // current open source handle; "" when none
-	openSeq uint64 // bumped at the START of every OpenSource call (see below)
+	openSeq uint64 // ordering counter; see resolveOpenSeq
+
+	// openGate, if non-nil, runs at the very top of OpenSource -- before
+	// resolveOpenSeq's bookkeeping. Production code (NewApp) never sets it;
+	// it exists so a test can pin, deterministically, which of two
+	// concurrent OpenSource calls reaches that bookkeeping first (I-1's
+	// regression test, TestAppOpenSourceHonorsInvertedGenArrival). Reading it
+	// without a.mu is safe: a test always finishes constructing the *App
+	// (including this field) before the `go` statements that later read it,
+	// and the Go memory model guarantees a goroutine's start happens-after
+	// everything that precedes its `go` statement.
+	openGate func()
 }
 
 func NewApp() *App { return &App{eng: query.NewEngine()} }
@@ -72,30 +85,99 @@ func (a *App) reqCtx() context.Context {
 	return a.ctx
 }
 
+// openGenRequestIDPrefix is the RequestID prefix store.ts's open() sends:
+// "open" followed by its own monotonically-increasing `gen` counter (e.g.
+// "open2"). Any other RequestID -- "", an unparseable value, or one from a
+// caller that isn't store.ts (store.ts is OpenSource's sole caller in the
+// running app; the Go tests in this package are the other caller and always
+// leave RequestID "") -- falls back to resolveOpenSeq's legacy a.openSeq++
+// scheme.
+const openGenRequestIDPrefix = "open"
+
+// parseOpenGen extracts N from a RequestID of the form "open<N>". ok is false
+// for "", for anything not matching that exact shape, or for a suffix that
+// doesn't parse as a uint64.
+func parseOpenGen(requestID string) (n uint64, ok bool) {
+	rest := strings.TrimPrefix(requestID, openGenRequestIDPrefix)
+	if rest == requestID || rest == "" { // no prefix, or prefix with nothing after it
+		return 0, false
+	}
+	v, err := strconv.ParseUint(rest, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// resolveOpenSeq computes this OpenSource call's position in the open
+// ordering and records it into a.openSeq.
+//
+// I-1 review fix: the previous scheme (a.openSeq++ at the top of OpenSource)
+// assigned mySeq by ARRIVAL order at this lock -- but Wails v2.12.0 runs
+// every binding call in its own goroutine
+// (internal/frontend/desktop/windows/frontend.go:756), so two overlapping
+// OpenSource calls race to reach this bookkeeping, and whichever goroutine's
+// call the Go scheduler happens to run first got the lower (i.e. "older")
+// number, REGARDLESS of which one store.ts actually issued first. JS issues
+// open(A) then open(B) and treats B as current; if goroutine B won that
+// race, Go would assign B mySeq=1 and A mySeq=2 -- Go then adopts A and
+// self-closes B, and every later QueryRows(B's handle) fails "unknown
+// handle": the original symptom, reached by a goroutine-scheduling route
+// instead of a completion-order one.
+//
+// The fix is to stop deriving ordering from arrival order at all. store.ts
+// is OpenSource's sole caller and already owns a `gen` counter that decides
+// what the UI displays; that counter is incremented synchronously in real
+// JS call order (JS is single-threaded), so when RequestID parses as
+// store.ts's "open<N>", N -- not this method's own arrival order -- is
+// authoritative: a.openSeq becomes max(a.openSeq, N) rather than an
+// unconditional increment. max is commutative, so whichever of two racing
+// goroutines reaches this critical section first, the final a.openSeq (and
+// each call's own mySeq, its own N) comes out the same either way --
+// ordering no longer depends on Go's goroutine scheduling, only on values
+// store.ts already computed correctly. See
+// TestAppOpenSourceHonorsInvertedGenArrival, which pins exactly the
+// "goroutine B's bookkeeping runs first despite carrying the OLDER gen"
+// inversion this closes.
+//
+// Any RequestID that doesn't parse this way (including "", the Go tests'
+// only caller convention) falls back to the original a.openSeq++ scheme, so
+// non-store callers are unaffected.
+func (a *App) resolveOpenSeq(requestID string) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n, ok := parseOpenGen(requestID); ok {
+		if n > a.openSeq {
+			a.openSeq = n
+		}
+		return n
+	}
+	a.openSeq++
+	return a.openSeq
+}
+
 // OpenSource opens a data file for exploration and returns its structure map,
 // column set, and tier (spec §8). Any previously open source is closed first.
 //
-// Wails v2.12.0 runs every binding call in its own goroutine
-// (internal/frontend/desktop/windows/frontend.go:756), so two overlapping
-// OpenSource calls (a slow rescan-tier open racing a fast one started after
-// it) can COMPLETE in either order -- completion order alone must never
-// decide which one "wins". openSeq is bumped once per call, at the moment it
-// starts, and captured into mySeq; after the (possibly slow) a.eng.OpenSource
-// call returns, mySeq is compared against the CURRENT a.openSeq. If a newer
-// call has started in the meantime, this one is stale: it must not touch
-// a.handle (a newer open may already have become current and must not be
-// displaced by an older one finishing late) and must close its OWN
-// just-opened backend itself (rather than relying on the JS layer's
-// store.ts:78 generation guard, which cannot see this race at all -- it only
-// guards its own JS-side gen counter, not Go's completion order). Closing our
+// Two overlapping OpenSource calls (a slow rescan-tier open racing a fast one
+// started after it) can COMPLETE in either order -- completion order alone
+// must never decide which one "wins". mySeq (see resolveOpenSeq) is
+// established once per call, at the moment it starts; after the (possibly
+// slow) a.eng.OpenSource call returns, mySeq is compared against the CURRENT
+// a.openSeq. If a newer call has started in the meantime, this one is stale:
+// it must not touch a.handle (a newer open may already have become current
+// and must not be displaced by an older one finishing late) and must close
+// its OWN just-opened backend itself (rather than relying on the JS layer's
+// store.ts:78 generation guard, which cannot see a Go-side completion-order
+// race at all -- it only guards its own JS-side gen counter). Closing our
 // own handle here is safe even if the JS side also races to close it later:
 // CloseSource on an already-closed/unknown handle just errors, which callers
 // already ignore (see CloseSource below).
 func (a *App) OpenSource(req query.OpenRequest) (query.OpenResult, error) {
-	a.mu.Lock()
-	a.openSeq++
-	mySeq := a.openSeq
-	a.mu.Unlock()
+	if a.openGate != nil {
+		a.openGate()
+	}
+	mySeq := a.resolveOpenSeq(req.RequestID)
 
 	res, err := a.eng.OpenSource(a.reqCtx(), req)
 	if err != nil {

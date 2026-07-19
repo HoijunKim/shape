@@ -210,6 +210,121 @@ func TestAppOpenSourceNeverDisplacesANewerOpen(t *testing.T) {
 	}
 }
 
+// TestAppOpenSourceHonorsInvertedGenArrival is I-1's required regression
+// test. It uses App's openGate hook, which runs at the very start of
+// OpenSource -- before resolveOpenSeq's bookkeeping -- to pin
+// deterministically which of two concurrent OpenSource calls reaches that
+// bookkeeping first. This is a DIFFERENT seam than gatedOpenEngine above:
+// gatedOpenEngine can only pin COMPLETION order (its gate sits inside
+// a.eng.OpenSource, which resolveOpenSeq has already run by the time either
+// call reaches it); openGate pins bookkeeping-ARRIVAL order, which is what
+// this test needs to reproduce I-1 (a race at `a.mu.Lock(); a.openSeq++`
+// itself, not at the engine call after it).
+//
+// It is deliberately a DIFFERENT race than
+// TestAppOpenSourceNeverDisplacesANewerOpen's: that test inverts COMPLETION
+// order (A starts first, B finishes first) and is already satisfied by the
+// openSeq guard alone, independent of I-1. This test inverts
+// BOOKKEEPING-ARRIVAL order instead -- the exact race I-1 describes: A (JS
+// gen "open1", the file opened FIRST) is gated so its resolveOpenSeq call
+// runs LAST, while B (JS gen "open2", opened SECOND) runs its resolveOpenSeq
+// call, and its entire OpenSource call, to completion FIRST -- entirely
+// before A's bookkeeping runs at all. Note COMPLETION order here is
+// perfectly normal (B finishes before A even starts) -- the only inversion
+// is in which goroutine's bookkeeping the Go scheduler happened to run
+// first, independent of which gen it carries.
+//
+// Under the OLD a.openSeq++ scheme (arrival-order-based, blind to
+// RequestID), this alone reproduces the CRITICAL finding's bug: whichever
+// call's bookkeeping runs first gets assigned the LOWER internal number, so
+// B (running first here) would get mySeq=1 and A (running second) mySeq=2 --
+// old code would then treat A, not B, as "current" once A finishes: it
+// adopts A's handle and closes B's out from under the caller, exactly
+// backwards from what store.ts's own gen counter (and the user) expects.
+// This is the same failure shape as the CRITICAL finding, reached via a
+// goroutine-scheduling route instead of a completion-order one -- see
+// OpenSource's and resolveOpenSeq's doc comments.
+//
+// The fix (parsing N out of RequestID and folding it into a.openSeq via
+// max(), see resolveOpenSeq) makes the result depend only on the gen VALUES
+// carried in RequestID, not on which call's bookkeeping happens to run
+// first, so B (gen 2) must still be the adopted handle here despite running
+// through bookkeeping and the engine call entirely before A's bookkeeping
+// even starts.
+func TestAppOpenSourceHonorsInvertedGenArrival(t *testing.T) {
+	gateEntered := make(chan struct{})
+	releaseA := make(chan struct{})
+	var gateCalls int64
+
+	a := &App{eng: query.NewEngine()}
+	a.openGate = func() {
+		// Only the FIRST call to reach the gate blocks. Because the test
+		// below starts A's goroutine and waits for gateEntered (proving A is
+		// genuinely blocked here) before calling B at all, A is guaranteed to
+		// be the first call to reach this gate and B the second -- so A
+		// blocks and B passes straight through, regardless of how the Go
+		// scheduler would otherwise have interleaved them.
+		if atomic.AddInt64(&gateCalls, 1) == 1 {
+			close(gateEntered)
+			<-releaseA
+		}
+	}
+
+	type openOutcome struct {
+		res query.OpenResult
+		err error
+	}
+	aDone := make(chan openOutcome, 1)
+	go func() {
+		res, err := a.OpenSource(query.OpenRequest{RequestID: "open1", Path: sampleNDJSON}) // A: older gen, opened first
+		aDone <- openOutcome{res, err}
+	}()
+
+	select {
+	case <-gateEntered: // A has genuinely reached openGate and is blocked there, before its own resolveOpenSeq call
+	case <-time.After(5 * time.Second):
+		t.Fatal("A (open1) never reached openGate")
+	}
+
+	// B: newer gen, opened second -- runs its ENTIRE OpenSource call
+	// (bookkeeping through completion) while A remains blocked before its
+	// own bookkeeping.
+	b, err := a.OpenSource(query.OpenRequest{RequestID: "open2", Path: sampleNDJSON})
+	if err != nil {
+		t.Fatalf("OpenSource (B, open2): %v", err)
+	}
+
+	close(releaseA) // only now let A's bookkeeping, and the rest of its call, run
+
+	var aOut openOutcome
+	select {
+	case aOut = <-aDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("A (open1) never returned after being released")
+	}
+	if aOut.err != nil {
+		t.Fatalf("OpenSource (A, open1): %v", aOut.err)
+	}
+	if aOut.res.Handle == b.Handle {
+		t.Fatalf("expected distinct handles for A and B, got %q both times", b.Handle)
+	}
+
+	// The crux: B (the newer gen) must be the adopted handle, even though its
+	// bookkeeping+completion ran entirely before A's bookkeeping even started.
+	a.mu.Lock()
+	gotHandle := a.handle
+	a.mu.Unlock()
+	if gotHandle != b.Handle {
+		t.Errorf("a.handle = %q, want %q (B's handle, the newer gen)", gotHandle, b.Handle)
+	}
+	if _, err := a.QueryRows(query.QueryRequest{Handle: b.Handle, Limit: 10}); err != nil {
+		t.Errorf("QueryRows(B's handle): %v, want nil", err)
+	}
+	if _, err := a.QueryRows(query.QueryRequest{Handle: aOut.res.Handle, Limit: 10}); err == nil {
+		t.Error("QueryRows(A's handle) after A went stale: want error (self-closed), got nil")
+	}
+}
+
 func TestAppQueryRowsUnknownHandle(t *testing.T) {
 	a := NewApp()
 	if _, err := a.QueryRows(query.QueryRequest{Handle: "no-such-handle", Limit: 10}); err == nil {
