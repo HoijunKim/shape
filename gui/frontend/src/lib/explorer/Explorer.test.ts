@@ -413,6 +413,13 @@ describe("Explorer", () => {
       // anything.
       expect(get(explorer).status).toBe("ready");
       expect(get(explorer).version).toBe(0);
+      // M-3: pin `total` itself, not just the rendered text. Without this,
+      // a regression that left `total` at its default -1 (rowEstimate never
+      // flowing through) would still show "counting…" below -- but via
+      // rowCount.ts's OTHER "counting…" branch (`total < 0`), not the
+      // `total === 0 && !rowsLoaded` branch this test exists to cover -- so
+      // the textContent assertion alone could pass for the wrong reason.
+      expect(get(explorer).total).toBe(0);
 
       // fetching wiring: the open()-triggered ensurePages(0,0) call has not
       // resolved yet.

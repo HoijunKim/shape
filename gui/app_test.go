@@ -208,6 +208,20 @@ func TestAppOpenSourceNeverDisplacesANewerOpen(t *testing.T) {
 	if _, err := a.QueryRows(query.QueryRequest{Handle: first.res.Handle, Limit: 10}); err == nil {
 		t.Error("QueryRows(A's handle) after A went stale: want error (self-closed), got nil")
 	}
+	// M-2: pin a.handle itself, not just queryability. Both assertions above
+	// would also pass if the fix erroneously left a.handle == "" (a real
+	// leak: B's backend would stay registered in the engine forever, since
+	// the next open() only closes whatever a.handle currently names, and
+	// CloseSource(B) is never called by anyone in that scenario) -- B would
+	// still answer QueryRows (it's still registered in the engine, just not
+	// tracked as "current"), and A would still be unqueryable (self-closed on
+	// the stale path either way).
+	a.mu.Lock()
+	gotHandle := a.handle
+	a.mu.Unlock()
+	if gotHandle != second.Handle {
+		t.Errorf("a.handle = %q, want %q (B's handle)", gotHandle, second.Handle)
+	}
 }
 
 // TestAppOpenSourceHonorsInvertedGenArrival is I-1's required regression
@@ -396,6 +410,66 @@ func TestAppShutdownClosesLastOpenHandle(t *testing.T) {
 func TestAppShutdownWithNoOpenHandle(t *testing.T) {
 	a := NewApp()
 	a.shutdown(context.Background()) // must not panic
+}
+
+// TestAppShutdownRacingInFlightOpenSourceDoesNotReadopt pins M-1: shutdown
+// clears a.handle and closes it, but an OpenSource call still inside
+// a.eng.OpenSource at that moment must not complete afterward and RE-ADOPT
+// a.handle (it would find prev == "" -- shutdown already cleared it -- and
+// read that as "nothing to close", setting a.handle to its own just-opened
+// handle). That backend is then never closed by anyone: exactly the "defeats
+// the shutdown commit in the one case it targets" bug M-1 describes. The fix
+// bumps a.openSeq inside shutdown's own critical section, so such a call
+// finds itself stale once it returns and self-closes instead of adopting.
+func TestAppShutdownRacingInFlightOpenSourceDoesNotReadopt(t *testing.T) {
+	g := &gatedOpenEngine{
+		Engine:       query.NewEngine(),
+		gateEntered:  make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	a := &App{eng: g}
+
+	type openOutcome struct {
+		res query.OpenResult
+		err error
+	}
+	openDone := make(chan openOutcome, 1)
+	go func() {
+		res, err := a.OpenSource(query.OpenRequest{Path: sampleNDJSON})
+		openDone <- openOutcome{res, err}
+	}()
+
+	select {
+	case <-g.gateEntered: // the open has genuinely entered the engine and is blocked there
+	case <-time.After(5 * time.Second):
+		t.Fatal("OpenSource never reached the engine")
+	}
+
+	a.shutdown(context.Background()) // teardown races the still-in-flight open
+
+	close(g.releaseFirst) // now let the open proceed to completion
+
+	var out openOutcome
+	select {
+	case out = <-openDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OpenSource never returned after being released")
+	}
+	if out.err != nil {
+		t.Fatalf("OpenSource: %v", out.err)
+	}
+
+	// The crux: the late-completing open must have self-closed, not
+	// re-adopted a.handle post-teardown.
+	a.mu.Lock()
+	gotHandle := a.handle
+	a.mu.Unlock()
+	if gotHandle != "" {
+		t.Errorf(`a.handle = %q after shutdown raced an in-flight open, want "" (must not re-adopt post-teardown)`, gotHandle)
+	}
+	if _, err := a.QueryRows(query.QueryRequest{Handle: out.res.Handle, Limit: 10}); err == nil {
+		t.Error("QueryRows on the late-completing open's handle: want error (self-closed), got nil")
+	}
 }
 
 func TestAppRowSetMarshals(t *testing.T) {

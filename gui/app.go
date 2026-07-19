@@ -65,10 +65,20 @@ func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 // e.g. a sqlite connection's db.Close() -- never runs; process exit reclaims
 // the OS-level resource anyway, so this is not a live leak, but a graceful
 // close is still the right thing to do rather than relying on that.
+//
+// M-1 review fix: bumping a.openSeq here, in the SAME critical section that
+// clears a.handle, forces any OpenSource call still inside a.eng.OpenSource
+// at this moment to find itself stale once it returns (its captured mySeq
+// can no longer equal the post-bump a.openSeq) -- see resolveOpenSeq. Without
+// this, such a call would complete after shutdown, see prev == "" (this
+// method already cleared a.handle), and set a.handle = its own handle: a
+// live backend re-adopted after teardown, and the very backend this method
+// exists to close is then never closed by anyone.
 func (a *App) shutdown(ctx context.Context) {
 	a.mu.Lock()
 	h := a.handle
 	a.handle = ""
+	a.openSeq++
 	a.mu.Unlock()
 	if h != "" {
 		_ = a.eng.CloseSource(h)
