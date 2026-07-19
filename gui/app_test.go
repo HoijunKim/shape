@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hoijun-kim/shape/internal/query"
 )
@@ -108,6 +111,102 @@ func TestAppOpenSourceClosesPrevious(t *testing.T) {
 	}
 	if _, err := a.QueryRows(query.QueryRequest{Handle: first.Handle, Limit: 10}); err == nil {
 		t.Error("QueryRows on the closed first handle: want error, got nil")
+	}
+}
+
+// gatedOpenEngine wraps a real *query.Engine and, on its FIRST OpenSource
+// call only, blocks (after signalling gateEntered) until the test releases
+// releaseFirst -- mirroring internal/query/engine_test.go's
+// gatedCountingQueryBackend: no sleep, no scheduling-luck timing margin. This
+// lets a test deterministically start call A, wait until it has genuinely
+// entered the engine (proven by gateEntered firing), start call B and let it
+// run to completion FIRST, and only then release A -- reproducing the
+// "last-to-COMPLETE, not last-to-START" race from the CRITICAL review finding
+// with channels pinning the order instead of gambling on goroutine scheduling.
+type gatedOpenEngine struct {
+	*query.Engine
+	calls        int64
+	gateEntered  chan struct{}
+	releaseFirst chan struct{}
+}
+
+func (g *gatedOpenEngine) OpenSource(ctx context.Context, req query.OpenRequest) (query.OpenResult, error) {
+	if atomic.AddInt64(&g.calls, 1) == 1 {
+		close(g.gateEntered)
+		<-g.releaseFirst
+	}
+	return g.Engine.OpenSource(ctx, req)
+}
+
+// TestAppOpenSourceNeverDisplacesANewerOpen is the CRITICAL review fix's
+// required regression test: it drives two OpenSource calls (A, started
+// first; B, started second) whose COMPLETION order is deliberately inverted
+// -- A is gated so B finishes first -- and asserts that B (the second-
+// started, first-completed handle) remains the live one: QueryRows on it
+// must still succeed once both calls have returned. Without the openSeq
+// guard, A's late completion would see a.handle == B (set when B finished)
+// and, believing itself newer just because it finished last, overwrite
+// a.handle with its own handle AND close B's backend out from under the
+// still-current view -- exactly the "open slow file A, open fast file B, B
+// renders ready, A then closes B" trace in the review. This is verified by
+// reverting the openSeq fix in app.go: the test fails (QueryRows on B's
+// handle then errors "unknown handle") -- see the task report for the exact
+// failure output.
+func TestAppOpenSourceNeverDisplacesANewerOpen(t *testing.T) {
+	g := &gatedOpenEngine{
+		Engine:       query.NewEngine(),
+		gateEntered:  make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	a := &App{eng: g}
+
+	type openOutcome struct {
+		res query.OpenResult
+		err error
+	}
+	firstDone := make(chan openOutcome, 1)
+	go func() {
+		res, err := a.OpenSource(query.OpenRequest{Path: sampleNDJSON}) // A: started first
+		firstDone <- openOutcome{res, err}
+	}()
+
+	select {
+	case <-g.gateEntered: // A has genuinely entered the engine and is blocked there
+	case <-time.After(5 * time.Second):
+		t.Fatal("first OpenSource call (A) never reached the engine")
+	}
+
+	second, err := a.OpenSource(query.OpenRequest{Path: sampleNDJSON}) // B: started second, runs to completion FIRST
+	if err != nil {
+		t.Fatalf("OpenSource (B, second-started): %v", err)
+	}
+
+	close(g.releaseFirst) // only now let A (first-started) proceed to completion
+
+	var first openOutcome
+	select {
+	case first = <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first OpenSource call (A) never returned after being released")
+	}
+	if first.err != nil {
+		t.Fatalf("OpenSource (A, first-started): %v", first.err)
+	}
+	if first.res.Handle == second.Handle {
+		t.Fatalf("expected distinct handles for A and B, got %q both times", first.res.Handle)
+	}
+
+	// The crux of the fix: B (second-started, first-completed) must still be
+	// queryable -- A's late completion must not have closed it out from
+	// under the caller.
+	if _, err := a.QueryRows(query.QueryRequest{Handle: second.Handle, Limit: 10}); err != nil {
+		t.Errorf("QueryRows(B's handle) after A's inverted-order completion: %v, want nil", err)
+	}
+	// A's own late-arriving open must self-close rather than becoming
+	// current: it must not still be the live handle, and must itself be
+	// unqueryable now (it closed its own backend on the stale path).
+	if _, err := a.QueryRows(query.QueryRequest{Handle: first.res.Handle, Limit: 10}); err == nil {
+		t.Error("QueryRows(A's handle) after A went stale: want error (self-closed), got nil")
 	}
 }
 

@@ -13,16 +13,33 @@ import (
 	wr "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// sourceEngine is the subset of *query.Engine that App drives. Extracted so a
+// test can substitute a fake that gates OpenSource's completion deterministically
+// (house pattern: channels, not sleeps -- mirrors internal/query/engine_test.go's
+// gatedCountingQueryBackend), which query.Engine's own unexported registry
+// cannot be hooked into from this package. *query.Engine satisfies this
+// structurally; see the compile-time assertion below.
+type sourceEngine interface {
+	OpenSource(ctx context.Context, req query.OpenRequest) (query.OpenResult, error)
+	QueryRows(ctx context.Context, req query.QueryRequest) (query.RowSet, error)
+	CountMatches(ctx context.Context, req query.CountRequest) (query.CountResult, error)
+	Cancel(requestID string) error
+	CloseSource(handle string) error
+}
+
+var _ sourceEngine = (*query.Engine)(nil)
+
 // App is the Wails-bound application. Every exported method becomes a callable
 // TypeScript binding. App owns exactly one query.Engine and, at most one open
 // source at a time: opening a new one closes the previous handle so a memory-
 // tier store (up to 512 MiB) or a sqlite connection is never leaked.
 type App struct {
 	ctx context.Context
-	eng *query.Engine
+	eng sourceEngine
 
-	mu     sync.Mutex
-	handle string // current open source handle; "" when none
+	mu      sync.Mutex
+	handle  string // current open source handle; "" when none
+	openSeq uint64 // bumped at the START of every OpenSource call (see below)
 }
 
 func NewApp() *App { return &App{eng: query.NewEngine()} }
@@ -42,15 +59,47 @@ func (a *App) reqCtx() context.Context {
 
 // OpenSource opens a data file for exploration and returns its structure map,
 // column set, and tier (spec §8). Any previously open source is closed first.
+//
+// Wails v2.12.0 runs every binding call in its own goroutine
+// (internal/frontend/desktop/windows/frontend.go:756), so two overlapping
+// OpenSource calls (a slow rescan-tier open racing a fast one started after
+// it) can COMPLETE in either order -- completion order alone must never
+// decide which one "wins". openSeq is bumped once per call, at the moment it
+// starts, and captured into mySeq; after the (possibly slow) a.eng.OpenSource
+// call returns, mySeq is compared against the CURRENT a.openSeq. If a newer
+// call has started in the meantime, this one is stale: it must not touch
+// a.handle (a newer open may already have become current and must not be
+// displaced by an older one finishing late) and must close its OWN
+// just-opened backend itself (rather than relying on the JS layer's
+// store.ts:78 generation guard, which cannot see this race at all -- it only
+// guards its own JS-side gen counter, not Go's completion order). Closing our
+// own handle here is safe even if the JS side also races to close it later:
+// CloseSource on an already-closed/unknown handle just errors, which callers
+// already ignore (see CloseSource below).
 func (a *App) OpenSource(req query.OpenRequest) (query.OpenResult, error) {
+	a.mu.Lock()
+	a.openSeq++
+	mySeq := a.openSeq
+	a.mu.Unlock()
+
 	res, err := a.eng.OpenSource(a.reqCtx(), req)
 	if err != nil {
 		return query.OpenResult{}, err
 	}
+
 	a.mu.Lock()
-	prev := a.handle
-	a.handle = res.Handle
+	stale := mySeq != a.openSeq
+	var prev string
+	if !stale {
+		prev = a.handle
+		a.handle = res.Handle
+	}
 	a.mu.Unlock()
+
+	if stale {
+		_ = a.eng.CloseSource(res.Handle) // never displace a newer open; this handle is ours to clean up
+		return res, nil
+	}
 	if prev != "" && prev != res.Handle {
 		_ = a.eng.CloseSource(prev) // best effort: a stale handle is not the caller's problem
 	}
