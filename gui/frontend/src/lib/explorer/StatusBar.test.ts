@@ -60,6 +60,30 @@ describe("StatusBar", () => {
     expect(columnsMetric.textContent).toBe("5 columns");
   });
 
+  // MINOR-6: every fixture above uses a columnCount of 0 (default), 5, or 12
+  // -- never exactly 1 -- so the singular/plural ternary's "" branch
+  // (`columnCount === 1 ? "" : "s"`) was unreachable; every count tested
+  // hit the "s" (plural) branch, including the 0 default.
+  it("uses the singular 'column' (no trailing s) for exactly one column", () => {
+    const t = mount({ total: 10, totalExact: true, columnCount: 1, columnsTruncated: false, totalPaths: 1 });
+    const columnsMetric = t.querySelectorAll(".metric.mono")[1] as HTMLElement;
+    expect(columnsMetric.textContent).toBe("1 column");
+  });
+
+  // MINOR-6: every columnCount/totalPaths value used above (0, 2, 3, 5, 12,
+  // 50, 512) is below 1000, so neither of columnsText's two
+  // `.toLocaleString()` calls (columnCount.toLocaleString(),
+  // totalPaths.toLocaleString()) was ever exercised with a value that
+  // actually needs a comma inserted -- toLocaleString() on e.g. 512 or 12
+  // returns the same string String() would. This fixture uses two distinct
+  // four-digit values so a regression collapsing either call to a plain
+  // template-literal interpolation (dropping the comma) is observable.
+  it("comma-formats both columnCount and totalPaths once they cross 1,000 (toLocaleString, not a bare template literal)", () => {
+    const t = mount({ total: 10, totalExact: true, columnCount: 1234, columnsTruncated: true, totalPaths: 5678 });
+    const columnsMetric = t.querySelectorAll(".metric.mono")[1] as HTMLElement;
+    expect(columnsMetric.textContent).toBe("showing 1,234 of 5,678 columns");
+  });
+
   it("renders a warning string verbatim, byte-for-byte, including the streaming-mode em dash", () => {
     const t = mount({
       total: 10, totalExact: false, sampled: true,
