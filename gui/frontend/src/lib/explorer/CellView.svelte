@@ -1,8 +1,11 @@
 <script lang="ts">
-  // Renders exactly one Cell. All eight CellKind values get their own
-  // branch below (spec §3) -- do not collapse any two, even when their
-  // markup looks similar (object/array share a shape but a different
-  // badge glyph, and must stay distinguishable if that ever changes).
+  // Renders exactly one Cell: seven visual treatments across the eight
+  // CellKind values (spec §3). INT and FLOAT deliberately share one branch
+  // below (--kind-number) -- app.css defines no separate --kind-int/
+  // --kind-float tokens, so splitting them would have nothing to diverge on.
+  // Do not collapse any OTHER pair: object/array share a shape but a
+  // different badge glyph, and must stay distinguishable if that ever
+  // changes.
   import type { Cell } from "./types";
   import { CellKind } from "./types";
   import { KIND_TOKEN } from "./kindToken";
