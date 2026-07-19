@@ -212,10 +212,19 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 		return 0, fmt.Errorf("query: memBackend.Export: nil RowEncoder")
 	}
 
-	const cancelCheckStride = 1024
+	// exportCancelCheckStride is intentionally its own, tighter constant
+	// (1024, vs. the package-level cancelCheckStride's 4096 used by
+	// computeMatchBitset below and rescanBackend's scans in rescan.go) rather
+	// than a bare local `cancelCheckStride` shadowing the package-level name:
+	// a same-named local constant that merely happens to agree with the
+	// package-level one is exactly the footgun CQ-6 removed from
+	// computeMatchBitset (a future change to either could silently diverge
+	// from the other with no compiler warning). Giving it a distinct name
+	// makes the divergence explicit and intentional instead of accidental.
+	const exportCancelCheckStride = 1024
 	var n int64
 	for i, rec := range m.records {
-		if i%cancelCheckStride == 0 {
+		if i%exportCancelCheckStride == 0 {
 			if err := ctx.Err(); err != nil {
 				return n, err
 			}
