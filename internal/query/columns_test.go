@@ -3,9 +3,14 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/profile"
@@ -879,5 +884,167 @@ func TestResolveCol_OutOfRangeIndexIsCellMissing(t *testing.T) {
 	}
 	if got := cm.resolveCol(len(cm.Columns), map[string]any{}); got != (Cell{Kind: CellMissing}) {
 		t.Fatalf("resolveCol(len(Columns), ...) = %#v, want CellMissing", got)
+	}
+}
+
+// --- AllCellKindValues -------------------------------------------------------
+
+// parseCellKindConsts parses filename (a .go source file in this package)
+// with go/parser and returns the set of CellKind values declared by any
+// `const` spec resolving to type CellKind -- either an explicit
+// `CellMissing CellKind = "missing"`, or a later spec in the same const
+// block that omits BOTH Type and Values, which Go's implicit-repetition
+// shorthand resolves by inheriting the closest preceding spec's Type and
+// Values verbatim (https://go.dev/ref/spec#Constant_declarations), e.g.:
+//
+//	const (
+//	    CellMissing CellKind = "missing"
+//	    CellNinth                        // inherits type CellKind, value "missing"
+//	)
+//
+// -- by reading the string literal actually assigned to each one (inherited
+// or explicit). This makes the const block itself (not a hand-maintained
+// copy of it) the source of truth TestAllCellKindValues_CoversEveryKind
+// checks against: a ninth CellKind constant added to the block, in EITHER
+// style, and forgotten in AllCellKindValues changes what this function
+// returns, without anyone having to remember to update a second, unlinked
+// list. A spec shape this walk doesn't recognize (anything other than
+// *ast.ValueSpec inside a `const` GenDecl, or a repetition spec with no
+// preceding spec to inherit from) is a hard test failure, not a silent skip
+// -- so an exotic const style this function doesn't yet understand fails
+// loudly instead of quietly under-counting.
+func parseCellKindConsts(t *testing.T, filename string) map[CellKind]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parser.ParseFile(%q) error = %v", filename, err)
+	}
+
+	declared := make(map[CellKind]bool)
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+
+		// lastType/lastValues track the most recently seen Type/Values
+		// within THIS const block, so an implicit-repetition spec (Type ==
+		// nil AND Values == nil) can inherit them per Go's const-block
+		// semantics, rather than being silently treated as "not a CellKind
+		// spec" and dropped.
+		var lastType ast.Expr
+		var lastValues []ast.Expr
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				t.Fatalf("unexpected const spec shape in %q: %#v (want *ast.ValueSpec)", filename, spec)
+			}
+
+			typ, values := vs.Type, vs.Values
+			if typ == nil && values == nil {
+				if lastType == nil && lastValues == nil {
+					t.Fatalf("const spec %v in %q uses implicit repetition with no preceding spec to inherit from", vs.Names, filename)
+				}
+				typ, values = lastType, lastValues
+			}
+			lastType, lastValues = typ, values
+
+			typeIdent, ok := typ.(*ast.Ident)
+			if !ok || typeIdent.Name != "CellKind" {
+				// A Cell-prefixed const that did NOT resolve to an explicit
+				// CellKind type is the one shape that could smuggle in a new
+				// kind unseen -- e.g. `CellFoo = CellKind("foo")`, whose Type
+				// is nil and whose Values are non-nil, so it never reaches the
+				// repetition branch above. Hard-fail rather than skip: this
+				// guard's whole purpose is that an added-but-unregistered kind
+				// cannot pass silently.
+				for _, name := range vs.Names {
+					if strings.HasPrefix(name.Name, "Cell") {
+						t.Fatalf("const %s in %q is Cell-prefixed but has no explicit CellKind type; "+
+							"declare it as `%s CellKind = \"...\"` so this exhaustiveness guard can see it",
+							name.Name, filename, name.Name)
+					}
+				}
+				continue // not a `<name> CellKind = "..."` spec (explicit or inherited)
+			}
+			for i, name := range vs.Names {
+				if i >= len(values) {
+					t.Fatalf("CellKind const %s in %q has no value expression", name.Name, filename)
+				}
+				lit, ok := values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("CellKind const %s in %q is not a string literal: %#v", name.Name, filename, values[i])
+				}
+				val, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("CellKind const %s in %q: unquote %s: %v", name.Name, filename, lit.Value, err)
+				}
+				declared[CellKind(val)] = true
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatalf("parsed 0 CellKind consts from %q -- the AST walk likely no longer matches the const block's shape", filename)
+	}
+	return declared
+}
+
+// TestAllCellKindValues_CoversEveryKind is a compile-time-adjacent guard: a
+// future ninth CellKind added to the const block (columns.go) but forgotten
+// in AllCellKindValues would otherwise silently ship a TS union missing a
+// member (Wails' EnumBind generates its TypeScript enum FROM this slice,
+// Task 4) -- this test catches that omission at test time instead.
+//
+// The set it checks against is parsed directly out of columns.go's CellKind
+// const block (parseCellKindConsts, via go/parser/go/ast), not a second
+// hand-maintained list: a hardcoded `want` map here would only ever go out of
+// sync WITH the very omission this test exists to catch, since both the
+// const block and a hardcoded want map are edited by hand with no compiler-
+// enforced link between them (see the CQ-1 finding this replaces). Parsing
+// the real source -- rather than checking a hand-copied list -- is what
+// makes an added-but-unregistered CellKind break this test, for every
+// const-spec style the columns.go block actually uses today: an explicit
+// `Name CellKind = "value"`, the shared-line/multi-name form (`CellA, CellB
+// CellKind = "a", "b"`), and Go's implicit-repetition shorthand (a spec
+// naming only an identifier, inheriting the preceding spec's type and value
+// from the one before it -- see parseCellKindConsts). This walk identifies a
+// CellKind spec syntactically, from its (possibly inherited) `Type` field --
+// it does not type-check the package, so a spec whose CellKind-ness comes
+// only from a value-conversion expression with no `Type` field of its own
+// (e.g. `CellFoo = CellKind("foo")`, rather than `CellFoo CellKind =
+// "foo"`) is outside what it resolves; columns.go's block doesn't use that
+// style. Any const spec shape parseCellKindConsts doesn't recognize at all
+// (not a *ast.ValueSpec, or implicit repetition with nothing to inherit
+// from) is a hard parse-time failure, not a silent skip.
+func TestAllCellKindValues_CoversEveryKind(t *testing.T) {
+	declared := parseCellKindConsts(t, "columns.go")
+
+	got := make(map[CellKind]bool, len(AllCellKindValues))
+	for _, v := range AllCellKindValues {
+		if v.TSName == "" {
+			t.Fatalf("AllCellKindValues entry for %q has an empty TSName", v.Value)
+		}
+		if got[v.Value] {
+			t.Fatalf("AllCellKindValues has a duplicate Value entry: %q", v.Value)
+		}
+		got[v.Value] = true
+	}
+
+	// Redundant tripwire derived from the parsed set (not a hardcoded
+	// number): a mismatched count alone pinpoints "something's missing or
+	// extra" before the per-key loops below identify which.
+	if len(got) != len(declared) {
+		t.Fatalf("AllCellKindValues has %d distinct entries, want %d (one per CellKind const declared in columns.go)", len(got), len(declared))
+	}
+	for k := range declared {
+		if !got[k] {
+			t.Fatalf("AllCellKindValues missing %q (declared as a CellKind const in columns.go but not listed here)", k)
+		}
+	}
+	for k := range got {
+		if !declared[k] {
+			t.Fatalf("AllCellKindValues has %q, which is not declared as a CellKind const in columns.go", k)
+		}
 	}
 }

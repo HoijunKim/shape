@@ -4,6 +4,7 @@ import (
 	"embed"
 	"log"
 
+	"github.com/hoijun-kim/shape/internal/query"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -21,11 +22,13 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup: app.startup,
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,
 		},
-		Bind: []any{app},
+		Bind:     []any{app},
+		EnumBind: []any{query.AllCellKindValues},
 	}); err != nil {
 		log.Fatal(err)
 	}

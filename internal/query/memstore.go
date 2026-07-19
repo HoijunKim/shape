@@ -1,6 +1,7 @@
 package query
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"math/bits"
@@ -10,13 +11,21 @@ import (
 	"github.com/hoijun-kim/shape/internal/profile"
 )
 
+// maxMatchCacheEntries caps how many distinct match bitsets one memBackend
+// retains. Each bitset is len(records)/8 bytes, so with the 512 MiB ingest
+// budget an entry is at most a few MiB and the cache is bounded by a small
+// constant multiple of that regardless of how many filters a session tries.
+// Eviction is least-recently-used: an evicted filter simply recomputes on its
+// next use (a latency cost, never a wrong answer).
+const maxMatchCacheEntries = 16
+
 // var _ Backend ensures memBackend satisfies the Backend interface at
 // compile time, so any accidental signature drift fails the build here
 // rather than surfacing later at a call site.
 var _ Backend = (*memBackend)(nil)
 
 // bitset is a compact, fixed-size bitset (one bit per record index): the
-// memBackend match cache keyed by CompiledPlan.FilterKey() (spec §4).
+// memBackend match cache keyed by CompiledFilter.Key() (spec §4).
 type bitset struct {
 	words []uint64
 	n     int // number of addressable bits (== len(records) at construction)
@@ -68,30 +77,20 @@ type memBackend struct {
 	prof    profile.ProfileResult
 
 	mu sync.Mutex
+	// matchCache holds one match bitset per CompiledFilter.Key(). Query and
+	// Count share it: both key on the filter alone, so scrolling a window and
+	// counting the same filter never scan the records twice. Capped at
+	// maxMatchCacheEntries, evicting least-recently-used.
+	matchCache map[string]*list.Element // key -> element holding *matchEntry
+	matchLRU   *list.List               // front = most recently used
+}
 
-	// filterCache holds one match bitset per CompiledPlan.FilterKey(), the
-	// cache Query uses. FilterKey() hashes (Filter, Transform) together
-	// (Task 4), so in the rare case a caller re-plans with an unchanged
-	// Filter but a different Transform, this cache computes a fresh
-	// (logically identical) bitset rather than reusing the prior one --
-	// FilterKey is the cache key spec §4 and the task brief name
-	// explicitly ("keyed by p.FilterKey()"), and only Filter determines
-	// membership, so this is a correctness-neutral, at-most-a-constant-
-	// factor inefficiency versus a filter-only key, not a bug.
-	filterCache map[string]*bitset
-
-	// countCache serves Count, which is handed a bare *CompiledFilter (no
-	// CompiledPlan, hence no FilterKey()) by the Backend interface. It is
-	// keyed by the *CompiledFilter's own pointer identity: using a pointer
-	// as a Go map key keeps the pointed-to CompiledFilter reachable for as
-	// long as the cache entry exists, so a live entry can never later
-	// alias a different CompiledFilter that happens to reuse a freed
-	// address -- the cache is safe for the backend's whole lifetime with
-	// no extra bookkeeping. Two different *CompiledFilter values compiled
-	// from the same logical Filter simply miss each other's cache entry
-	// (each gets its own, correctly computed); that's a missed-reuse
-	// opportunity, never a correctness issue.
-	countCache map[*CompiledFilter]*bitset
+// matchEntry is the value stored in memBackend.matchLRU: a cached bitset
+// together with the key it was cached under, so evicting the LRU tail can
+// delete its map entry without a reverse lookup.
+type matchEntry struct {
+	key string
+	bs  *bitset
 }
 
 // newMemBackend wraps already-decoded records (as produced by OpenSource's
@@ -99,11 +98,11 @@ type memBackend struct {
 // computed over the same records.
 func newMemBackend(records []any, cm *ColumnModel, prof profile.ProfileResult) *memBackend {
 	return &memBackend{
-		records:     records,
-		cm:          cm,
-		prof:        prof,
-		filterCache: make(map[string]*bitset),
-		countCache:  make(map[*CompiledFilter]*bitset),
+		records:    records,
+		cm:         cm,
+		prof:       prof,
+		matchCache: make(map[string]*list.Element),
+		matchLRU:   list.New(),
 	}
 }
 
@@ -113,8 +112,12 @@ func (m *memBackend) Columns() *ColumnModel { return m.cm }
 // Profile returns the sidebar structure map computed at open.
 func (m *memBackend) Profile() profile.ProfileResult { return m.prof }
 
-// RowCount returns the exact record count: every record is already in RAM.
-func (m *memBackend) RowCount() (n int64, exact bool) {
+// RowCount returns the exact record count: every record is already in RAM. A
+// cancelled ctx returns (0, false).
+func (m *memBackend) RowCount(ctx context.Context) (n int64, exact bool) {
+	if ctx.Err() != nil {
+		return 0, false
+	}
 	return int64(len(m.records)), true
 }
 
@@ -135,7 +138,7 @@ func (m *memBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 		return RowSet{}, fmt.Errorf("query: memBackend.Query: nil CompiledPlan")
 	}
 
-	bs, err := m.matchBitsetForPlan(ctx, p)
+	bs, err := m.matchBitsetFor(ctx, p.Filter)
 	if err != nil {
 		return RowSet{}, err
 	}
@@ -182,13 +185,13 @@ func (m *memBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 }
 
 // Count returns the exact number of records matching f, using (and caching)
-// the same bitset machinery as Query, keyed by f's own pointer identity
-// (see countCache's doc comment).
+// the same matchCache as Query, keyed by f.Key() -- the content hash both
+// Query and Count key on, so the two share one bitset per logical filter.
 func (m *memBackend) Count(ctx context.Context, f *CompiledFilter) (total int64, exact bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
-	bs, err := m.matchBitsetForFilter(ctx, f)
+	bs, err := m.matchBitsetFor(ctx, f)
 	if err != nil {
 		return 0, false, err
 	}
@@ -209,10 +212,19 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 		return 0, fmt.Errorf("query: memBackend.Export: nil RowEncoder")
 	}
 
-	const cancelCheckStride = 1024
+	// exportCancelCheckStride is intentionally its own, tighter constant
+	// (1024, vs. the package-level cancelCheckStride's 4096 used by
+	// computeMatchBitset below and rescanBackend's scans in rescan.go) rather
+	// than a bare local `cancelCheckStride` shadowing the package-level name:
+	// a same-named local constant that merely happens to agree with the
+	// package-level one is exactly the footgun CQ-6 removed from
+	// computeMatchBitset (a future change to either could silently diverge
+	// from the other with no compiler warning). Giving it a distinct name
+	// makes the divergence explicit and intentional instead of accidental.
+	const exportCancelCheckStride = 1024
 	var n int64
 	for i, rec := range m.records {
-		if i%cancelCheckStride == 0 {
+		if i%exportCancelCheckStride == 0 {
 			if err := ctx.Err(); err != nil {
 				return n, err
 			}
@@ -234,13 +246,13 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 func (m *memBackend) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.filterCache = make(map[string]*bitset)
-	m.countCache = make(map[*CompiledFilter]*bitset)
+	m.matchCache = make(map[string]*list.Element)
+	m.matchLRU = list.New()
 	return nil
 }
 
-// matchBitsetForPlan returns the cached match bitset for p.Filter, computing
-// and storing it under p.FilterKey() on a cache miss.
+// matchBitsetFor returns the cached match bitset for cf, computing and
+// storing it under cf.Key() on a miss.
 //
 // The compute itself happens OUTSIDE m.mu (double-checked locking): (1) lock,
 // check the cache, unlock on a hit; (2) on a miss, unlock and run the
@@ -251,55 +263,37 @@ func (m *memBackend) Close() error {
 // case its bitset is used (last-write-in-the-lock-is-irrelevant: both
 // computations are deterministic and produce an identical result over the
 // same immutable m.records, so either winning is correct) -- otherwise this
-// goroutine's result is stored. A cancelled/errored compute is never locked
-// back in, so it can never be cached.
-func (m *memBackend) matchBitsetForPlan(ctx context.Context, p *CompiledPlan) (*bitset, error) {
-	key := p.FilterKey()
+// goroutine's result is stored and the LRU is trimmed to maxMatchCacheEntries.
+// A cancelled/errored compute is never locked back in, so it can never be
+// cached.
+func (m *memBackend) matchBitsetFor(ctx context.Context, cf *CompiledFilter) (*bitset, error) {
+	key := cf.Key()
 
 	m.mu.Lock()
-	if bs, ok := m.filterCache[key]; ok {
+	if el, ok := m.matchCache[key]; ok {
+		m.matchLRU.MoveToFront(el)
+		bs := el.Value.(*matchEntry).bs
 		m.mu.Unlock()
 		return bs, nil
 	}
 	m.mu.Unlock()
 
-	bs, err := m.computeMatchBitset(ctx, p.Filter)
+	bs, err := m.computeMatchBitset(ctx, cf)
 	if err != nil {
 		return nil, err
 	}
 
 	m.mu.Lock()
-	if existing, ok := m.filterCache[key]; ok {
-		bs = existing
+	if el, ok := m.matchCache[key]; ok {
+		m.matchLRU.MoveToFront(el)
+		bs = el.Value.(*matchEntry).bs
 	} else {
-		m.filterCache[key] = bs
-	}
-	m.mu.Unlock()
-	return bs, nil
-}
-
-// matchBitsetForFilter returns the cached match bitset for the standalone
-// filter f (Count's call path -- see countCache's doc comment), computing
-// and storing it under f's pointer identity on a cache miss. Uses the same
-// off-lock double-checked pattern as matchBitsetForPlan; see its doc comment.
-func (m *memBackend) matchBitsetForFilter(ctx context.Context, f *CompiledFilter) (*bitset, error) {
-	m.mu.Lock()
-	if bs, ok := m.countCache[f]; ok {
-		m.mu.Unlock()
-		return bs, nil
-	}
-	m.mu.Unlock()
-
-	bs, err := m.computeMatchBitset(ctx, f)
-	if err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	if existing, ok := m.countCache[f]; ok {
-		bs = existing
-	} else {
-		m.countCache[f] = bs
+		m.matchCache[key] = m.matchLRU.PushFront(&matchEntry{key: key, bs: bs})
+		for m.matchLRU.Len() > maxMatchCacheEntries {
+			oldest := m.matchLRU.Back()
+			m.matchLRU.Remove(oldest)
+			delete(m.matchCache, oldest.Value.(*matchEntry).key)
+		}
 	}
 	m.mu.Unlock()
 	return bs, nil
@@ -311,13 +305,16 @@ func (m *memBackend) matchBitsetForFilter(ctx context.Context, f *CompiledFilter
 // match-all, so an empty filter naturally yields an all-set bitset here with
 // no special-casing.
 //
-// ctx is checked every cancelCheckStride records (mirroring Export's
-// discipline): a cancelled/expired ctx aborts the scan and returns the error
-// with a nil bitset, so a caller changing filters in the GUI can cancel a
-// large cold scan (up to the full 512 MiB record budget, potentially
-// regex-driven) instead of blocking until it completes.
+// ctx is checked every cancelCheckStride records -- the SAME package-level
+// constant rescan.go declares (not a locally shadowed copy: CQ-6 review fix,
+// since a function-local const of the same name agreeing with the shared one
+// only by coincidence would let a future change to one silently diverge from
+// the other, breaking tests that assert against the package-level constant
+// with a misleading message): a cancelled/expired ctx aborts the scan and
+// returns the error with a nil bitset, so a caller changing filters in the
+// GUI can cancel a large cold scan (up to the full 512 MiB record budget,
+// potentially regex-driven) instead of blocking until it completes.
 func (m *memBackend) computeMatchBitset(ctx context.Context, f *CompiledFilter) (*bitset, error) {
-	const cancelCheckStride = 4096
 	bs := newBitset(len(m.records))
 	for i, rec := range m.records {
 		if i%cancelCheckStride == 0 {

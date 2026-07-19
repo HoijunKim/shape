@@ -28,6 +28,42 @@ type RowSet struct {
 	Scanned    int64    `json:"scanned"`
 	Truncated  bool     `json:"truncated"` // fewer than Limit rows: EOF reached
 	ElapsedMs  int64    `json:"elapsedMs"`
+
+	// ColumnsTruncated and TotalPaths describe whatever RowSet.Columns
+	// actually contains (spec §3's wide-data bound). Every Backend.Query sets
+	// Columns from CompiledTransform.Columns() -- the query's PROJECTED
+	// column set -- but whether that projection still carries the base
+	// ColumnModel's own truncation depends on Transform.Select alone, NOT on
+	// the transform as a whole (see Engine.QueryRows, which picks per call):
+	//
+	//   - Select empty (whether or not Drop is also set): CompileTransform
+	//     builds Columns from baseOutCols(cm) (transform.go), which is
+	//     cm.Columns itself -- the base column set, already capped at
+	//     MaxColumns (keeping highest-presence first, then first-seen) -- and
+	//     a non-empty Drop only ever subtracts named entries from that capped
+	//     starting point (applyDrop): it can never restore a path the cap
+	//     already excluded. So these fields always mirror the base
+	//     ColumnModel's own cm.Truncated/cm.TotalPaths verbatim, REGARDLESS
+	//     of Drop: ColumnsTruncated=true and TotalPaths = the uncapped path
+	//     count when the source has more distinct paths than MaxColumns;
+	//     otherwise ColumnsTruncated=false and TotalPaths == len(cm.Columns)
+	//     (the base model's own, untruncated count). Either way, a non-empty
+	//     Drop can still shrink RowSet.Columns below that count -- these
+	//     fields describe the base model, not len(RowSet.Columns), so they
+	//     are NOT guaranteed to equal len(RowSet.Columns) once Drop has
+	//     removed anything.
+	//   - Select non-empty: CompileTransform takes the Select branch outright
+	//     (Drop, even if also set, is ignored) and naming a path overrides
+	//     MaxColumns entirely (see Select's doc comment, columns.go), so the
+	//     projection is explicit and un-capped -- ColumnsTruncated is always
+	//     false and TotalPaths always == len(RowSet.Columns) (here, unlike
+	//     the Select-empty case, the two really do coincide).
+	//
+	// The UI shows "showing 512 of N columns" only in the first case, when
+	// ColumnsTruncated is true. Note this pair is NOT RowSet.Truncated
+	// (above), which means "fewer rows than Limit: EOF reached".
+	ColumnsTruncated bool `json:"columnsTruncated"`
+	TotalPaths       int  `json:"totalPaths"`
 }
 
 // RowEncoder is the minimal streaming sink Backend.Export writes projected
@@ -59,8 +95,9 @@ type Backend interface {
 
 	// RowCount returns the source's total record count and whether that
 	// count is exact (true for mem/sqlite/parquet; false -- an estimate --
-	// for rescanBackend past its memory budget).
-	RowCount() (n int64, exact bool)
+	// for rescanBackend past its memory budget). A cancelled ctx returns
+	// (0, false).
+	RowCount(ctx context.Context) (n int64, exact bool)
 
 	// Query runs p (a compiled Filter+Transform) over the source and
 	// returns the window [w.Offset, w.Offset+w.Limit) of MATCHING,

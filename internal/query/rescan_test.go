@@ -70,7 +70,7 @@ func TestRescanBackend_RowCount_IsEstimateNotExact(t *testing.T) {
 	// be confused with the true record count (10): RowCount must report
 	// exactly the fileSize/avgBytes formula, not the real count.
 	rb, _, _ := newTestRescanBackend(t, maps, 10.0, 370)
-	n, exact := rb.RowCount()
+	n, exact := rb.RowCount(context.Background())
 	if exact {
 		t.Fatalf("RowCount() exact = true, want false (spec §4: rescanBackend RowCount is always an estimate)")
 	}
@@ -81,7 +81,7 @@ func TestRescanBackend_RowCount_IsEstimateNotExact(t *testing.T) {
 
 func TestRescanBackend_RowCount_UnknownInputsYieldZero(t *testing.T) {
 	rb, _, _ := newTestRescanBackend(t, fixtureRecords(), 0, 0)
-	n, exact := rb.RowCount()
+	n, exact := rb.RowCount(context.Background())
 	if n != 0 || exact {
 		t.Fatalf("RowCount() = (%d,%v), want (0,false) when avgBytes/fileSize are unknown", n, exact)
 	}

@@ -59,7 +59,7 @@ func writeParquetFixture[T any](t *testing.T, rows []T, maxRowsPerGroup int64) s
 func newTestParquetBackend[T any](t *testing.T, rows []T, maxRowsPerGroup int64) *parquetBackend {
 	t.Helper()
 	path := writeParquetFixture(t, rows, maxRowsPerGroup)
-	pb, err := newParquetBackend(path)
+	pb, err := newParquetBackend(context.Background(), path)
 	if err != nil {
 		t.Fatalf("newParquetBackend error = %v, want nil", err)
 	}
@@ -145,7 +145,7 @@ func TestParquetBackend_RowCount_Exact(t *testing.T) {
 	rows := parquetNameParityRows()
 	pb := newTestParquetBackend(t, rows, 0)
 
-	n, exact := pb.RowCount()
+	n, exact := pb.RowCount(context.Background())
 	if n != int64(len(rows)) || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (%d, true)", n, exact, len(rows))
 	}
@@ -161,7 +161,7 @@ func TestParquetBackend_Total_ExactFromFooter_MultipleRowGroups(t *testing.T) {
 	if pb.total != int64(len(rows)) {
 		t.Fatalf("total = %d, want %d (sum of every row group's NumRows(), from the footer)", pb.total, len(rows))
 	}
-	n, exact := pb.RowCount()
+	n, exact := pb.RowCount(context.Background())
 	if n != int64(len(rows)) || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (%d, true)", n, exact, len(rows))
 	}
@@ -406,6 +406,46 @@ func TestParquetBackend_Query_Filtered_CancelledContext(t *testing.T) {
 	}
 }
 
+// TestParquetBackend_Scan_ZeroRowFile_CancelledContext covers Task 2's
+// hoisted ctx check at the top of scan (parquetbackend.go, MINOR-4): every
+// other parquet cancellation test above uses an 8000-row fixture, so a
+// pre-cancelled ctx is always caught by Query/Count's OWN entry guard before
+// scan is ever reached -- proving nothing about scan's hoisted check
+// specifically. A genuinely zero-row parquet file drives scan straight into
+// the "gr.Read returns (0, io.EOF) on the very first call" path the hoisted
+// check exists to guard: without it, a cancelled ctx over a file with no
+// rows to iterate would return a nil error (the per-row check inside the
+// loop never fires for n==0) instead of context.Canceled.
+func TestParquetBackend_Scan_ZeroRowFile_CancelledContext(t *testing.T) {
+	path := writeParquetFixture(t, []parquetManyRow{}, 0)
+	pb, err := newParquetBackend(context.Background(), path)
+	if err != nil {
+		t.Fatalf("newParquetBackend(zero-row fixture) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { pb.Close() })
+	if pb.total != 0 {
+		t.Fatalf("pb.total = %d, want 0 (zero-row fixture)", pb.total)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := 0
+	err = pb.scan(ctx, 0, func(_ int64, _ any) (bool, error) {
+		calls++
+		return false, nil
+	})
+	if err == nil {
+		t.Fatalf("scan(cancelled ctx, zero-row file) error = nil, want non-nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan(cancelled ctx, zero-row file) error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	if calls != 0 {
+		t.Fatalf("scan callback invoked %d times, want 0 (the hoisted ctx check before the outer loop must catch this before ever calling gr.Read)", calls)
+	}
+}
+
 func TestParquetBackend_Query_EmptyFilter_CancelledContext(t *testing.T) {
 	rows := manyParquetRows(8000)
 	pb := newTestParquetBackend(t, rows, 0)
@@ -458,7 +498,7 @@ func TestParquetBackend_Close_NoError(t *testing.T) {
 // --- newParquetBackend: stdin/invalid-file rejection ------------------------
 
 func TestParquetBackend_NewParquetBackend_RejectsEmptyPath(t *testing.T) {
-	if _, err := newParquetBackend(""); err == nil {
+	if _, err := newParquetBackend(context.Background(), ""); err == nil {
 		t.Fatalf("newParquetBackend(\"\") error = nil, want non-nil (stdin rejected)")
 	}
 }
@@ -468,7 +508,7 @@ func TestParquetBackend_NewParquetBackend_InvalidFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("definitely not parquet"), 0o644); err != nil {
 		t.Fatalf("write invalid fixture: %v", err)
 	}
-	if _, err := newParquetBackend(path); err == nil {
+	if _, err := newParquetBackend(context.Background(), path); err == nil {
 		t.Fatalf("newParquetBackend(invalid file) error = nil, want non-nil")
 	}
 }
@@ -480,7 +520,7 @@ func TestEngine_OpenSource_Parquet_TierAndColumns(t *testing.T) {
 	path := writeParquetFixture(t, rows, 3)
 
 	e := NewEngine()
-	res, err := e.OpenSource(OpenRequest{Path: path})
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
 	if err != nil {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
@@ -501,7 +541,7 @@ func TestEngine_OpenSource_Parquet_TierAndColumns(t *testing.T) {
 		t.Fatalf("Columns = %#v, want [name age even] in schema order", res.Columns)
 	}
 
-	rs, err := e.QueryRows(QueryRequest{Handle: res.Handle, Filter: Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}, Offset: 0, Limit: 10, WantTotal: true})
+	rs, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}, Offset: 0, Limit: 10, WantTotal: true})
 	if err != nil {
 		t.Fatalf("QueryRows error = %v, want nil", err)
 	}
@@ -659,7 +699,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 
 	e := NewEngine()
 
-	memRes, err := e.OpenSource(OpenRequest{Path: ndjsonPath})
+	memRes, err := e.OpenSource(context.Background(), OpenRequest{Path: ndjsonPath})
 	if err != nil {
 		t.Fatalf("OpenSource(ndjson) error = %v, want nil", err)
 	}
@@ -679,7 +719,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 	rb := newRescanBackend(ndjsonPath, readers.FormatJSON, "", false, rescanCM, prof, 1, 1)
 	rescanHandle := e.register(rb)
 
-	csvRes, err := e.OpenSource(OpenRequest{Path: csvPath})
+	csvRes, err := e.OpenSource(context.Background(), OpenRequest{Path: csvPath})
 	if err != nil {
 		t.Fatalf("OpenSource(csv) error = %v, want nil", err)
 	}
@@ -687,7 +727,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 		t.Fatalf("OpenSource(csv) Tier = %q, want \"memory\"", csvRes.Tier)
 	}
 
-	sqlRes, err := e.OpenSource(OpenRequest{Path: sqlitePath})
+	sqlRes, err := e.OpenSource(context.Background(), OpenRequest{Path: sqlitePath})
 	if err != nil {
 		t.Fatalf("OpenSource(sqlite) error = %v, want nil", err)
 	}
@@ -695,7 +735,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 		t.Fatalf("OpenSource(sqlite) Tier = %q, want \"sqlite\"", sqlRes.Tier)
 	}
 
-	parquetRes, err := e.OpenSource(OpenRequest{Path: parquetPath})
+	parquetRes, err := e.OpenSource(context.Background(), OpenRequest{Path: parquetPath})
 	if err != nil {
 		t.Fatalf("OpenSource(parquet) error = %v, want nil", err)
 	}
@@ -744,23 +784,23 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 			req := func(handle string) QueryRequest {
 				return QueryRequest{Handle: handle, Filter: tc.f, Transform: tr, Offset: tc.offset, Limit: tc.limit, WantTotal: true}
 			}
-			memRS, err := e.QueryRows(req(memRes.Handle))
+			memRS, err := e.QueryRows(context.Background(), req(memRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(mem) error = %v, want nil", err)
 			}
-			rescanRS, err := e.QueryRows(req(rescanHandle))
+			rescanRS, err := e.QueryRows(context.Background(), req(rescanHandle))
 			if err != nil {
 				t.Fatalf("QueryRows(rescan) error = %v, want nil", err)
 			}
-			csvRS, err := e.QueryRows(req(csvRes.Handle))
+			csvRS, err := e.QueryRows(context.Background(), req(csvRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(csv) error = %v, want nil", err)
 			}
-			sqlRS, err := e.QueryRows(req(sqlRes.Handle))
+			sqlRS, err := e.QueryRows(context.Background(), req(sqlRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(sql) error = %v, want nil", err)
 			}
-			parquetRS, err := e.QueryRows(req(parquetRes.Handle))
+			parquetRS, err := e.QueryRows(context.Background(), req(parquetRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(parquet) error = %v, want nil", err)
 			}
@@ -843,11 +883,11 @@ func TestCrossBackend_ParquetNested_ArrayMembershipAndBool(t *testing.T) {
 	parquetPath := writeParquetFixture(t, structs, 7) // 23 rows / 7-per-group -> 4 row groups
 
 	e := NewEngine()
-	memRes, err := e.OpenSource(OpenRequest{Path: ndjsonPath})
+	memRes, err := e.OpenSource(context.Background(), OpenRequest{Path: ndjsonPath})
 	if err != nil {
 		t.Fatalf("OpenSource(ndjson) error = %v, want nil", err)
 	}
-	parquetRes, err := e.OpenSource(OpenRequest{Path: parquetPath})
+	parquetRes, err := e.OpenSource(context.Background(), OpenRequest{Path: parquetPath})
 	if err != nil {
 		t.Fatalf("OpenSource(parquet) error = %v, want nil", err)
 	}
@@ -877,11 +917,11 @@ func TestCrossBackend_ParquetNested_ArrayMembershipAndBool(t *testing.T) {
 			req := func(h string) QueryRequest {
 				return QueryRequest{Handle: h, Filter: tc.f, Transform: tr, Offset: tc.offset, Limit: tc.limit, WantTotal: true}
 			}
-			memRS, err := e.QueryRows(req(memRes.Handle))
+			memRS, err := e.QueryRows(context.Background(), req(memRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(mem) error = %v, want nil", err)
 			}
-			parquetRS, err := e.QueryRows(req(parquetRes.Handle))
+			parquetRS, err := e.QueryRows(context.Background(), req(parquetRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(parquet) error = %v, want nil", err)
 			}

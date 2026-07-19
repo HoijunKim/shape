@@ -123,7 +123,7 @@ func newTestSQLBackend(t *testing.T, table string, cols []string, colTypes strin
 	t.Helper()
 	createSQL := fmt.Sprintf("CREATE TABLE %s (%s)", table, colTypes)
 	path := makeSQLiteFixture(t, createSQL, sqlInsertStatements(table, cols, rows)...)
-	sb, err := newSQLBackend(path, "")
+	sb, err := newSQLBackend(context.Background(), path, "")
 	if err != nil {
 		t.Fatalf("newSQLBackend error = %v, want nil", err)
 	}
@@ -201,7 +201,7 @@ func TestSQLBackend_RowCount_Exact(t *testing.T) {
 	rows := sqlNameParityRows()
 	sb := newTestSQLBackend(t, "t", []string{"name", "idx", "even"}, "name TEXT, idx INTEGER, even INTEGER", rows)
 
-	n, exact := sb.RowCount()
+	n, exact := sb.RowCount(context.Background())
 	if n != int64(len(rows)) || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (%d, true)", n, exact, len(rows))
 	}
@@ -537,7 +537,7 @@ func TestSQLBackend_Query_WantTotal_CountCancelledMidFlight(t *testing.T) {
 	// A normal backend (opened read-only over the SAME fixture path) supplies
 	// a valid ColumnModel/cols/hasRowID/table -- Query itself never needs
 	// Columns()/Profile() to go through the wrapped connection, only s.db does.
-	sb2ref, err := newSQLBackend(path, "")
+	sb2ref, err := newSQLBackend(context.Background(), path, "")
 	if err != nil {
 		t.Fatalf("newSQLBackend error = %v, want nil", err)
 	}
@@ -632,7 +632,7 @@ func TestSQLBackend_WithoutRowIDTable(t *testing.T) {
 		"CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT) WITHOUT ROWID",
 		"INSERT INTO t (id, val) VALUES (1,'a'),(2,'b'),(3,'c')",
 	)
-	sb, err := newSQLBackend(path, "")
+	sb, err := newSQLBackend(context.Background(), path, "")
 	if err != nil {
 		t.Fatalf("newSQLBackend error = %v, want nil", err)
 	}
@@ -641,7 +641,7 @@ func TestSQLBackend_WithoutRowIDTable(t *testing.T) {
 	if sb.hasRowID {
 		t.Fatalf("hasRowID = true, want false for a WITHOUT ROWID table")
 	}
-	n, exact := sb.RowCount()
+	n, exact := sb.RowCount(context.Background())
 	if n != 3 || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (3, true)", n, exact)
 	}
@@ -666,7 +666,7 @@ func TestEngine_OpenSource_SQLite_TierAndColumns(t *testing.T) {
 	)
 
 	e := NewEngine()
-	res, err := e.OpenSource(OpenRequest{Path: path})
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
 	if err != nil {
 		t.Fatalf("OpenSource error = %v, want nil", err)
 	}
@@ -687,7 +687,7 @@ func TestEngine_OpenSource_SQLite_TierAndColumns(t *testing.T) {
 		t.Fatalf("Columns = %#v, want [name idx even] in CREATE TABLE order", res.Columns)
 	}
 
-	rs, err := e.QueryRows(QueryRequest{Handle: res.Handle, Filter: Filter{Conditions: []Condition{{Path: "even", Op: OpEq, Value: Value{Kind: ValNumber, Num: 1}}}}, Offset: 0, Limit: 10, WantTotal: true})
+	rs, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: Filter{Conditions: []Condition{{Path: "even", Op: OpEq, Value: Value{Kind: ValNumber, Num: 1}}}}, Offset: 0, Limit: 10, WantTotal: true})
 	if err != nil {
 		t.Fatalf("QueryRows error = %v, want nil", err)
 	}
@@ -708,14 +708,14 @@ func TestCrossBackend_SQLBackendMatchesMemBackend(t *testing.T) {
 	)
 
 	e := NewEngine()
-	memRes, err := e.OpenSource(OpenRequest{Path: ndjsonPath})
+	memRes, err := e.OpenSource(context.Background(), OpenRequest{Path: ndjsonPath})
 	if err != nil {
 		t.Fatalf("OpenSource(ndjson) error = %v, want nil", err)
 	}
 	if memRes.Tier != "memory" {
 		t.Fatalf("OpenSource(ndjson) Tier = %q, want \"memory\"", memRes.Tier)
 	}
-	sqlRes, err := e.OpenSource(OpenRequest{Path: sqlitePath})
+	sqlRes, err := e.OpenSource(context.Background(), OpenRequest{Path: sqlitePath})
 	if err != nil {
 		t.Fatalf("OpenSource(sqlite) error = %v, want nil", err)
 	}
@@ -756,11 +756,11 @@ func TestCrossBackend_SQLBackendMatchesMemBackend(t *testing.T) {
 			req := func(handle string) QueryRequest {
 				return QueryRequest{Handle: handle, Filter: tc.f, Transform: tr, Offset: tc.offset, Limit: tc.limit, WantTotal: true}
 			}
-			memRS, err := e.QueryRows(req(memRes.Handle))
+			memRS, err := e.QueryRows(context.Background(), req(memRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(mem) error = %v, want nil", err)
 			}
-			sqlRS, err := e.QueryRows(req(sqlRes.Handle))
+			sqlRS, err := e.QueryRows(context.Background(), req(sqlRes.Handle))
 			if err != nil {
 				t.Fatalf("QueryRows(sql) error = %v, want nil", err)
 			}

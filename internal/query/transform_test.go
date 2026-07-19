@@ -302,6 +302,59 @@ func TestCompiledTransform_Project_AlignedRow(t *testing.T) {
 	}
 }
 
+// --- CompiledFilter.Key -------------------------------------------------------
+
+func TestCompiledFilter_Key_SameLogicalFilterSameKey(t *testing.T) {
+	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
+	a, err := CompileFilter(f, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(a) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(f, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(b) error = %v, want nil", err)
+	}
+	if a == b {
+		t.Fatalf("fixture invalid: a and b are the same *CompiledFilter pointer")
+	}
+	if a.Key() != b.Key() {
+		t.Fatalf("Key() differs for two compiles of the identical logical Filter: %q != %q", a.Key(), b.Key())
+	}
+}
+
+func TestCompiledFilter_Key_DifferentFilterDifferentKey(t *testing.T) {
+	f1 := Filter{Conditions: []Condition{{Path: "age", Op: OpGt, Value: Value{Kind: ValNumber, Num: 10}}}}
+	f2 := Filter{Conditions: []Condition{{Path: "age", Op: OpGt, Value: Value{Kind: ValNumber, Num: 20}}}}
+	a, err := CompileFilter(f1, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(f1) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(f2, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(f2) error = %v, want nil", err)
+	}
+	if a.Key() == b.Key() {
+		t.Fatalf("Key() identical for filters differing only in Condition.Value.Num: %q", a.Key())
+	}
+}
+
+func TestCompiledFilter_Key_EmptyFilterStable(t *testing.T) {
+	a, err := CompileFilter(Filter{}, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(empty) error = %v, want nil", err)
+	}
+	b, err := CompileFilter(Filter{}, nil)
+	if err != nil {
+		t.Fatalf("CompileFilter(empty) second call error = %v, want nil", err)
+	}
+	if a.Key() == "" {
+		t.Fatalf("Key() = empty string for the empty (match-all) Filter, want a non-empty stable key")
+	}
+	if a.Key() != b.Key() {
+		t.Fatalf("Key() not stable across two compiles of Filter{}: %q != %q", a.Key(), b.Key())
+	}
+}
+
 // --- CompiledPlan / FilterKey -------------------------------------------------
 
 func testColumnModel(t *testing.T) *ColumnModel {
@@ -331,7 +384,7 @@ func TestCompiledPlan_FilterKey_StableForIdenticalInput(t *testing.T) {
 		t.Fatalf("FilterKey() = empty string, want a non-empty canonical key")
 	}
 	if p1.FilterKey() != p2.FilterKey() {
-		t.Fatalf("FilterKey() not stable: %q != %q for identical (Filter,Transform)", p1.FilterKey(), p2.FilterKey())
+		t.Fatalf("FilterKey() not stable: %q != %q for two CompilePlan calls over the identical Filter", p1.FilterKey(), p2.FilterKey())
 	}
 }
 
@@ -354,22 +407,24 @@ func TestCompiledPlan_FilterKey_DistinctForDifferentFilter(t *testing.T) {
 	}
 }
 
-func TestCompiledPlan_FilterKey_DistinctForDifferentTransform(t *testing.T) {
+// TestCompiledPlan_FilterKey_IgnoresTransform pins the E2 behavior change:
+// FilterKey is now filter-only, so two CompiledPlans over the identical
+// Filter but DIFFERENT Transforms must share one key -- Query and Count share
+// one match bitset regardless of what a Transform later projects.
+func TestCompiledPlan_FilterKey_IgnoresTransform(t *testing.T) {
 	cm := testColumnModel(t)
-	f := Filter{}
-	t1 := Transform{}
-	t2 := Transform{Select: []ColumnSpec{{Path: "name"}}}
+	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
 
-	p1, err := CompilePlan(f, t1, cm)
+	p1, err := CompilePlan(f, Transform{}, cm)
 	if err != nil {
 		t.Fatalf("CompilePlan(t1) error = %v, want nil", err)
 	}
-	p2, err := CompilePlan(f, t2, cm)
+	p2, err := CompilePlan(f, Transform{Select: []ColumnSpec{{Path: "name"}}}, cm)
 	if err != nil {
 		t.Fatalf("CompilePlan(t2) error = %v, want nil", err)
 	}
-	if p1.FilterKey() == p2.FilterKey() {
-		t.Fatalf("FilterKey() identical for different transforms: %q", p1.FilterKey())
+	if p1.FilterKey() != p2.FilterKey() {
+		t.Fatalf("FilterKey() differs across Transforms over the identical Filter: %q != %q, want equal (filter-only key)", p1.FilterKey(), p2.FilterKey())
 	}
 }
 
@@ -401,11 +456,11 @@ func TestCompilePlan_ErrorPropagatesFromFilter(t *testing.T) {
 	}
 }
 
-// canonicalPlanKeyUsesJSON is a light sanity check that FilterKey does not
-// depend on map iteration: build the same logical Filter twice from
-// independently-constructed (but deeply equal) values and confirm the key
-// matches, and that it looks like a canonical hex digest (no whitespace, no
-// raw JSON leaking through).
+// TestCompiledPlan_FilterKey_LooksCanonical is a light sanity check that
+// FilterKey does not depend on map iteration: build the same logical Filter
+// twice from independently-constructed (but deeply equal) values and confirm
+// the key matches, and that it looks like a canonical hex digest (no
+// whitespace, no raw JSON leaking through).
 func TestCompiledPlan_FilterKey_LooksCanonical(t *testing.T) {
 	cm := testColumnModel(t)
 	f := Filter{Conditions: []Condition{{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "alice"}}}}
@@ -416,5 +471,41 @@ func TestCompiledPlan_FilterKey_LooksCanonical(t *testing.T) {
 	key := p.FilterKey()
 	if strings.ContainsAny(key, " \t\n{}\"") {
 		t.Fatalf("FilterKey() = %q, want a canonical opaque token (no raw JSON/whitespace)", key)
+	}
+}
+
+// --- isIdentityTransform ------------------------------------------------------
+
+// TestIsIdentityTransform covers every Transform field's effect on the
+// predicate Engine.QueryRows uses to decide whose truncation numbers
+// (base ColumnModel vs. projected column set) to stamp onto a RowSet: a
+// Transform is "identity" (leaves the base column set unchanged) iff both
+// Select and Drop are empty. FlattenObjects is deliberately NOT part of the
+// predicate: per Transform's doc comment (transform.go) and CompileTransform's
+// implementation, FlattenObjects is accepted and carried through the API
+// surface but does not yet gate any distinct rendering of the base set --
+// CompileTransform never reads it -- so today it cannot affect whether the
+// output column set differs from the base one, regardless of its value.
+func TestIsIdentityTransform(t *testing.T) {
+	cases := []struct {
+		name string
+		t    Transform
+		want bool
+	}{
+		{"zero value", Transform{}, true},
+		{"select non-empty", Transform{Select: []ColumnSpec{{Path: "a"}}}, false},
+		{"drop non-empty", Transform{Drop: []string{"a"}}, false},
+		{"select and drop both non-empty", Transform{Select: []ColumnSpec{{Path: "a"}}, Drop: []string{"b"}}, false},
+		{"flattenObjects true, otherwise zero", Transform{FlattenObjects: true}, true},
+		{"flattenObjects false, otherwise zero", Transform{FlattenObjects: false}, true},
+		{"flattenObjects true with select", Transform{Select: []ColumnSpec{{Path: "a"}}, FlattenObjects: true}, false},
+		{"flattenObjects true with drop", Transform{Drop: []string{"a"}, FlattenObjects: true}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isIdentityTransform(c.t); got != c.want {
+				t.Fatalf("isIdentityTransform(%#v) = %v, want %v", c.t, got, c.want)
+			}
+		})
 	}
 }

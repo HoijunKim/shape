@@ -44,6 +44,38 @@ type Transform struct {
 	FlattenObjects bool         `json:"flattenObjects"`
 }
 
+// isIdentityTransform reports whether t leaves the base ColumnModel's column
+// set unchanged: Select empty (nothing projected/reordered/renamed/un-capped)
+// AND Drop empty (nothing removed) -- exactly CompileTransform's own "Select
+// empty, Drop empty" case (rule 2 in its doc comment below), which returns
+// cm.Columns unchanged.
+//
+// This predicate is NOT what decides whose truncation numbers a RowSet
+// carries. That rule keys on Select alone (see Engine.QueryRows): a Drop-only
+// transform is non-identity by this predicate, yet still inherits the base
+// ColumnModel's cm.Truncated/cm.TotalPaths, because Drop subtracts from the
+// already-capped cm.Columns and so can never reach a path MaxColumns
+// excluded. Only a non-empty Select is an explicitly un-capped projection.
+//
+// It currently has no production caller; it is retained as the tested,
+// literal statement of "this Transform changes nothing" for CompileTransform's
+// rule 2 and for future callers that genuinely need identity, not Select-empty.
+//
+// FlattenObjects is deliberately NOT part of this predicate. Per Transform's
+// doc comment above, FlattenObjects is accepted and carried through the API
+// surface but does not yet gate any distinct collapsed/un-flattened rendering
+// of the base set -- CompileTransform (below) never reads t.FlattenObjects at
+// all -- so today its value cannot make the output column set differ from
+// the base one. Folding it into isIdentityTransform would report a
+// non-identity transform for a Transform{FlattenObjects: true} that in fact
+// produces byte-for-byte the same columns as Transform{}, which is wrong by
+// this predicate's own definition ("leaves the column set unchanged"). If
+// FlattenObjects is later wired into CompileTransform to actually gate a
+// distinct rendering, this predicate must be revisited alongside that change.
+func isIdentityTransform(t Transform) bool {
+	return len(t.Select) == 0 && len(t.Drop) == 0
+}
+
 // outCol is one compiled output column: segs are the compiled path segments
 // Project resolves against each record, and col is the full Column metadata
 // (including its display name, After Select's As-or-leaf-name rule; equal to
@@ -239,15 +271,17 @@ type CompiledPlan struct {
 	Transform *CompiledTransform
 	Columns   *ColumnModel
 
-	filterKey string // canonical (Filter,Transform) hash; see FilterKey
+	filterKey string // canonical Filter-only hash (== Filter.Key()); see FilterKey
 }
 
-// FilterKey returns a canonical, stable string key for p's (Filter,
-// Transform) pair, suitable for the bitset/cursor/count caches described in
-// spec §4 (memBackend's per-FilterKey match bitset, rescanBackend's
-// (FilterKey,endOffset) cursor cache, and CountMatches' per-FilterKey
-// memoization): identical logical Filter+Transform inputs always produce
-// the same key, and any difference in either produces a different key.
+// FilterKey returns a canonical, stable string key for p's Filter alone
+// (Transform plays no part), suitable for the bitset/cursor/count caches
+// described in spec §4 (memBackend's per-FilterKey match bitset,
+// rescanBackend's (FilterKey,endOffset) cursor cache, and CountMatches'
+// per-FilterKey memoization): identical logical Filter inputs always produce
+// the same key, any difference in the Filter produces a different key, and
+// the key is exactly p.Filter.Key() -- see canonicalFilterKey for why the key
+// is filter-only.
 func (p *CompiledPlan) FilterKey() string {
 	if p == nil {
 		return ""
@@ -256,10 +290,10 @@ func (p *CompiledPlan) FilterKey() string {
 }
 
 // CompilePlan compiles f and t against cm and bundles the results into a
-// CompiledPlan, precomputing its canonical FilterKey. Compilation errors
-// from either CompileFilter or CompileTransform are returned as-is (wrapped
-// with context); nothing about key computation itself can fail (canonical
-// key encoding never touches map iteration -- see canonicalPlanKey).
+// CompiledPlan, taking its canonical FilterKey off the compiled filter.
+// Compilation errors from either CompileFilter or CompileTransform are
+// returned as-is (wrapped with context); nothing about key computation
+// itself can fail here (CompileFilter already computed and validated it).
 func CompilePlan(f Filter, t Transform, cm *ColumnModel) (*CompiledPlan, error) {
 	cf, err := CompileFilter(f, cm)
 	if err != nil {
@@ -269,26 +303,22 @@ func CompilePlan(f Filter, t Transform, cm *ColumnModel) (*CompiledPlan, error) 
 	if err != nil {
 		return nil, fmt.Errorf("query: compile plan: transform: %w", err)
 	}
-	key, err := canonicalPlanKey(f, t)
-	if err != nil {
-		return nil, fmt.Errorf("query: compile plan: filter key: %w", err)
-	}
-	return &CompiledPlan{Filter: cf, Transform: ct, Columns: cm, filterKey: key}, nil
+	return &CompiledPlan{Filter: cf, Transform: ct, Columns: cm, filterKey: cf.Key()}, nil
 }
 
-// canonicalPlanKey renders (f, t) as canonical JSON and returns the hex-
-// encoded SHA-256 digest. Filter and Transform contain only structs/slices/
-// scalars (no maps), so encoding/json's field-order-following marshal is
-// already deterministic for a given Go value -- no map-iteration dependence
-// enters the key, and identical logical input (down to slice element order,
-// which IS semantically significant here: Select's order is the output
-// order) always yields the same bytes, hence the same digest.
-func canonicalPlanKey(f Filter, t Transform) (string, error) {
-	payload := struct {
-		Filter    Filter    `json:"filter"`
-		Transform Transform `json:"transform"`
-	}{f, t}
-	b, err := json.Marshal(payload)
+// canonicalFilterKey renders f as canonical JSON and returns the hex-encoded
+// SHA-256 digest. Filter contains only structs/slices/scalars (no maps), so
+// encoding/json's field-order-following marshal is already deterministic --
+// no map-iteration dependence enters the key, and identical logical input
+// (down to slice element order) always yields the same bytes.
+//
+// The key is FILTER-ONLY on purpose: it keys match bitsets, and only the
+// Filter determines which records match. Keying it on (Filter, Transform) --
+// as the pre-E2 canonicalPlanKey did -- split one logical bitset across as
+// many cache entries as there were transforms over it, and gave Count (which
+// never has a Transform) no way to share Query's entry at all.
+func canonicalFilterKey(f Filter) (string, error) {
+	b, err := json.Marshal(f)
 	if err != nil {
 		return "", err
 	}

@@ -1,27 +1,31 @@
 <script lang="ts">
+  // T8: the header now shows the explorer's source/tier instead of the old
+  // profiler dashboard's record/skipped counts -- there is no ProfileFile
+  // model any more, just $explorer's path/tier/format (App.svelte passes
+  // these through directly rather than this component subscribing to the
+  // store itself, so it stays a plain, storeless presentational component).
   import { createEventDispatcher } from "svelte";
-  import type { visual } from "../../wailsjs/go/models";
 
-  export let summary: visual.Summary | null = null;
+  export let path = "";
+  export let tier = "";
+  export let format = "";
   export let canExport = false;
   export let theme: "light" | "dark" = "light";
 
   const dispatch = createEventDispatcher<{ open: void; export: void; toggleTheme: void }>();
 
-  $: fileName = summary?.name ? summary.name.replace(/^.*[\\/]/, "") : "";
+  $: fileName = path ? path.replace(/^.*[\\/]/, "") : "";
 </script>
 
 <header class="header">
   <div class="title">
     <span class="app-name">shape</span>
-    {#if summary && fileName}
-      <span class="source mono" title={summary.name}>{fileName}</span>
+    {#if fileName}
+      <span class="source mono" title={path}>{fileName}</span>
       <span class="counts">
-        {summary.records.toLocaleString()} records
-        {#if summary.skipped > 0}
-          <span class="skipped">- {summary.skipped.toLocaleString()} skipped</span>
-        {/if}
-        <span class="format">- {summary.format}</span>
+        {#if tier}<span class="tier">{tier}</span>{/if}
+        {#if tier && format}<span class="sep" aria-hidden="true">·</span>{/if}
+        {#if format}<span class="format">{format}</span>{/if}
       </span>
     {/if}
   </div>
@@ -78,13 +82,24 @@
 
   .counts {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     color: var(--text-muted);
     font-size: 12px;
     white-space: nowrap;
   }
 
-  .skipped {
-    color: var(--status-warning);
+  .sep {
+    color: var(--border);
+  }
+
+  /* A3: matches StatusBar's .tier rule -- the same `tier` string (e.g.
+     "memory"/"rescan") is rendered lowercase here and uppercased there; this
+     keeps the two presentations consistent. */
+  .tier {
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
   }
 
   .format {

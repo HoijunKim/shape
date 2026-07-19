@@ -126,7 +126,7 @@ func TestMemBackend_ColumnsAndProfile(t *testing.T) {
 func TestMemBackend_RowCount(t *testing.T) {
 	maps := fixtureRecords()
 	mb, _ := newTestMemBackend(t, maps)
-	n, exact := mb.RowCount()
+	n, exact := mb.RowCount(context.Background())
 	if n != int64(len(maps)) || !exact {
 		t.Fatalf("RowCount() = (%d, %v), want (%d, true)", n, exact, len(maps))
 	}
@@ -209,11 +209,12 @@ func TestMemBackend_Query_ReusesCachedBitsetAcrossWindows(t *testing.T) {
 		t.Fatalf("first Query error = %v, want nil", err)
 	}
 	mb.mu.Lock()
-	first, ok := mb.filterCache[p.FilterKey()]
+	el, ok := mb.matchCache[p.FilterKey()]
 	mb.mu.Unlock()
 	if !ok {
-		t.Fatalf("filterCache has no entry for FilterKey() after first Query")
+		t.Fatalf("matchCache has no entry for FilterKey() after first Query")
 	}
+	first := el.Value.(*matchEntry).bs
 
 	// A different window over the SAME CompiledPlan (same FilterKey) must
 	// reuse the cached bitset rather than recomputing it: the cache map must
@@ -224,14 +225,15 @@ func TestMemBackend_Query_ReusesCachedBitsetAcrossWindows(t *testing.T) {
 		t.Fatalf("second Query error = %v, want nil", err)
 	}
 	mb.mu.Lock()
-	second := mb.filterCache[p.FilterKey()]
-	entries := len(mb.filterCache)
+	el2 := mb.matchCache[p.FilterKey()]
+	second := el2.Value.(*matchEntry).bs
+	entries := len(mb.matchCache)
 	mb.mu.Unlock()
 	if first != second {
-		t.Fatalf("filterCache bitset pointer changed across re-Query with the same FilterKey: cache was not reused")
+		t.Fatalf("matchCache bitset pointer changed across re-Query with the same FilterKey: cache was not reused")
 	}
 	if entries != 1 {
-		t.Fatalf("filterCache has %d entries, want 1 (one filter, computed once)", entries)
+		t.Fatalf("matchCache has %d entries, want 1 (one filter, computed once)", entries)
 	}
 
 	// matches (even indices) = [0,2,4,6,8] -> "alice","carol","erin","grace","ivan"
@@ -367,33 +369,272 @@ func TestMemBackend_Count_Exact(t *testing.T) {
 	}
 }
 
-func TestMemBackend_Count_ReusesBitsetForSameFilterPointer(t *testing.T) {
+// TestMemBackend_Count_ReusesBitsetAcrossSeparateCompiles is a rewrite of the
+// former TestMemBackend_Count_ReusesBitsetForSameFilterPointer, which pinned
+// the defective pointer-identity cache semantics (a fresh *CompiledFilter per
+// CompileFilter call could never hit another call's cache entry). The
+// matchCache is now keyed by CompiledFilter.Key(), a content hash: two
+// independently compiled *CompiledFilter values for the same logical Filter
+// must share one cache entry.
+func TestMemBackend_Count_ReusesBitsetAcrossSeparateCompiles(t *testing.T) {
 	maps := fixtureRecords()
 	mb, cm := newTestMemBackend(t, maps)
 	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+
+	cf1, err := CompileFilter(f, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter(cf1) error = %v, want nil", err)
+	}
+	cf2, err := CompileFilter(f, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter(cf2) error = %v, want nil", err)
+	}
+	if cf1 == cf2 {
+		t.Fatalf("fixture invalid: cf1 and cf2 are the same *CompiledFilter pointer")
+	}
+
+	total1, exact1, err := mb.Count(context.Background(), cf1)
+	if err != nil {
+		t.Fatalf("Count(cf1) error = %v, want nil", err)
+	}
+	total2, exact2, err := mb.Count(context.Background(), cf2)
+	if err != nil {
+		t.Fatalf("Count(cf2) error = %v, want nil", err)
+	}
+	if total1 != total2 || !exact1 || !exact2 {
+		t.Fatalf("Count(cf1) = (%d,%v), Count(cf2) = (%d,%v), want equal totals, both exact", total1, exact1, total2, exact2)
+	}
+
+	mb.mu.Lock()
+	entries := len(mb.matchCache)
+	mb.mu.Unlock()
+	if entries != 1 {
+		t.Fatalf("matchCache has %d entries after Count with two separately-compiled CompiledFilters of the same logical Filter, want 1", entries)
+	}
+}
+
+// TestMemBackend_QueryAndCountShareOneCacheEntry asserts the other half of
+// the same fix: Query (keyed by CompiledPlan.FilterKey(), now filter-only)
+// and Count (keyed by CompiledFilter.Key()) must land in the SAME cache
+// entry when they run over the same logical Filter, not two separate ones.
+func TestMemBackend_QueryAndCountShareOneCacheEntry(t *testing.T) {
+	maps := fixtureRecords()
+	mb, cm := newTestMemBackend(t, maps)
+	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+	p := compilePlan(t, f, Transform{}, cm)
+
+	if _, err := mb.Query(context.Background(), p, Window{Offset: 0, Limit: 2}, true); err != nil {
+		t.Fatalf("Query error = %v, want nil", err)
+	}
+
 	cf, err := CompileFilter(f, cm)
 	if err != nil {
 		t.Fatalf("CompileFilter error = %v, want nil", err)
 	}
-
 	if _, _, err := mb.Count(context.Background(), cf); err != nil {
-		t.Fatalf("first Count error = %v, want nil", err)
-	}
-	mb.mu.Lock()
-	first, ok := mb.countCache[cf]
-	mb.mu.Unlock()
-	if !ok {
-		t.Fatalf("countCache has no entry for cf after first Count")
+		t.Fatalf("Count error = %v, want nil", err)
 	}
 
-	if _, _, err := mb.Count(context.Background(), cf); err != nil {
-		t.Fatalf("second Count error = %v, want nil", err)
-	}
 	mb.mu.Lock()
-	second := mb.countCache[cf]
+	entries := len(mb.matchCache)
 	mb.mu.Unlock()
-	if first != second {
-		t.Fatalf("countCache bitset pointer changed for the identical *CompiledFilter: cache was not reused")
+	if entries != 1 {
+		t.Fatalf("matchCache has %d entries after Query then Count over the same logical Filter, want 1 (Query and Count share the filter-only key)", entries)
+	}
+}
+
+// --- memBackend: matchCache LRU eviction ------------------------------------
+
+// TestMemBackend_MatchCache_EvictsLeastRecentlyUsed drives more distinct
+// filters through Count than maxMatchCacheEntries allows and asserts the
+// cache stays capped, evicts the least-recently-used (oldest) entry first,
+// and that re-Counting an evicted filter is a cache miss (correct answer,
+// recomputed) rather than a wrong answer.
+func TestMemBackend_MatchCache_EvictsLeastRecentlyUsed(t *testing.T) {
+	maps := fixtureRecords()
+	mb, cm := newTestMemBackend(t, maps)
+
+	n := maxMatchCacheEntries + 3
+	keys := make([]string, n)
+	for i := 0; i < n; i++ {
+		age := float64(i)
+		if i == 0 {
+			// The i==0 filter is the one that will be LRU-evicted first (see
+			// below). Give it a DISTINCTIVE, NONZERO expected count: every
+			// other candidate age here (1..n-1) matches zero fixtureRecords
+			// (ages run 20..29), so re-Counting one of those after eviction
+			// would return 0 whether it was correctly recomputed OR wrongly
+			// served from some other (also-zero) cached filter's bitset --
+			// the assertion couldn't tell the difference. age 25 is
+			// fixtureRecords' "frank" (index 5): exactly one match.
+			age = 25
+		}
+		f := Filter{Conditions: []Condition{{Path: "age", Op: OpEq, Value: Value{Kind: ValNumber, Num: age}}}}
+		cf, err := CompileFilter(f, cm)
+		if err != nil {
+			t.Fatalf("CompileFilter(%d) error = %v, want nil", i, err)
+		}
+		keys[i] = cf.Key()
+		if _, _, err := mb.Count(context.Background(), cf); err != nil {
+			t.Fatalf("Count(%d) error = %v, want nil", i, err)
+		}
+	}
+
+	mb.mu.Lock()
+	entries := len(mb.matchCache)
+	_, firstStillPresent := mb.matchCache[keys[0]]
+	mb.mu.Unlock()
+	if entries != maxMatchCacheEntries {
+		t.Fatalf("len(matchCache) = %d, want %d (LRU cap)", entries, maxMatchCacheEntries)
+	}
+	if firstStillPresent {
+		t.Fatalf("matchCache still has the first (least-recently-used) key after exceeding the cap")
+	}
+
+	mb.mu.Lock()
+	for i := n - maxMatchCacheEntries; i < n; i++ {
+		if _, ok := mb.matchCache[keys[i]]; !ok {
+			mb.mu.Unlock()
+			t.Fatalf("matchCache missing key for filter %d, want the most recent %d keys all present", i, maxMatchCacheEntries)
+		}
+	}
+	mb.mu.Unlock()
+
+	// Re-Count the evicted (first) filter: a cache miss, never a wrong answer.
+	// age==25 matches exactly one fixture record ("frank"), a nonzero count no
+	// other filter in this test also produces -- so getting 1 back can only be
+	// explained by an actual recompute of THIS filter, not a stale/wrong hit
+	// off some other cached (and, for every other filter here, zero-count)
+	// bitset.
+	fEvicted := Filter{Conditions: []Condition{{Path: "age", Op: OpEq, Value: Value{Kind: ValNumber, Num: 25}}}}
+	cfEvicted, err := CompileFilter(fEvicted, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter(evicted) error = %v, want nil", err)
+	}
+	if cfEvicted.Key() != keys[0] {
+		t.Fatalf("fixture invalid: recompiled evicted filter key %q != original %q", cfEvicted.Key(), keys[0])
+	}
+	total, exact, err := mb.Count(context.Background(), cfEvicted)
+	if err != nil {
+		t.Fatalf("Count(evicted) error = %v, want nil", err)
+	}
+	if !exact {
+		t.Fatalf("Count(evicted) exact = false, want true")
+	}
+	if total != 1 {
+		t.Fatalf("Count(evicted) = %d, want 1 (fixtureRecords age 25 -> exactly \"frank\")", total)
+	}
+}
+
+// TestMemBackend_MatchCache_TouchOnHitPreventsEviction fills the cache, then
+// re-Counts the oldest key (a cache HIT, which must move it to the front of
+// the LRU list), then adds one more distinct filter: the touched key must
+// survive, and the entry that was actually second-oldest is evicted instead.
+func TestMemBackend_MatchCache_TouchOnHitPreventsEviction(t *testing.T) {
+	maps := fixtureRecords()
+	mb, cm := newTestMemBackend(t, maps)
+
+	countFilter := func(i int) string {
+		f := Filter{Conditions: []Condition{{Path: "age", Op: OpEq, Value: Value{Kind: ValNumber, Num: float64(i)}}}}
+		cf, err := CompileFilter(f, cm)
+		if err != nil {
+			t.Fatalf("CompileFilter(%d) error = %v, want nil", i, err)
+		}
+		if _, _, err := mb.Count(context.Background(), cf); err != nil {
+			t.Fatalf("Count(%d) error = %v, want nil", i, err)
+		}
+		return cf.Key()
+	}
+
+	keys := make([]string, maxMatchCacheEntries)
+	for i := 0; i < maxMatchCacheEntries; i++ {
+		keys[i] = countFilter(i)
+	}
+	// Cache is now full: keys[0] (oldest/LRU) .. keys[maxMatchCacheEntries-1] (newest).
+
+	// Touch the oldest key: re-Count filter 0, making it the most recently used.
+	touched := countFilter(0)
+	if touched != keys[0] {
+		t.Fatalf("fixture invalid: re-compiled filter 0 key changed: %q != %q", touched, keys[0])
+	}
+
+	// Add one more distinct filter. Without the touch, keys[0] would be the
+	// LRU victim; keys[1] is now the actual least-recently-used entry.
+	countFilter(maxMatchCacheEntries)
+
+	mb.mu.Lock()
+	_, key0Present := mb.matchCache[keys[0]]
+	_, key1Present := mb.matchCache[keys[1]]
+	entries := len(mb.matchCache)
+	mb.mu.Unlock()
+
+	if !key0Present {
+		t.Fatalf("matchCache evicted the touched (re-Counted) key, want it retained as most-recently-used")
+	}
+	if key1Present {
+		t.Fatalf("matchCache retained key[1], want it evicted as the new least-recently-used")
+	}
+	if entries != maxMatchCacheEntries {
+		t.Fatalf("len(matchCache) = %d, want %d", entries, maxMatchCacheEntries)
+	}
+}
+
+// cancelAfterNCalls wraps real (typically a genuine compiled predicate
+// extracted from CompileFilter's result) so the returned predicate still
+// applies real's logic to every record it is asked about, but ALSO calls
+// cancel exactly once -- the Nth time it is invoked. Wiring this in as a
+// hand-built *CompiledFilter's pred (constructible directly here since this
+// test file is in package query, which can see CompiledFilter's unexported
+// fields) lets a test land ctx cancellation deterministically in the middle
+// of computeMatchBitset's per-record scan: no timer, no goroutine race, no
+// "cancel before the call is even made" shortcut that the top-level ctx.Err()
+// guards in Query/Count would swallow before matchBitsetFor is ever reached.
+// This is the same "no timing races" discipline sqlbackend_test.go's
+// countCancelConn applies on the sqlBackend side (see the comment there).
+func cancelAfterNCalls(real func(rec any) bool, n int, cancel context.CancelFunc) func(rec any) bool {
+	calls := 0
+	return func(rec any) bool {
+		calls++
+		if calls == n {
+			cancel()
+		}
+		return real(rec)
+	}
+}
+
+// TestMemBackend_MatchCache_CancelledComputeNotCached cancels ctx from
+// INSIDE computeMatchBitset's scan (via cancelAfterNCalls, wired in as the
+// compiled predicate) so the cancellation genuinely lands mid-scan, at the
+// cancelCheckStride check (memstore.go) -- not before Query is ever called.
+// A pre-cancelled ctx would be caught by Query's top-level ctx.Err() guard
+// before matchBitsetFor/computeMatchBitset run at all, proving nothing about
+// "never cache a cancelled compute" (matchBitsetFor's real invariant under
+// test here).
+func TestMemBackend_MatchCache_CancelledComputeNotCached(t *testing.T) {
+	maps := manyRecords(20000) // >> cancelCheckStride (4096): plenty of room for a mid-scan cancel to land well before the scan would otherwise finish
+	mb, cm := newTestMemBackend(t, maps)
+	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
+	realCF, err := CompileFilter(f, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// 100 < cancelCheckStride (4096): the cancel fires partway through the
+	// FIRST stride, so the check at the i=4096 boundary is computeMatchBitset's
+	// first opportunity to observe it -- genuinely mid-scan.
+	hooked := &CompiledFilter{pred: cancelAfterNCalls(realCF.pred, 100, cancel), key: realCF.Key()}
+	p := &CompiledPlan{Filter: hooked, Transform: &CompiledTransform{}, Columns: cm, filterKey: hooked.Key()}
+
+	if _, err := mb.Query(ctx, p, Window{Offset: 0, Limit: 10}, true); err == nil {
+		t.Fatalf("Query(cancelled mid-scan) error = nil, want non-nil")
+	}
+
+	mb.mu.Lock()
+	entries := len(mb.matchCache)
+	mb.mu.Unlock()
+	if entries != 0 {
+		t.Fatalf("matchCache has %d entries after a cancelled compute, want 0: a cancelled compute must never be cached", entries)
 	}
 }
 
@@ -457,7 +698,10 @@ func TestMemBackend_Export_EmptyFilterStreamsEverything(t *testing.T) {
 
 // --- memBackend.Close --------------------------------------------------------
 
-func TestMemBackend_Close(t *testing.T) {
+// TestMemBackend_Close_ClearsMatchCache is a rewrite of the former
+// TestMemBackend_Close, which asserted the separate filterCache/countCache
+// were both cleared: there is now a single matchCache to clear.
+func TestMemBackend_Close_ClearsMatchCache(t *testing.T) {
 	maps := fixtureRecords()
 	mb, cm := newTestMemBackend(t, maps)
 	p := compilePlan(t, Filter{}, Transform{}, cm)
@@ -465,25 +709,25 @@ func TestMemBackend_Close(t *testing.T) {
 	if _, err := mb.Query(context.Background(), p, Window{Limit: 1}, true); err != nil {
 		t.Fatalf("Query error = %v, want nil", err)
 	}
-	if len(mb.filterCache) == 0 {
-		t.Fatalf("fixture invalid: filterCache is empty after a Query")
+	if len(mb.matchCache) == 0 {
+		t.Fatalf("fixture invalid: matchCache is empty after a Query")
 	}
 
 	if err := mb.Close(); err != nil {
 		t.Fatalf("Close error = %v, want nil", err)
 	}
-	if len(mb.filterCache) != 0 {
-		t.Fatalf("filterCache not cleared after Close: %d entries remain", len(mb.filterCache))
-	}
-	if len(mb.countCache) != 0 {
-		t.Fatalf("countCache not cleared after Close: %d entries remain", len(mb.countCache))
+	if len(mb.matchCache) != 0 {
+		t.Fatalf("matchCache not cleared after Close: %d entries remain", len(mb.matchCache))
 	}
 }
 
 // --- memBackend: cancellation ------------------------------------------------
 
 // TestMemBackend_Query_CancelledContext_NotCached exercises the Important
-// review finding: an already-cancelled ctx must abort the O(records)
+// review finding: a ctx cancelled mid-scan (via cancelAfterNCalls, landing
+// the cancel inside computeMatchBitset's loop -- see
+// TestMemBackend_MatchCache_CancelledComputeNotCached's doc comment for why a
+// PRE-cancelled ctx would prove nothing here) must abort the O(records)
 // match-bitset scan behind Query's cache-miss path (rather than running it to
 // completion, uncancellable, as before the fix), the scan's error must
 // surface as ctx.Err() through Query, and -- critically -- nothing may be
@@ -493,34 +737,43 @@ func TestMemBackend_Query_CancelledContext_NotCached(t *testing.T) {
 	maps := manyRecords(20000)
 	mb, cm := newTestMemBackend(t, maps)
 	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
-	p := compilePlan(t, f, Transform{}, cm)
+	realCF, err := CompileFilter(f, cm)
+	if err != nil {
+		t.Fatalf("CompileFilter error = %v, want nil", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	hooked := &CompiledFilter{pred: cancelAfterNCalls(realCF.pred, 100, cancel), key: realCF.Key()}
+	p := &CompiledPlan{Filter: hooked, Transform: &CompiledTransform{}, Columns: cm, filterKey: hooked.Key()}
 
 	rs, err := mb.Query(ctx, p, Window{Offset: 0, Limit: 10}, true)
 	if err == nil {
-		t.Fatalf("Query(cancelled ctx) error = nil, want non-nil")
+		t.Fatalf("Query(cancelled mid-scan) error = nil, want non-nil")
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Query(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+		t.Fatalf("Query(cancelled mid-scan) error = %v, want errors.Is(err, context.Canceled)", err)
 	}
 	if len(rs.Rows) != 0 {
-		t.Fatalf("Query(cancelled ctx) returned %d rows, want a zero-value RowSet on error", len(rs.Rows))
+		t.Fatalf("Query(cancelled mid-scan) returned %d rows, want a zero-value RowSet on error", len(rs.Rows))
 	}
 
 	mb.mu.Lock()
-	_, cached := mb.filterCache[p.FilterKey()]
-	entries := len(mb.filterCache)
+	_, cached := mb.matchCache[p.FilterKey()]
+	entries := len(mb.matchCache)
 	mb.mu.Unlock()
 	if cached || entries != 0 {
-		t.Fatalf("filterCache has %d entries (cached=%v) after a cancelled Query, want 0/false: a cancelled compute must never be cached", entries, cached)
+		t.Fatalf("matchCache has %d entries (cached=%v) after a cancelled Query, want 0/false: a cancelled compute must never be cached", entries, cached)
 	}
 
-	// A subsequent Query with a live ctx and the SAME filter/plan must still
-	// work (not poisoned by the earlier cancellation) and return correct,
-	// complete results.
-	rs2, err := mb.Query(context.Background(), p, Window{Offset: 0, Limit: 10000}, true)
+	// A follow-up Query over the SAME logical Filter (a fresh, unhooked
+	// CompiledPlan sharing the cancelled plan's FilterKey) with a live ctx
+	// must still work (not poisoned by the earlier cancellation) and return
+	// correct, complete results.
+	p2 := compilePlan(t, f, Transform{}, cm)
+	if p2.FilterKey() != p.FilterKey() {
+		t.Fatalf("fixture invalid: follow-up plan's FilterKey() %q != cancelled plan's %q", p2.FilterKey(), p.FilterKey())
+	}
+	rs2, err := mb.Query(context.Background(), p2, Window{Offset: 0, Limit: 10000}, true)
 	if err != nil {
 		t.Fatalf("follow-up Query error = %v, want nil", err)
 	}
@@ -529,44 +782,49 @@ func TestMemBackend_Query_CancelledContext_NotCached(t *testing.T) {
 	}
 
 	mb.mu.Lock()
-	_, cachedAfter := mb.filterCache[p.FilterKey()]
+	_, cachedAfter := mb.matchCache[p2.FilterKey()]
 	mb.mu.Unlock()
 	if !cachedAfter {
-		t.Fatalf("filterCache has no entry for FilterKey() after a successful follow-up Query")
+		t.Fatalf("matchCache has no entry for FilterKey() after a successful follow-up Query")
 	}
 }
 
 // TestMemBackend_Count_CancelledContext_NotCached is the Count-side twin of
 // TestMemBackend_Query_CancelledContext_NotCached: Count's cache-miss path
-// goes through the same computeMatchBitset scan via countCache instead of
-// filterCache, and must be independently cancellable and independently
-// non-caching on cancellation.
+// goes through the same computeMatchBitset scan via the same shared
+// matchCache, and must be independently cancellable and independently
+// non-caching on a cancellation landing mid-scan (via cancelAfterNCalls; see
+// TestMemBackend_MatchCache_CancelledComputeNotCached's doc comment for why a
+// PRE-cancelled ctx would not exercise this).
 func TestMemBackend_Count_CancelledContext_NotCached(t *testing.T) {
 	maps := manyRecords(20000)
 	mb, cm := newTestMemBackend(t, maps)
 	f := Filter{Conditions: []Condition{{Path: "even", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}}}}
-	cf, err := CompileFilter(f, cm)
+	realCF, err := CompileFilter(f, cm)
 	if err != nil {
 		t.Fatalf("CompileFilter error = %v, want nil", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	hooked := &CompiledFilter{pred: cancelAfterNCalls(realCF.pred, 100, cancel), key: realCF.Key()}
 
-	if _, _, err := mb.Count(ctx, cf); err == nil {
-		t.Fatalf("Count(cancelled ctx) error = nil, want non-nil")
+	if _, _, err := mb.Count(ctx, hooked); err == nil {
+		t.Fatalf("Count(cancelled mid-scan) error = nil, want non-nil")
 	} else if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Count(cancelled ctx) error = %v, want errors.Is(err, context.Canceled)", err)
+		t.Fatalf("Count(cancelled mid-scan) error = %v, want errors.Is(err, context.Canceled)", err)
 	}
 
 	mb.mu.Lock()
-	_, cached := mb.countCache[cf]
+	_, cached := mb.matchCache[hooked.Key()]
 	mb.mu.Unlock()
 	if cached {
-		t.Fatalf("countCache has an entry for cf after a cancelled Count: cancelled compute must never be cached")
+		t.Fatalf("matchCache has an entry for cf.Key() after a cancelled Count: cancelled compute must never be cached")
 	}
 
-	total, exact, err := mb.Count(context.Background(), cf)
+	// A follow-up Count over the SAME logical Filter (the original, unhooked
+	// realCF, sharing hooked's key) with a live ctx must still work and
+	// return correct, complete results.
+	total, exact, err := mb.Count(context.Background(), realCF)
 	if err != nil {
 		t.Fatalf("follow-up Count error = %v, want nil", err)
 	}
@@ -581,7 +839,7 @@ func TestMemBackend_Count_CancelledContext_NotCached(t *testing.T) {
 // uncovered gap: two logically different filters queried against the SAME
 // memBackend instance must each return their own correct, uncontaminated
 // results (not the other filter's matches, and not a merge of both), and the
-// filterCache must end up with exactly one entry per distinct FilterKey --
+// matchCache must end up with exactly one entry per distinct FilterKey --
 // here, two.
 func TestMemBackend_Query_DifferentFilters_NoContamination(t *testing.T) {
 	maps := fixtureRecords()
@@ -634,10 +892,10 @@ func TestMemBackend_Query_DifferentFilters_NoContamination(t *testing.T) {
 	}
 
 	mb.mu.Lock()
-	entries := len(mb.filterCache)
+	entries := len(mb.matchCache)
 	mb.mu.Unlock()
 	if entries != 2 {
-		t.Fatalf("filterCache has %d entries, want 2 (two distinct filters, each cached once)", entries)
+		t.Fatalf("matchCache has %d entries, want 2 (two distinct filters, each cached once)", entries)
 	}
 }
 

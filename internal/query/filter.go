@@ -82,6 +82,23 @@ type Filter struct {
 // match-all: Match never needs a nil check at call sites.
 type CompiledFilter struct {
 	pred func(rec any) bool
+	key  string // canonical Filter hash; see Key
+}
+
+// Key returns a canonical, stable cache key for the Filter this predicate was
+// compiled from: two CompiledFilters compiled from the same logical Filter
+// always share a key, and any difference in the Filter produces a different
+// one. A nil *CompiledFilter returns "". "" is reserved for the match-all/nil
+// case: any CompiledFilter that carries a non-nil pred MUST have its key set
+// by CompileFilter (never hand-built with key left as the zero value), or it
+// will silently alias whatever is cached under the match-all "" key and
+// callers keyed on it (e.g. memBackend's matchCache) will return the WRONG
+// answer for it.
+func (cf *CompiledFilter) Key() string {
+	if cf == nil {
+		return ""
+	}
+	return cf.key
 }
 
 // Match reports whether rec satisfies the compiled filter. It never errors:
@@ -109,14 +126,18 @@ func (cf *CompiledFilter) Match(rec any) bool {
 // regex; the resulting predicate itself can never error or panic on that
 // account again.
 func CompileFilter(f Filter, cm *ColumnModel) (*CompiledFilter, error) {
+	key, err := canonicalFilterKey(f)
+	if err != nil {
+		return nil, fmt.Errorf("query: compile filter: key: %w", err)
+	}
 	if isEmptyFilter(f) {
-		return &CompiledFilter{}, nil // nil pred: match-all
+		return &CompiledFilter{key: key}, nil // nil pred: match-all
 	}
 	pred, err := compileGroup(f, cm)
 	if err != nil {
 		return nil, err
 	}
-	return &CompiledFilter{pred: pred}, nil
+	return &CompiledFilter{pred: pred, key: key}, nil
 }
 
 // isEmptyFilter reports whether f has no Conditions, no Groups, and no
