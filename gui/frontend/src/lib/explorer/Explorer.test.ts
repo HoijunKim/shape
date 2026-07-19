@@ -232,6 +232,16 @@ describe("Explorer", () => {
       makeColumn("id"),
       makeColumn("meta", { container: true }), // a container column: the case a naive filter would drop
       makeColumn("meta.detail"),
+      // MINOR-4 fix: pageRowsFor clamps to its 200-row max for ANY column
+      // count <= 150 (30000 / 150 === 200 exactly), so with only 3 columns
+      // the `lastCall.limit` assertion below was unconditionally 200 on
+      // both sides (pageRowsFor(3) and store.ts's own hardcoded-200-in-
+      // practice behavior) -- it could not fail no matter what store.ts
+      // actually computed. Padding past 150 columns makes pageRowsFor
+      // return something other than 200 (147 for 203 columns), so the
+      // assertion only passes if store.ts genuinely derives its fetch limit
+      // from this exact column count.
+      ...Array.from({ length: 200 }, (_, i) => makeColumn(`extra${i}`)),
     ];
     const fields = columns.map((c) => makeField(c.path));
     vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h4", columns, fields));
