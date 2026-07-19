@@ -47,6 +47,21 @@ func NewApp() *App { return &App{eng: query.NewEngine()} }
 // startup captures the runtime context (wired via OnStartup, not a binding).
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
+// shutdown releases the last open source's backend at teardown (wired via
+// OnShutdown, not a binding). Without this the last open handle's Close --
+// e.g. a sqlite connection's db.Close() -- never runs; process exit reclaims
+// the OS-level resource anyway, so this is not a live leak, but a graceful
+// close is still the right thing to do rather than relying on that.
+func (a *App) shutdown(ctx context.Context) {
+	a.mu.Lock()
+	h := a.handle
+	a.handle = ""
+	a.mu.Unlock()
+	if h != "" {
+		_ = a.eng.CloseSource(h)
+	}
+}
+
 // reqCtx returns the context requests run under. a.ctx is nil until Wails
 // calls startup, and the Go tests never call it, so fall back to Background
 // rather than passing a nil ctx into the engine.

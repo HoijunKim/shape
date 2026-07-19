@@ -259,6 +259,30 @@ func TestAppCloseSourceThenQuery(t *testing.T) {
 	}
 }
 
+// TestAppShutdownClosesLastOpenHandle pins MINOR-7's fix: wails' OnShutdown
+// hook must release the last open source's backend at teardown (e.g. a
+// sqlite handle's db.Close()), not just leave it to process exit. Regression:
+// a no-op shutdown would leave the handle registered and this QueryRows call
+// would still succeed instead of erroring.
+func TestAppShutdownClosesLastOpenHandle(t *testing.T) {
+	a := NewApp()
+	res, err := a.OpenSource(query.OpenRequest{Path: sampleNDJSON})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+	a.shutdown(context.Background())
+	if _, err := a.QueryRows(query.QueryRequest{Handle: res.Handle, Limit: 10}); err == nil {
+		t.Error("QueryRows after shutdown: want error (handle closed at teardown), got nil")
+	}
+}
+
+// TestAppShutdownWithNoOpenHandle covers the "nothing was ever opened" path
+// (h == "" in shutdown): it must not panic or call CloseSource("").
+func TestAppShutdownWithNoOpenHandle(t *testing.T) {
+	a := NewApp()
+	a.shutdown(context.Background()) // must not panic
+}
+
 func TestAppRowSetMarshals(t *testing.T) {
 	a := NewApp()
 	res, err := a.OpenSource(query.OpenRequest{Path: sampleNDJSON})
