@@ -305,4 +305,67 @@ describe("StructureMap + TreeNode", () => {
 
     expect(row(target, "user.address.city")).toBeTruthy(); // re-revealed
   });
+
+  // E3 Task 9 (click-to-seed, the second "wow"): a small funnel button per
+  // column row that seeds a FilterBar condition without also focusing/
+  // scrolling the DataTable column -- the two actions must not both fire off
+  // a single click.
+  it("renders a seed button only on column rows, not on a column-less (dimmed) row", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    cmp = new StructureMap({ target, props: { fields, focusPath: "", columnPaths } }) as unknown as Instance;
+    await tick();
+
+    const idRow = row(target, "id")!; // a real column
+    expect(idRow.querySelector("button.seed")).toBeTruthy();
+
+    const userRow = row(target, "user")!; // pure interior object, not a column
+    expect(userRow.querySelector("button.seed")).toBeNull();
+  });
+
+  it("clicking a column row's seed button emits seedFilter with {path, type} and does NOT also emit focus (stopPropagation)", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    cmp = new StructureMap({ target, props: { fields, focusPath: "", columnPaths } }) as unknown as Instance;
+    await tick();
+
+    const idRow = row(target, "id")!; // types: [{kind:"int", share:1}]
+    const seedBtn = idRow.querySelector("button.seed") as HTMLButtonElement;
+    expect(seedBtn).toBeTruthy();
+
+    let seedDetail: { path: string; type: string } | null = null;
+    let focusFired = false;
+    cmp.$on("seedFilter", (e) => (seedDetail = e.detail));
+    cmp.$on("focus", () => (focusFired = true));
+
+    seedBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+
+    expect(seedDetail).toEqual({ path: "id", type: "int" });
+    // Mutation: removing TreeNode's e.stopPropagation() on the seed button
+    // lets this click also bubble to the row's own on:click handler, which
+    // would dispatch `focus` -- the exact double-fire a plan review flagged.
+    expect(focusFired).toBe(false);
+  });
+
+  it("forwards seedFilter from a deeply nested row up through the recursive svelte:self chain", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    cmp = new StructureMap({
+      target,
+      props: { fields, focusPath: "user.address.city", columnPaths },
+    }) as unknown as Instance;
+    await tick();
+
+    const cityRow = row(target, "user.address.city")!;
+    const seedBtn = cityRow.querySelector("button.seed") as HTMLButtonElement;
+    expect(seedBtn).toBeTruthy();
+
+    let seedDetail: { path: string; type: string } | null = null;
+    cmp.$on("seedFilter", (e) => (seedDetail = e.detail));
+    seedBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+
+    expect(seedDetail).toEqual({ path: "user.address.city", type: "string" });
+  });
 });

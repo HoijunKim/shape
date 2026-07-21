@@ -41,7 +41,7 @@ function makeColumn(path: string, over: Record<string, unknown> = {}): any {
   };
 }
 
-function makeField(path: string): any {
+function makeField(path: string, over: Record<string, unknown> = {}): any {
   return {
     path,
     types: [{ kind: "string", share: 1 }],
@@ -50,6 +50,7 @@ function makeField(path: string): any {
     distinct: 1,
     distinctExact: true,
     drift: false,
+    ...over,
   };
 }
 
@@ -617,6 +618,72 @@ describe("Explorer", () => {
 
       expect(get(explorer).counting).toBe(false);
       expect(target.querySelector("button.cancel-count")).toBeNull();
+    });
+  });
+
+  // E3 Task 9: Explorer is the router between the sidebar's seedFilter event
+  // and FilterBar -- a funnel click must open the (initially closed) bar via
+  // the bindable `filterOpen` prop and hand the seed down so FilterBar
+  // appends a condition defaulted to the column's op, with its value input
+  // focused.
+  describe("click-to-seed routes the sidebar's seedFilter into FilterBar (E3 Task 9)", () => {
+    it("opens the filter bar and adds a condition for the seeded column, defaulted to its type's op, with the value input focused", async () => {
+      const columns = [makeColumn("age", { type: "int" }), makeColumn("id")];
+      const fields = [
+        makeField("age", { types: [{ kind: "int", share: 1 }] }),
+        makeField("id", { types: [{ kind: "int", share: 1 }] }),
+      ];
+      vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h30", columns, fields));
+      vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("seed.ndjson");
+      await tick();
+      await tick();
+
+      expect(target.querySelector(".filter-bar")).toBeNull(); // sanity: bar starts closed
+
+      const ageRow = target.querySelector('.row[data-path="age"]') as HTMLElement;
+      expect(ageRow).toBeTruthy();
+      const seedBtn = ageRow.querySelector("button.seed") as HTMLButtonElement;
+      expect(seedBtn).toBeTruthy();
+
+      seedBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+      await tick();
+
+      const bar = target.querySelector(".filter-bar");
+      expect(bar).toBeTruthy(); // filterOpen flipped true through the bindable prop
+
+      const colSelect = bar!.querySelector('select[aria-label="Column"]') as HTMLSelectElement;
+      expect(colSelect).toBeTruthy();
+      expect(colSelect.value).toBe("age");
+
+      const opSelect = bar!.querySelector('select[aria-label="Operator"]') as HTMLSelectElement;
+      expect(opSelect.value).toBe("gte"); // defaultOpForType("int")
+
+      const valueInput = bar!.querySelector('input[aria-label="Value"]') as HTMLInputElement;
+      expect(valueInput).toBeTruthy();
+      expect(document.activeElement).toBe(valueInput); // focused per the wiring brief
+
+      // Typing a value and letting the (real, un-mocked) 250ms debounce
+      // elapse reaches the store's setFilter -- the end-to-end path from a
+      // funnel click to a live-filtered query.
+      const setFilterSpy = vi.spyOn(explorer, "setFilter");
+      valueInput.value = "20";
+      valueInput.dispatchEvent(new Event("input"));
+      await tick();
+      await new Promise((r) => setTimeout(r, 300));
+      await tick();
+
+      expect(setFilterSpy).toHaveBeenCalled();
+      const filter = setFilterSpy.mock.calls.at(-1)![0] as any;
+      expect(filter.conditions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "age", op: "gte", value: { kind: "number", num: 20 } }),
+        ]),
+      );
+      setFilterSpy.mockRestore();
     });
   });
 });

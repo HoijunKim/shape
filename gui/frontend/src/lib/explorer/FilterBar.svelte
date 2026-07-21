@@ -7,23 +7,34 @@
   // needed for "+ Add condition" and each row's column <select>), and only
   // rendered when `open` is true (Header's Filter button, routed through
   // App.svelte's `filterOpen`, toggles this).
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { emptyDraft, newCondition, buildFilter } from "./filterModel";
   import type { FilterDraft, DraftCondition } from "./filterModel";
   import { debounce } from "./debounce";
   import { explorer } from "./store";
   import ConditionRow from "./ConditionRow.svelte";
-  import type { Column } from "./types";
+  import type { Column, Filter } from "./types";
 
   export let columns: Column[] = [];
   export let open = false;
+  // E3 Task 9 (click-to-seed): a sidebar funnel click seeds a fresh condition
+  // for `seed.path`/`seed.type`. `nonce` (not path/type alone) is what the
+  // reactive guard below keys off -- seeding the SAME path twice in a row
+  // (e.g. the user clicks the same field's funnel again after removing the
+  // condition it created) must still append a new row each time, and two
+  // equal-value prop re-assignments in a row would otherwise be indistinguish-
+  // able from Svelte's point of view (the whole reason focusToken/resetToken
+  // elsewhere in this codebase use the same bump-a-counter pattern instead of
+  // re-signalling via a value that might repeat).
+  export let seed: { path: string; type: string; nonce: number } | null = null;
 
   let draft: FilterDraft = emptyDraft();
   let nextId = 1;
+  let barEl: HTMLDivElement | undefined;
 
   // One debounce is enough for E3 (spec's count/apply split note): setFilter
   // itself drives both the page-0 refetch and (Task 5) the live count.
-  const debouncedApply = debounce((f) => explorer.setFilter(f), 250);
+  const debouncedApply = debounce((f: Filter) => explorer.setFilter(f), 250);
 
   // Teardown safety (review F1): opening a second file dips the store's
   // status ready -> opening, which unmounts THIS component (Explorer's
@@ -76,10 +87,49 @@
     draft = emptyDraft();
     rebuild();
   }
+
+  // E3 Task 9: seed a fresh condition from a sidebar funnel click. Guarded by
+  // a prevSeedNonce sentinel initialized to -1 (never a real nonce, which
+  // Explorer.svelte starts at 0 and only increments) so mounting with `seed`
+  // already non-null (a prop re-pass carrying the SAME seed, which Svelte's
+  // safe_not_equal treats as "changed" for any object-typed prop regardless
+  // of identity/content -- see Explorer.test.ts's focusToken test for the
+  // same caveat) never re-seeds; only an actual nonce bump does.
+  let prevSeedNonce = -1;
+  $: if (seed && seed.nonce !== prevSeedNonce) {
+    prevSeedNonce = seed.nonce;
+    seedCondition(seed.path, seed.type);
+  }
+
+  function seedCondition(path: string, type: string): void {
+    draft = {
+      ...draft,
+      conditions: [...draft.conditions, newCondition(nextId++, path, type)],
+    };
+    rebuild();
+    void focusLastValueInput();
+  }
+
+  // The newly-seeded row is always the LAST one (seeding only ever appends),
+  // so the last `.condition-row` in the DOM is unambiguously it -- no id
+  // needs threading through ConditionRow (which Task 9 does not touch) to
+  // find it. Waits a tick for `open`/the new row to actually mount (the
+  // funnel click sets `filterOpen` and `seed` together, and the bar may have
+  // been closed, i.e. unmounted, until this same update). Isnull/notnull
+  // (container-type seeds) render no "Value" control at all -- there is
+  // nothing to focus, so this silently no-ops.
+  async function focusLastValueInput(): Promise<void> {
+    await tick();
+    if (!barEl) return;
+    const rows = barEl.querySelectorAll(".condition-row");
+    const last = rows[rows.length - 1] as HTMLElement | undefined;
+    const valueEl = last?.querySelector('[aria-label="Value"]') as HTMLElement | null;
+    valueEl?.focus();
+  }
 </script>
 
 {#if open}
-  <div class="filter-bar">
+  <div class="filter-bar" bind:this={barEl}>
     {#if draft.conditions.length > 0}
       <div class="rows">
         {#each draft.conditions as condition (condition.id)}

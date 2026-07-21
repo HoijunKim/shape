@@ -43,6 +43,19 @@
     focusToken += 1;
   }
 
+  // E3 Task 9 (click-to-seed): Explorer is the router between the sidebar's
+  // seedFilter event and FilterBar -- opening the bar via the bindable
+  // filterOpen prop (Task 7's whole reason for making it bindable rather than
+  // a local `let`) and handing the seed down as a nonce-tagged object so
+  // FilterBar can tell a fresh seed apart from an unrelated re-render (see
+  // FilterBar.svelte's own prevSeedNonce guard comment).
+  let seed: { path: string; type: string; nonce: number } | null = null;
+  let seedNonce = 0;
+  function onSeedFilter(e: CustomEvent<{ path: string; type: string }>): void {
+    filterOpen = true;
+    seed = { path: e.detail.path, type: e.detail.type, nonce: seedNonce++ };
+  }
+
   function retry(): void {
     void explorer.open($explorer.path);
   }
@@ -98,6 +111,7 @@
           focusPath={$explorer.focusPath}
           {focusToken}
           on:focus={onFocus}
+          on:seedFilter={onSeedFilter}
         />
       </div>
       <div class="main">
@@ -152,13 +166,14 @@
             columns={$explorer.columns}
             total={$explorer.total}
             focusPath={$explorer.focusPath}
+            resetToken={$explorer.resetToken}
             on:focus={onFocus}
           />
         {/if}
       </div>
     </div>
     {#if $explorer.status === "ready"}
-      <FilterBar columns={$explorer.columns} open={filterOpen} />
+      <FilterBar columns={$explorer.columns} open={filterOpen} {seed} />
     {/if}
     <StatusBar
       tier={$explorer.tier}
