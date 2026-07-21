@@ -11,8 +11,14 @@
   export let format = "";
   export let canExport = false;
   export let theme: "light" | "dark" = "light";
+  export let filterOpen = false;
 
-  const dispatch = createEventDispatcher<{ open: void; export: void; toggleTheme: void }>();
+  const dispatch = createEventDispatcher<{
+    open: void;
+    export: void;
+    toggleTheme: void;
+    toggleFilter: void;
+  }>();
 
   $: fileName = path ? path.replace(/^.*[\\/]/, "") : "";
 </script>
@@ -37,6 +43,13 @@
       on:click={() => dispatch("toggleTheme")}
     >
       {theme === "dark" ? "☀" : "☾"}
+    </button>
+    <button
+      on:click={() => dispatch("toggleFilter")}
+      aria-pressed={filterOpen}
+      title="Filter"
+    >
+      Filter
     </button>
     <button on:click={() => dispatch("open")}>Open</button>
     <button class="primary" disabled={!canExport} on:click={() => dispatch("export")}>

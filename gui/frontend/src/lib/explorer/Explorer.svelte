@@ -9,6 +9,14 @@
   import StructureMap from "./StructureMap.svelte";
   import StatusBar from "./StatusBar.svelte";
   import FileDrop from "../FileDrop.svelte";
+  import FilterBar from "./FilterBar.svelte";
+
+  // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
+  // siblings under App.svelte (Explorer never mounts Header), so App owns
+  // the toggle wiring and passes this down; Task 9's seed sets it from
+  // outside and it must propagate back up through App's `bind:filterOpen` to
+  // Header's aria-pressed.
+  export let filterOpen = false;
 
   // Obligation 1 (carried from earlier reviews): StructureMap deliberately
   // does not own columnPaths -- it must be built here, from $explorer.columns
@@ -128,6 +136,9 @@
         {/if}
       </div>
     </div>
+    {#if $explorer.status === "ready"}
+      <FilterBar columns={$explorer.columns} open={filterOpen} />
+    {/if}
     <StatusBar
       tier={$explorer.tier}
       total={$explorer.total}
