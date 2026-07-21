@@ -264,6 +264,51 @@ describe("setFilter (E3 Task 4)", () => {
     await flush();
   });
 
+  // T10 fix: on a non-memory tier, QueryRows is always called with
+  // wantTotal:false (ensurePages), and every non-memory Backend.Query
+  // (rescan/sqlite/parquet) returns Total:-1 for that case -- so once a
+  // filter is CLEARED back to match-all, the only thing left to feed
+  // `total` was reconcileEof's page-boundary guess, which starts small and
+  // never climbs back to the file's real rowEstimate on its own. A clear
+  // must restore the file-level baseline captured at open() instead of
+  // resetting to -1 unconditionally (the way an ACTIVE filter correctly
+  // does, per the test above -- its own stale total must not leak through
+  // either, just from a different, already-covered direction).
+  it("clearing a filter restores the file's rowEstimate synchronously, instead of leaving total at -1 forever (T10)", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce({
+      ...openResult("handle-clear", "rescan"), rowEstimate: 726181, rowExact: false, sampled: true,
+    } as any);
+    // Mirrors a real non-memory tier's QueryRows(wantTotal:false): Total:-1
+    // always (rescan.go/sqlbackend.go/parquetbackend.go), a non-truncated
+    // page, so reconcileEof leaves the just-set rowEstimate alone rather than
+    // overwriting it with emptyRowSet()'s totalExact:true stand-in.
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: -1, totalExact: false,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.open("large.ndjson");
+    expect(get(explorer).total).toBe(726181); // sanity: the file-level estimate landed on open
+    expect(get(explorer).totalExact).toBe(false);
+
+    // A real filter -- total correctly drops to -1 synchronously (existing
+    // behavior, already pinned by the test above). Checked without awaiting
+    // anything so this filter's own page-0 refetch (left on the default
+    // emptyRowSet() mock) cannot have resolved yet and clobbered it.
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).total).toBe(-1);
+
+    const gate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => gate.promise); // gate the clear's own page-0 refetch
+    explorer.setFilter(matchAll); // clear back to empty
+
+    const s = get(explorer); // checked BEFORE the gated refetch resolves, same as the test above
+    expect(s.total).toBe(726181); // must be restored, not stuck at -1 or some tiny page-based guess
+    expect(s.totalExact).toBe(false);
+
+    gate.resolve(emptyRowSet());
+    await flush();
+  });
+
   it("GAP-2: an in-flight old-filter page cannot land in the new filter's cache slot", async () => {
     // Both the "old" (match-all) and "new" (filtered) fetch must target the
     // SAME page (0), or this test cannot distinguish a correctly-guarded

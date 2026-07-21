@@ -83,6 +83,22 @@ function createExplorer() {
   // scrolled to) needing to supply one.
   let lastFirst = 0;
   let lastLast = 0;
+  // T10 fix: OpenSource's own rowEstimate/rowExact (the file-level total --
+  // exact on memory/sqlite/parquet, a sampled estimate on rescan), kept
+  // separately from the mutable `total`/`totalExact` state so setFilter can
+  // restore it when a filter is CLEARED back to empty. Without this, clearing
+  // a filter on a non-memory tier left `total` stuck at whatever tiny
+  // page-based guess reconcileEof produced from the post-clear page-0 refetch
+  // (e.g. "~400 rows" surviving a clear on a 726,181-row rescan-tier file) --
+  // QueryRows is always called with wantTotal:false (ensurePages), and every
+  // non-memory Backend.Query returns Total:-1 for that case (rescan.go/
+  // sqlbackend.go/parquetbackend.go), so reconcileEof's page-boundary
+  // fallback was the ONLY source left for `total`, and it never climbs back
+  // to the true estimate on its own. On the memory tier this is a no-op:
+  // memBackend.Query always returns the exact count regardless of wantTotal,
+  // so the very next page-0 fetch overwrites whatever we restore here anyway.
+  let baseTotal = -1;
+  let baseTotalExact = false;
 
   async function open(path: string): Promise<void> {
     const prev = get({ subscribe });
@@ -92,6 +108,8 @@ function createExplorer() {
     inflight.clear();
     currentFilter = matchAllFilter(); // a new file always starts unfiltered
     countReqId = null;
+    baseTotal = -1;
+    baseTotalExact = false;
     set({ ...empty, status: "opening", path });
     try {
       // I-1: send a per-open unique, monotonically-increasing requestId
@@ -121,6 +139,8 @@ function createExplorer() {
         void CloseSource(res.handle).catch(() => {});
         return;
       }
+      baseTotal = res.rowEstimate;
+      baseTotalExact = res.rowExact;
       update((s) => ({
         ...s, status: "ready", handle: res.handle, tier: res.tier, format: res.format,
         warnings: res.warnings ?? [], fields: res.profile?.fields ?? [], columns: res.columns ?? [],
@@ -267,6 +287,8 @@ function createExplorer() {
     cache.clear(); inflight.clear();
     currentFilter = matchAllFilter();
     countReqId = null;
+    baseTotal = -1;
+    baseTotalExact = false;
     set({ ...empty });
   }
 
@@ -331,8 +353,19 @@ function createExplorer() {
       // filtered count (recon GAP 3). On the memory tier page 0 immediately
       // re-fills it exactly; on other tiers it stays -1 (=> "counting...")
       // until Task 5's CountMatches finalizes it.
-      total: -1,
-      totalExact: false,
+      //
+      // T10 fix: a CLEARED filter (active === false) is not "counting"
+      // anything -- it is just the file's own rows again -- so restore the
+      // file-level baseTotal/baseTotalExact captured at open() rather than
+      // -1. Without this, a non-memory tier's total got stuck at whatever
+      // tiny page-based guess the post-clear page-0 refetch produced (every
+      // non-memory Backend.Query returns Total:-1 for QueryRows'
+      // wantTotal:false, so reconcileEof's page-boundary fallback was the
+      // only thing left feeding `total`, and it never climbs back to the
+      // true estimate on its own -- e.g. clearing a filter on a 726,181-row
+      // rescan-tier file left the status bar reading "~400 rows" forever).
+      total: active ? -1 : baseTotal,
+      totalExact: active ? false : baseTotalExact,
       version: 0,
       resetToken: s.resetToken + 1, // DataTable scrolls to row 0 (recon GAP 9)
       pageError: "",
