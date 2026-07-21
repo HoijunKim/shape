@@ -37,6 +37,20 @@
   // reset in onColumnChange, the only other place `list` changes).
   let listText = condition.list.join(", ");
 
+  // Defensive re-sync (review of Task 6): `listText` is a local buffer, so if
+  // a parent ever swaps this row's `condition` prop for a DIFFERENT condition
+  // identity (a saved-filter load, undo, or a row reused for another id) the
+  // buffer would go stale against the new `condition.list`. Re-sync only on an
+  // id change -- NOT on list content -- because the user's own onListInput
+  // round-trips condition.list back through this prop, and re-syncing on that
+  // would snap a mid-typed "a, " back to "a". FilterBar keys rows by id, so
+  // this is belt-and-suspenders, not a path E3 currently exercises.
+  let lastId = condition.id;
+  $: if (condition.id !== lastId) {
+    lastId = condition.id;
+    listText = condition.list.join(", ");
+  }
+
   // arityFor's fallback mirrors filterModel.ts's own internal arityFor: an
   // op not found in this column type's operator list (stale data) is
   // treated as arity "none" rather than throwing.
@@ -131,6 +145,8 @@
     <input
       type="text"
       class="mono"
+      aria-label="Value"
+      placeholder="value"
       value={condition.text}
       aria-invalid={invalid ? "true" : "false"}
       on:input={onTextInput}
@@ -151,6 +167,8 @@
       type="text"
       inputmode="decimal"
       class="mono"
+      aria-label="Value"
+      placeholder="number"
       value={condition.num}
       aria-invalid={invalid ? "true" : "false"}
       on:input={onNumInput}
@@ -164,6 +182,8 @@
     <input
       type="text"
       class="mono"
+      aria-label="Comma-separated values"
+      placeholder="a, b, c"
       value={listText}
       aria-invalid={invalid ? "true" : "false"}
       on:input={onListInput}

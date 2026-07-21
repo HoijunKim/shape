@@ -197,4 +197,27 @@ describe("ConditionRow", () => {
     await tick();
     expect(t.querySelector("input")).toBeNull();
   });
+
+  // Review of Task 6: eq/ne are the ops the plan singles out as the
+  // discriminator between a type-driven arity lookup (correct) and a
+  // hardcoded arity-by-op (broken) -- same op id, different arity/ci per
+  // column type. A ConditionRow-local regression that stopped calling
+  // operatorsForType(condition.type) would pass every other test; these pin it.
+  it("string eq renders a text value input with a ci toggle (arity text, ci true)", async () => {
+    const t = mount(cond({ path: "name", type: "string", op: "eq" }));
+    await tick();
+    expect(t.querySelector('input[type="text"]')).toBeTruthy();
+    expect(t.querySelector(".ci-toggle")).toBeTruthy();
+  });
+
+  it("numeric eq renders a decimal text input and NO ci toggle (arity number, ci false)", async () => {
+    const t = mount(cond({ path: "age", type: "int", op: "eq", text: "", num: "" }));
+    await tick();
+    const input = t.querySelector('input[inputmode="decimal"]') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    // Number arity must be a TEXT input, never type=number -- mid-typing
+    // states (a lone "-", "1.") belong to the draft, not the browser.
+    expect(input!.getAttribute("type")).toBe("text");
+    expect(t.querySelector(".ci-toggle")).toBeNull();
+  });
 });
