@@ -1,9 +1,18 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel } from "../../../wailsjs/go/main/App";
-import type { Column, FieldDTO, OpenResult, RowSet } from "./types";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
+import type { Column, FieldDTO, Filter, OpenResult, RowSet } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
+
+// wailsjs/go/models's Filter is a TS *class* (it carries a convertValues()
+// decoding method for responses coming FROM Go), so its instance type demands
+// that method on anything assigned to it -- a plain object literal can never
+// structurally satisfy it. Same `as unknown as Filter` idiom filterModel.ts
+// already uses for buildFilter's return.
+function matchAllFilter(): Filter {
+  return { combinator: "and" } as unknown as Filter;
+}
 
 export interface ExplorerState {
   status: Status;
@@ -24,6 +33,12 @@ export interface ExplorerState {
   focusPath: string;    // sidebar-selected column path, "" = none
   fetching: boolean;
   version: number;      // bumps whenever a page lands, so views re-read the cache
+  filterActive: boolean; // true when a non-empty Filter is applied (setFilter) -- lets
+                          // the UI/empty-state distinguish "no rows in file" from
+                          // "no rows match filter"
+  resetToken: number;    // bumped on every filter change so DataTable (which owns
+                          // scroll) knows to scroll back to row 0 -- the store cannot
+                          // move the viewport itself
   // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
   // failure, which still owns the whole pane via `status`/`error`) must be
   // non-destructive -- it must NOT discard an already-rendered grid or the
@@ -37,7 +52,7 @@ const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
-  pageError: "",
+  pageError: "", filterActive: false, resetToken: 0,
 };
 
 function createExplorer() {
@@ -49,6 +64,9 @@ function createExplorer() {
   const inflight = new Map<number, string>(); // page index -> requestId
   let seq = 0;
   let gen = 0; // bumps on open()/close(); a fetch from an older gen must not touch state
+  // E3: the filter currently applied to QueryRows, set via setFilter(). A new
+  // file always starts unfiltered -- open()/close() reset this to match-all.
+  let currentFilter: Filter = matchAllFilter();
   // A5: the most recent range passed to ensurePages(), so retryPageError()
   // can re-request the SAME range a failed fetch belonged to without
   // Explorer.svelte (which has no idea what row range DataTable last
@@ -62,6 +80,7 @@ function createExplorer() {
     const myGen = ++gen; // C1: a fetch (here, this whole open()) from an older gen must not touch state
     cache.clear();
     inflight.clear();
+    currentFilter = matchAllFilter(); // a new file always starts unfiltered
     set({ ...empty, status: "opening", path });
     try {
       // I-1: send a per-open unique, monotonically-increasing requestId
@@ -142,7 +161,7 @@ function createExplorer() {
       inflight.set(page, reqId);
       try {
         const rs: RowSet = await QueryRows({
-          requestId: reqId, handle: s.handle, filter: {} as any, transform: {} as any,
+          requestId: reqId, handle: s.handle, filter: currentFilter, transform: {} as any,
           offset: page * pageRows, limit: pageRows, wantTotal: false,
         } as any);
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
@@ -235,10 +254,40 @@ function createExplorer() {
     if (s.handle) { await CloseSource(s.handle).catch(() => {}); }
     gen++;
     cache.clear(); inflight.clear();
+    currentFilter = matchAllFilter();
     set({ ...empty });
   }
 
-  return { subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError };
+  /** E3: applies a live filter to the current file. Recon GAPs 2/3/9 -- see
+   *  the inline comments below for why each step is required. */
+  function setFilter(f: Filter): void {
+    currentFilter = f;
+    const active = !!(f.conditions && f.conditions.length > 0);
+    // Bump gen so any in-flight OLD-filter QueryRows is superseded and cannot
+    // cache.set() into the NEW filter's page slot (recon GAP 2). Cancel and
+    // clear inflight the same way a superseding scroll does, and clear the
+    // page cache so no old-filter rows survive.
+    ++gen;
+    for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
+    inflight.clear();
+    cache.clear();
+    update((s) => ({
+      ...s,
+      filterActive: active,
+      // Reset the total so the stale unfiltered count is not shown as the
+      // filtered count (recon GAP 3). On the memory tier page 0 immediately
+      // re-fills it exactly; on other tiers it stays -1 (=> "counting...")
+      // until Task 5's CountMatches finalizes it.
+      total: -1,
+      totalExact: false,
+      version: 0,
+      resetToken: s.resetToken + 1, // DataTable scrolls to row 0 (recon GAP 9)
+      pageError: "",
+    }));
+    void ensurePages(0, 0);
+  }
+
+  return { subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError, setFilter };
 }
 
 export const explorer = createExplorer();
