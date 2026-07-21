@@ -47,6 +47,18 @@
     void explorer.open($explorer.path);
   }
 
+  // E3 Task 8: the empty state's "Clear filter" affordance -- distinct from
+  // StatusBar's Cancel (which only stops an in-flight CountMatches via
+  // explorer.cancelCount()). This resets the filter to match-all so the
+  // unfiltered rows return. KNOWN GAP: FilterBar owns its own draft state
+  // independently (Task 7) and does not subscribe to $explorer.filterActive,
+  // so clearing from here does not reset FilterBar's rows/conditions back to
+  // empty -- the bar can keep showing stale conditions while the data is
+  // genuinely unfiltered underneath. Left for a later task to reconcile.
+  function clearFilter(): void {
+    explorer.setFilter({ combinator: "and" } as any);
+  }
+
   $: fileName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "";
 </script>
 
@@ -111,6 +123,15 @@
               <p class="hint">{$explorer.skipped.toLocaleString()} rows skipped</p>
             {/if}
           </div>
+        {:else if $explorer.filterActive && $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
+          <div class="empty-state">
+            <p>No rows match this filter</p>
+            <p class="hint">
+              {$explorer.columns.length.toLocaleString()}
+              column{$explorer.columns.length === 1 ? "" : "s"}
+            </p>
+            <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
+          </div>
         {:else if $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
           <div class="empty-state">
             <p>No rows in this file</p>
@@ -150,6 +171,11 @@
       totalPaths={$explorer.totalPaths}
       warnings={$explorer.warnings}
       fetching={$explorer.fetching}
+      filterActive={$explorer.filterActive}
+      counting={$explorer.counting}
+      matchCount={$explorer.matchCount}
+      matchExact={$explorer.matchExact}
+      on:cancelCount={() => explorer.cancelCount()}
     />
   </div>
 {/if}
@@ -313,6 +339,10 @@
 
   .empty-state .hint {
     font-size: 12px;
+  }
+
+  .empty-state .clear-filter {
+    margin-top: var(--space-2);
   }
 
   /* Below this width the sidebar and the table stack instead of sitting

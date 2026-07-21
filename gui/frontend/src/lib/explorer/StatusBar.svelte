@@ -5,7 +5,10 @@
   // mode warning) get enforced. Every prop here is a plain, already-computed
   // value read straight off $explorer by Explorer.svelte -- this component
   // owns no store subscription of its own.
+  import { createEventDispatcher } from "svelte";
   import { formatRowCount } from "./rowCount";
+
+  const dispatch = createEventDispatcher<{ cancelCount: void }>();
 
   export let tier = "";
   export let total = -1;
@@ -17,16 +20,34 @@
   export let totalPaths = 0;
   export let warnings: string[] = [];
   export let fetching = false;
+  // E3 Task 8: filtered-count props (spec §4's honest counting affordance,
+  // recon GAP 1/6). `filterActive` alone gates BOTH formatRowCount's filtered
+  // branch and the Cancel button below; when it is false this component
+  // renders exactly as it did in E2 -- `counting`/`matchCount`/`matchExact`
+  // are meaningless (and ignored by formatRowCount) unless it is true.
+  export let filterActive = false;
+  export let counting = false;
+  export let matchCount = -1;
+  export let matchExact = false;
 
-  $: rowsText = formatRowCount({ total, totalExact, rowsLoaded });
+  $: rowsText = formatRowCount({
+    total, totalExact, rowsLoaded, filterActive, counting, matchCount, matchExact,
+  });
   $: columnsText = columnsTruncated
     ? `showing ${columnCount.toLocaleString()} of ${totalPaths.toLocaleString()} columns`
     : `${columnCount.toLocaleString()} column${columnCount === 1 ? "" : "s"}`;
+
+  function onCancelClick(): void {
+    dispatch("cancelCount");
+  }
 </script>
 
 <div class="status-bar">
   <div class="metrics" role="status">
     <span class="metric mono" class:estimate={sampled && !totalExact}>{rowsText}</span>
+    {#if filterActive && counting}
+      <button type="button" class="cancel-count" on:click={onCancelClick}>Cancel</button>
+    {/if}
     <span class="sep" aria-hidden="true">·</span>
     <span class="metric mono">{columnsText}</span>
     {#if tier}
@@ -93,6 +114,13 @@
   .tier {
     text-transform: uppercase;
     letter-spacing: 0.02em;
+  }
+
+  .cancel-count {
+    flex-shrink: 0;
+    padding: 1px var(--space-2);
+    font-size: 11px;
+    line-height: 1.4;
   }
 
   .pip {
