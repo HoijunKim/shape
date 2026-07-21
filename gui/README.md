@@ -40,6 +40,32 @@ the app's only view once a file is open:
   a dismissible/retryable alert bar above the table rather than discarding
   the whole rendered grid -- only a failure while *opening* a file replaces
   the full pane.
+- **Filter bar (toggled via the header's "Filter" button).** A visual
+  condition builder, no query language required: each row picks a column and
+  a type-aware operator (numeric columns offer `=`/`≠`/`<`/`≤`/`>`/`≥`/
+  `in list`/`is null`/`is not null`; strings offer `=`/`≠`/`contains`/
+  `matches regex`/`in list`/`is null`/`is not null`, several with a
+  case-insensitive toggle; booleans offer `is`/`is null`/`is not null`;
+  objects/arrays/drifting-type columns offer only the two null checks, since
+  those are the only comparisons that mean anything for a non-scalar value).
+  Every row in the bar combines with a single AND/OR (nested groups are a
+  later phase). Typing is debounced ~250ms before it reaches the query
+  engine, so a query isn't re-run on every keystroke, and a half-typed or
+  invalid value (an unparseable number, an empty regex) is simply never sent
+  rather than erroring. Clicking the small funnel icon next to a column in
+  the sidebar is the fast path in: it seeds a fresh condition for that
+  column, defaulted to a sensible operator for its type, and focuses the
+  value input directly. The row count in the status bar follows while a
+  filter is active, with the same honesty rule as the unfiltered total: it
+  reads "counting..." while the engine works it out, then "N rows" once
+  exact or "~N rows" if only an estimate is available. On the memory tier
+  the exact filtered count is already known from the first page, so nothing
+  extra runs; on the rescan/sqlite/parquet tiers it is a real background
+  scan, shown with a "Cancel" button next to "counting..." for exactly that
+  reason -- cancelling leaves the last-known (inexact) estimate in place
+  rather than hanging or lying about a final answer. Editing the filter
+  again, or switching files, supersedes any count already in flight so a
+  stale number can never land.
 
 ## Build order (important)
 
@@ -83,3 +109,11 @@ GUI build needs cgo + native webkit; the CLI stays cgo-free on every OS.
   affordance to jump there directly either. Fixing this needs segmented or
   virtual (re-based) scrolling in `DataTable`, deferred as real follow-up
   work rather than patched around here.
+- **The filtered empty state's "Clear filter" button doesn't clear the
+  filter bar itself.** Clicking it (shown when a filter matches zero rows)
+  resets the underlying query back to match-all, so the data genuinely goes
+  unfiltered -- but the filter bar owns its own condition rows as local
+  component state and isn't wired to reset alongside it, so the bar can keep
+  showing the old (already-cleared) conditions. Using the filter bar's own
+  "Clear" button does not have this problem. A documented E3 limitation, left
+  for a later task to reconcile.
