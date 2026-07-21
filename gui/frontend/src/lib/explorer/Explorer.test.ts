@@ -24,13 +24,14 @@ import { get } from "svelte/store";
 import Explorer from "./Explorer.svelte";
 import { explorer } from "./store";
 import { pageRowsFor } from "./paging";
-import { OpenSource, QueryRows, CloseSource } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
 
 vi.mock("../../../wailsjs/go/main/App", () => ({
   OpenSource: vi.fn(),
   QueryRows: vi.fn(),
   CloseSource: vi.fn(),
   Cancel: vi.fn(),
+  CountMatches: vi.fn(),
 }));
 
 function makeColumn(path: string, over: Record<string, unknown> = {}): any {
@@ -40,7 +41,7 @@ function makeColumn(path: string, over: Record<string, unknown> = {}): any {
   };
 }
 
-function makeField(path: string): any {
+function makeField(path: string, over: Record<string, unknown> = {}): any {
   return {
     path,
     types: [{ kind: "string", share: 1 }],
@@ -49,6 +50,7 @@ function makeField(path: string): any {
     distinct: 1,
     distinctExact: true,
     drift: false,
+    ...over,
   };
 }
 
@@ -67,6 +69,13 @@ function openResultFor(handle: string, columns: any[], fields: any[]): any {
     totalPaths: columns.length,
   };
 }
+
+// A macrotask flush, not just a microtask `tick()`: store.test.ts's own
+// setFilter coverage uses the same pattern (its `flush` helper) because the
+// setFilter -> ensurePages -> QueryRows -> update() chain crosses more
+// microtask hops (the async function body, Promise.all, the mocked
+// Promise's own resolution) than a single `tick()` reliably drains.
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 function rowSetFor(columns: any[]): any {
   return {
@@ -91,6 +100,8 @@ describe("Explorer", () => {
     vi.mocked(OpenSource).mockReset();
     vi.mocked(QueryRows).mockReset();
     vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(CountMatches).mockReset();
     await explorer.close();
     vi.mocked(CloseSource).mockClear(); // don't count close()'s own no-op call
     target = document.createElement("div");
@@ -484,5 +495,195 @@ describe("Explorer", () => {
     await tick();
     expect(target.querySelector(".page-error-bar")).toBeNull(); // dismissed
     expect(target.querySelector(".viewport")).toBeTruthy(); // table still there
+  });
+
+  // E3 Task 8: the filtered empty state (GAP 3) + the live counting
+  // affordance's store -> StatusBar wiring (GAP 1/6).
+  describe("filtered count + empty state (E3 Task 8)", () => {
+    it("renders 'No rows match this filter' (not 'No rows in this file') when a memory-tier filter matches nothing, and 'Clear filter' returns to the unfiltered view", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h20", columns, fields));
+      vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns)); // default: unfiltered has rows
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("filterable.ndjson");
+      await tick();
+      await tick();
+
+      expect(target.querySelector(".viewport")).toBeTruthy(); // sanity: rows showing, unfiltered
+
+      // The next QueryRows call (setFilter's own page-0 refetch) answers as
+      // the memory tier does for a filter matching nothing: an exact,
+      // immediately-reconciled zero.
+      const zeroRows = { ...rowSetFor(columns), rows: [], total: 0, totalExact: true };
+      vi.mocked(QueryRows).mockResolvedValueOnce(zeroRows as any);
+      explorer.setFilter({ combinator: "and", conditions: [{} as any] } as any);
+      await flush();
+      await tick();
+      await tick();
+
+      expect(get(explorer).filterActive).toBe(true);
+      expect(get(explorer).total).toBe(0);
+      expect(target.textContent).toContain("No rows match this filter");
+      expect(target.textContent).not.toContain("No rows in this file");
+
+      const clearBtn = Array.from(target.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Clear filter",
+      ) as HTMLButtonElement;
+      expect(clearBtn).toBeTruthy();
+
+      clearBtn.click();
+      await flush();
+      await tick();
+      await tick();
+
+      expect(get(explorer).filterActive).toBe(false);
+      expect(target.querySelector(".viewport")).toBeTruthy(); // rows are back
+      expect(target.textContent).not.toContain("No rows match this filter");
+    });
+
+    it("shows the counting… affordance (with Cancel) in the status bar while a non-memory-tier filtered count is in flight, then the resolved count once it lands", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h21", columns, fields);
+      res.tier = "rescan"; // non-memory: setFilter's active branch calls startCount -> CountMatches
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      vi.mocked(QueryRows).mockResolvedValueOnce(rowSetFor(columns)); // open()'s own unfiltered page 0
+      // Every filtered page-0 fetch after setFilter: on the rescan tier
+      // QueryRows(wantTotal:false) returns Total:-1 (per store.ts's own
+      // comment -- CountMatches is the ONLY eager exact source there), so the
+      // mock must not hand back a total here or this test could not tell
+      // "counting…" apart from a real (if coincidentally identical) row
+      // count landing from the page fetch itself.
+      vi.mocked(QueryRows).mockResolvedValue({ ...rowSetFor(columns), total: -1, totalExact: false });
+
+      let resolveCount!: (r: unknown) => void;
+      const countPromise = new Promise((resolve) => { resolveCount = resolve; });
+      vi.mocked(CountMatches).mockReturnValueOnce(countPromise as any);
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("counted.ndjson");
+      await tick();
+      await tick();
+
+      explorer.setFilter({ combinator: "and", conditions: [{} as any] } as any);
+      await flush();
+      await tick();
+      await tick();
+
+      expect(get(explorer).counting).toBe(true);
+      const metric = target.querySelector(".metric.mono") as HTMLElement;
+      expect(metric.textContent).toBe("counting…");
+      expect(target.querySelector("button.cancel-count")).toBeTruthy();
+
+      resolveCount({ total: 3, exact: true });
+      await flush();
+      await tick();
+      await tick();
+
+      expect(get(explorer).counting).toBe(false);
+      expect(target.querySelector("button.cancel-count")).toBeNull();
+      expect((target.querySelector(".metric.mono") as HTMLElement).textContent).toBe("3 rows");
+    });
+
+    it("wires the StatusBar's cancelCount event to explorer.cancelCount()", async () => {
+      const columns = [makeColumn("id")];
+      const fields = [makeField("id")];
+      const res = openResultFor("h22", columns, fields);
+      res.tier = "rescan";
+      vi.mocked(OpenSource).mockResolvedValueOnce(res);
+      vi.mocked(QueryRows).mockResolvedValueOnce(rowSetFor(columns)); // open()'s own unfiltered page 0
+      vi.mocked(QueryRows).mockResolvedValue({ ...rowSetFor(columns), total: -1, totalExact: false });
+
+      const neverResolves = new Promise(() => {});
+      vi.mocked(CountMatches).mockReturnValueOnce(neverResolves as any);
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("cancelme.ndjson");
+      await tick();
+      await tick();
+
+      explorer.setFilter({ combinator: "and", conditions: [{} as any] } as any);
+      await flush();
+      await tick();
+      await tick();
+
+      expect(get(explorer).counting).toBe(true);
+      const cancelBtn = target.querySelector("button.cancel-count") as HTMLButtonElement;
+      expect(cancelBtn).toBeTruthy();
+
+      cancelBtn.click();
+      await tick();
+
+      expect(get(explorer).counting).toBe(false);
+      expect(target.querySelector("button.cancel-count")).toBeNull();
+    });
+  });
+
+  // E3 Task 9: Explorer is the router between the sidebar's seedFilter event
+  // and FilterBar -- a funnel click must open the (initially closed) bar via
+  // the bindable `filterOpen` prop and hand the seed down so FilterBar
+  // appends a condition defaulted to the column's op, with its value input
+  // focused.
+  describe("click-to-seed routes the sidebar's seedFilter into FilterBar (E3 Task 9)", () => {
+    it("opens the filter bar and adds a condition for the seeded column, defaulted to its type's op, with the value input focused", async () => {
+      const columns = [makeColumn("age", { type: "int" }), makeColumn("id")];
+      const fields = [
+        makeField("age", { types: [{ kind: "int", share: 1 }] }),
+        makeField("id", { types: [{ kind: "int", share: 1 }] }),
+      ];
+      vi.mocked(OpenSource).mockResolvedValueOnce(openResultFor("h30", columns, fields));
+      vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+      cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+      await explorer.open("seed.ndjson");
+      await tick();
+      await tick();
+
+      expect(target.querySelector(".filter-bar")).toBeNull(); // sanity: bar starts closed
+
+      const ageRow = target.querySelector('.row[data-path="age"]') as HTMLElement;
+      expect(ageRow).toBeTruthy();
+      const seedBtn = ageRow.querySelector("button.seed") as HTMLButtonElement;
+      expect(seedBtn).toBeTruthy();
+
+      seedBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+      await tick();
+
+      const bar = target.querySelector(".filter-bar");
+      expect(bar).toBeTruthy(); // filterOpen flipped true through the bindable prop
+
+      const colSelect = bar!.querySelector('select[aria-label="Column"]') as HTMLSelectElement;
+      expect(colSelect).toBeTruthy();
+      expect(colSelect.value).toBe("age");
+
+      const opSelect = bar!.querySelector('select[aria-label="Operator"]') as HTMLSelectElement;
+      expect(opSelect.value).toBe("gte"); // defaultOpForType("int")
+
+      const valueInput = bar!.querySelector('input[aria-label="Value"]') as HTMLInputElement;
+      expect(valueInput).toBeTruthy();
+      expect(document.activeElement).toBe(valueInput); // focused per the wiring brief
+
+      // Typing a value and letting the (real, un-mocked) 250ms debounce
+      // elapse reaches the store's setFilter -- the end-to-end path from a
+      // funnel click to a live-filtered query.
+      const setFilterSpy = vi.spyOn(explorer, "setFilter");
+      valueInput.value = "20";
+      valueInput.dispatchEvent(new Event("input"));
+      await tick();
+      await new Promise((r) => setTimeout(r, 300));
+      await tick();
+
+      expect(setFilterSpy).toHaveBeenCalled();
+      const filter = setFilterSpy.mock.calls.at(-1)![0] as any;
+      expect(filter.conditions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "age", op: "gte", value: { kind: "number", num: 20 } }),
+        ]),
+      );
+      setFilterSpy.mockRestore();
+    });
   });
 });

@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
+import type { Filter } from "./types";
 
 // C1: a slow open() must not clobber a newer file's state, and it must not
 // leak the backend handle it opened. Mock the Wails bridge so we can control
 // exactly when each OpenSource() call resolves, relative to the other.
+// CountMatches is mocked now (E3 Task 5 needs it) even though Task 4 does not
+// call it, so Task 5 needs no re-mock.
 vi.mock("../../../wailsjs/go/main/App", () => ({
   OpenSource: vi.fn(),
   QueryRows: vi.fn(),
   CloseSource: vi.fn(),
   Cancel: vi.fn(),
+  CountMatches: vi.fn(),
 }));
 
 function deferred<T>() {
@@ -28,8 +32,8 @@ const emptyRowSet = (): any => ({
   scanned: 0, truncated: true, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
 });
 
-const openResult = (handle: string): any => ({
-  handle, format: "json", tier: "memory", columns: [],
+const openResult = (handle: string, tier = "memory"): any => ({
+  handle, format: "json", tier, columns: [],
   profile: { records: 0, skipped: 0, fields: [] },
   sampled: false, rowEstimate: 0, rowExact: true, warnings: [],
   columnsTruncated: false, totalPaths: 0,
@@ -39,6 +43,8 @@ beforeEach(async () => {
   vi.mocked(OpenSource).mockReset();
   vi.mocked(QueryRows).mockReset().mockResolvedValue(emptyRowSet());
   vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
+  vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+  vi.mocked(CountMatches).mockReset(); // E3 Task 5: each test sets its own resolution explicitly
   await explorer.close();
   vi.mocked(CloseSource).mockClear(); // don't count close()'s own no-op call
 });
@@ -175,5 +181,348 @@ describe("mid-scroll page-fetch failure is non-destructive (A5)", () => {
     explorer.dismissPageError();
     expect(get(explorer).pageError).toBe("");
     expect(vi.mocked(QueryRows).mock.calls.length).toBe(callsBefore); // no new fetch
+  });
+});
+
+// E3 Task 4: the store threads a live Filter into QueryRows and resets
+// total/version/resetToken on every filter change. Recon GAPs 2 (stale
+// in-flight old-filter page must not land in the new filter's cache slot),
+// 3 (stale unfiltered total must not be shown as the filtered count), and 9
+// (DataTable needs a signal to scroll back to row 0).
+describe("setFilter (E3 Task 4)", () => {
+  // wailsjs/go/models's Filter/Condition/Value are TS classes (they carry a
+  // convertValues() decoding method), so a plain object literal can't
+  // structurally satisfy the type -- same `as unknown as Filter` idiom
+  // filterModel.ts already uses for buildFilter's return.
+  const filterAge18: Filter = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 18 } }],
+  } as unknown as Filter;
+
+  const matchAll = { combinator: "and" } as unknown as Filter;
+
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  /** Opens a memory-tier file whose page 0 lands with an exact unfiltered
+   *  total, so setFilter's total-reset has something stale to overwrite. */
+  async function openReady(handle = "handle-f"): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult(handle));
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: 100, totalExact: true,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.open("file.ndjson");
+  }
+
+  it("sends the current filter to QueryRows", async () => {
+    await openReady();
+    const callsBefore = vi.mocked(QueryRows).mock.calls.length;
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [], offset: 0, total: 3, totalExact: true,
+      scanned: 0, truncated: true, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+
+    explorer.setFilter(filterAge18);
+    await vi.waitFor(() => expect(vi.mocked(QueryRows).mock.calls.length).toBeGreaterThan(callsBefore));
+
+    const calls = vi.mocked(QueryRows).mock.calls;
+    const lastArgs = calls[calls.length - 1][0] as any;
+    expect(lastArgs.filter).toEqual(filterAge18);
+  });
+
+  it("bumps resetToken so DataTable can scroll back to row 0", async () => {
+    await openReady();
+    const before = get(explorer).resetToken;
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).resetToken).toBe(before + 1);
+    await flush();
+  });
+
+  it("sets filterActive true for a non-empty filter, false for match-all", async () => {
+    await openReady();
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).filterActive).toBe(true);
+    explorer.setFilter(matchAll);
+    expect(get(explorer).filterActive).toBe(false);
+    await flush();
+  });
+
+  it("resets total/totalExact/version synchronously, before any refetch resolves", async () => {
+    await openReady();
+    expect(get(explorer).total).toBe(100); // sanity: stale unfiltered total pre-setFilter
+
+    const gate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => gate.promise);
+    explorer.setFilter(filterAge18);
+
+    const s = get(explorer);
+    expect(s.total).toBe(-1);
+    expect(s.totalExact).toBe(false);
+    expect(s.version).toBe(0);
+
+    gate.resolve(emptyRowSet()); // let the pending fetch settle so it can't leak into later tests
+    await flush();
+  });
+
+  // T10 fix: on a non-memory tier, QueryRows is always called with
+  // wantTotal:false (ensurePages), and every non-memory Backend.Query
+  // (rescan/sqlite/parquet) returns Total:-1 for that case -- so once a
+  // filter is CLEARED back to match-all, the only thing left to feed
+  // `total` was reconcileEof's page-boundary guess, which starts small and
+  // never climbs back to the file's real rowEstimate on its own. A clear
+  // must restore the file-level baseline captured at open() instead of
+  // resetting to -1 unconditionally (the way an ACTIVE filter correctly
+  // does, per the test above -- its own stale total must not leak through
+  // either, just from a different, already-covered direction).
+  it("clearing a filter restores the file's rowEstimate synchronously, instead of leaving total at -1 forever (T10)", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce({
+      ...openResult("handle-clear", "rescan"), rowEstimate: 726181, rowExact: false, sampled: true,
+    } as any);
+    // Mirrors a real non-memory tier's QueryRows(wantTotal:false): Total:-1
+    // always (rescan.go/sqlbackend.go/parquetbackend.go), a non-truncated
+    // page, so reconcileEof leaves the just-set rowEstimate alone rather than
+    // overwriting it with emptyRowSet()'s totalExact:true stand-in.
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: -1, totalExact: false,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.open("large.ndjson");
+    expect(get(explorer).total).toBe(726181); // sanity: the file-level estimate landed on open
+    expect(get(explorer).totalExact).toBe(false);
+
+    // A real filter -- total correctly drops to -1 synchronously (existing
+    // behavior, already pinned by the test above). Checked without awaiting
+    // anything so this filter's own page-0 refetch (left on the default
+    // emptyRowSet() mock) cannot have resolved yet and clobbered it.
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).total).toBe(-1);
+
+    const gate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => gate.promise); // gate the clear's own page-0 refetch
+    explorer.setFilter(matchAll); // clear back to empty
+
+    const s = get(explorer); // checked BEFORE the gated refetch resolves, same as the test above
+    expect(s.total).toBe(726181); // must be restored, not stuck at -1 or some tiny page-based guess
+    expect(s.totalExact).toBe(false);
+
+    gate.resolve(emptyRowSet());
+    await flush();
+  });
+
+  it("GAP-2: an in-flight old-filter page cannot land in the new filter's cache slot", async () => {
+    // Both the "old" (match-all) and "new" (filtered) fetch must target the
+    // SAME page (0), or this test cannot distinguish a correctly-guarded
+    // store from a broken one (different cache slots never collide anyway).
+    // So the old fetch has to be open()'s own initial page-0 fetch, gated,
+    // rather than a page openReady() would have already landed and cached.
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("handle-gap2"));
+    const oldGate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => oldGate.promise);
+    const openPromise = explorer.open("gap2.ndjson");
+    await flush(); // let open() reach 'ready' and issue its own page-0 fetch (now pending on oldGate)
+    expect(get(explorer).status).toBe("ready");
+
+    const newGate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => newGate.promise);
+    explorer.setFilter(filterAge18); // bumps gen, cancels+clears inflight, clears cache, starts a new page-0 fetch
+
+    // Resolve the OLD fetch AFTER setFilter, with distinctive rows for page 0.
+    oldGate.resolve({
+      columns: [], rows: [{ index: 0, cells: [{ kind: "string", str: "OLD-STALE" }] }], offset: 0,
+      total: 999, totalExact: true, scanned: 1, truncated: false, elapsedMs: 0,
+      columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await flush();
+
+    expect(explorer.rowAt(0).row).toBeNull(); // the stale old-filter row must never become visible
+    expect(get(explorer).total).not.toBe(999);
+
+    newGate.resolve(emptyRowSet());
+    await flush();
+    await openPromise;
+  });
+
+  it("open() resets currentFilter to match-all for the next file", async () => {
+    await openReady();
+    explorer.setFilter(filterAge18);
+    await flush();
+    expect(get(explorer).filterActive).toBe(true);
+
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("handle-g"));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    const callsBefore = vi.mocked(QueryRows).mock.calls.length;
+    await explorer.open("file2.ndjson");
+
+    const calls = vi.mocked(QueryRows).mock.calls;
+    expect(calls.length).toBeGreaterThan(callsBefore);
+    const args = calls[callsBefore][0] as any;
+    expect(args.filter).toEqual({ combinator: "and" });
+  });
+});
+
+// E3 Task 5: on rescan/sqlite/parquet, a filtered QueryRows(wantTotal:false)
+// returns Total:-1, so CountMatches is the only eager, exact source -- a full
+// residual scan, cancellable via the engine's per-RequestID registry. On the
+// memory tier, QueryRows already returns the exact filtered total on page 0,
+// so a count there would be a redundant full re-scan -- setFilter must skip
+// it. The count carries its own supersession id (countReqId) PLUS the same
+// `gen` guard as everything else, because a slow count for one filter must
+// never overwrite a different filter's (or the cleared, unfiltered) state.
+describe("live filtered count via CountMatches (E3 Task 5)", () => {
+  const filterAge18: Filter = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 18 } }],
+  } as unknown as Filter;
+
+  const filterAge21: Filter = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 21 } }],
+  } as unknown as Filter;
+
+  const matchAll = { combinator: "and" } as unknown as Filter;
+
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  async function openReadyTier(tier: string, handle = "handle-count"): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult(handle, tier));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    await explorer.open("file.ndjson");
+  }
+
+  it("rescan tier: setFilter(nonEmpty) calls CountMatches once with the filter and adopts the result", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(1);
+    const args = vi.mocked(CountMatches).mock.calls[0][0] as any;
+    expect(args.filter).toEqual(filterAge18);
+
+    gate.resolve({ total: 42, exact: true, elapsedMs: 0 });
+    await flush();
+
+    const s = get(explorer);
+    expect(s.matchCount).toBe(42);
+    expect(s.matchExact).toBe(true);
+    expect(s.counting).toBe(false);
+    expect(s.total).toBe(42);
+    expect(s.totalExact).toBe(true);
+  });
+
+  // Mutation-proof: dropping the `s.tier !== "memory"` guard in setFilter
+  // makes this fail (CountMatches gets called).
+  it("memory tier: setFilter(nonEmpty) does NOT call CountMatches", async () => {
+    await openReadyTier("memory");
+
+    explorer.setFilter(filterAge18);
+    await flush();
+
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(0);
+  });
+
+  it("counting is true synchronously after setFilter on a rescan tier, and false once it resolves", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).counting).toBe(true);
+
+    gate.resolve({ total: 1, exact: true, elapsedMs: 0 });
+    await flush();
+    expect(get(explorer).counting).toBe(false);
+  });
+
+  // This pins GEN-supersession, not the countReqId guard: setFilter bumps gen
+  // per call, so filter A (genAtStart N+1) and filter B (gen N+2) live in
+  // different generations, and A's late resolve is rejected by
+  // `genAtStart !== gen` on its own. Removing the countReqId disjunct leaves
+  // this green -- countReqId's uniquely load-bearing case (a late resolve
+  // AFTER cancelCount, which nulls countReqId WITHOUT bumping gen) is pinned
+  // separately in the cancelCount test below.
+  it("count supersession: a slow filter-A count must not overwrite filter-B's later count", async () => {
+    await openReadyTier("rescan");
+
+    const gateA = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateA.promise);
+    explorer.setFilter(filterAge18); // filter A, count A pending
+
+    const gateB = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateB.promise);
+    explorer.setFilter(filterAge21); // filter B, count B pending; supersedes A
+
+    gateB.resolve({ total: 2, exact: true, elapsedMs: 0 });
+    await flush();
+    expect(get(explorer).matchCount).toBe(2);
+
+    gateA.resolve({ total: 1, exact: true, elapsedMs: 0 }); // A lands late
+    await flush();
+    expect(get(explorer).matchCount).toBe(2); // must not flicker to / land on 1
+  });
+
+  it("cancelCount() while counting calls Cancel(countReqId) and sets counting:false", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).counting).toBe(true);
+    const reqId = (vi.mocked(CountMatches).mock.calls[0][0] as any).requestId as string;
+
+    explorer.cancelCount();
+
+    expect(vi.mocked(Cancel)).toHaveBeenCalledWith(reqId);
+    expect(get(explorer).counting).toBe(false);
+
+    // The uniquely load-bearing case for the `countReqId` guard: cancelCount
+    // nulls countReqId WITHOUT bumping gen, so this late resolve has
+    // genAtStart === gen and is rejected SOLELY by countReqId(null) !== reqId.
+    // Removing that guard would let a cancelled count land here.
+    gate.resolve({ total: 1, exact: true, elapsedMs: 0 });
+    await flush();
+    expect(get(explorer).matchCount).toBe(-1); // the cancelled count must NOT land
+    expect(get(explorer).counting).toBe(false);
+  });
+
+  it("setFilter back to an empty filter clears matchCount to -1 and does not start a count", async () => {
+    await openReadyTier("rescan");
+    vi.mocked(CountMatches).mockResolvedValueOnce({ total: 42, exact: true, elapsedMs: 0 } as any);
+    explorer.setFilter(filterAge18);
+    await flush();
+    expect(get(explorer).matchCount).toBe(42);
+
+    const callsBefore = vi.mocked(CountMatches).mock.calls.length;
+    explorer.setFilter(matchAll);
+    await flush();
+
+    expect(get(explorer).matchCount).toBe(-1);
+    expect(get(explorer).matchExact).toBe(false);
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(callsBefore); // no new count started
+  });
+
+  // The regression the plan review flagged as untested: a filter cleared to
+  // empty starts no new count, so without nulling countReqId on the clear
+  // path a late-resolving stale count from A could still land. NOTE: with
+  // countReqId correctly nulled (as setFilter does), that check alone already
+  // rejects this specific case -- verified by deliberately removing the
+  // `genAtStart !== gen` half of startCount's guard and re-running this test:
+  // it still passed. genAtStart is kept as belt-and-suspenders (see its doc
+  // comment in store.ts) but is not independently exercised by this test.
+  it("cleared-then-late-count: a stale count from filter A must not land after clearing to empty", async () => {
+    await openReadyTier("rescan");
+    const gateA = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateA.promise);
+    explorer.setFilter(filterAge18); // filter A, count pending
+
+    explorer.setFilter(matchAll); // clear -- no new count starts, countReqId nulled
+    await flush();
+
+    gateA.resolve({ total: 1, exact: true, elapsedMs: 0 }); // A's stale count lands late
+    await flush();
+
+    const s = get(explorer);
+    expect(s.matchCount).toBe(-1);
+    expect(s.total).not.toBe(1);
   });
 });

@@ -9,6 +9,14 @@
   import StructureMap from "./StructureMap.svelte";
   import StatusBar from "./StatusBar.svelte";
   import FileDrop from "../FileDrop.svelte";
+  import FilterBar from "./FilterBar.svelte";
+
+  // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
+  // siblings under App.svelte (Explorer never mounts Header), so App owns
+  // the toggle wiring and passes this down; Task 9's seed sets it from
+  // outside and it must propagate back up through App's `bind:filterOpen` to
+  // Header's aria-pressed.
+  export let filterOpen = false;
 
   // Obligation 1 (carried from earlier reviews): StructureMap deliberately
   // does not own columnPaths -- it must be built here, from $explorer.columns
@@ -35,8 +43,33 @@
     focusToken += 1;
   }
 
+  // E3 Task 9 (click-to-seed): Explorer is the router between the sidebar's
+  // seedFilter event and FilterBar -- opening the bar via the bindable
+  // filterOpen prop (Task 7's whole reason for making it bindable rather than
+  // a local `let`) and handing the seed down as a nonce-tagged object so
+  // FilterBar can tell a fresh seed apart from an unrelated re-render (see
+  // FilterBar.svelte's own prevSeedNonce guard comment).
+  let seed: { path: string; type: string; nonce: number } | null = null;
+  let seedNonce = 0;
+  function onSeedFilter(e: CustomEvent<{ path: string; type: string }>): void {
+    filterOpen = true;
+    seed = { path: e.detail.path, type: e.detail.type, nonce: seedNonce++ };
+  }
+
   function retry(): void {
     void explorer.open($explorer.path);
+  }
+
+  // E3 Task 8: the empty state's "Clear filter" affordance -- distinct from
+  // StatusBar's Cancel (which only stops an in-flight CountMatches via
+  // explorer.cancelCount()). This resets the filter to match-all so the
+  // unfiltered rows return. KNOWN GAP: FilterBar owns its own draft state
+  // independently (Task 7) and does not subscribe to $explorer.filterActive,
+  // so clearing from here does not reset FilterBar's rows/conditions back to
+  // empty -- the bar can keep showing stale conditions while the data is
+  // genuinely unfiltered underneath. Left for a later task to reconcile.
+  function clearFilter(): void {
+    explorer.setFilter({ combinator: "and" } as any);
   }
 
   $: fileName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "";
@@ -78,6 +111,7 @@
           focusPath={$explorer.focusPath}
           {focusToken}
           on:focus={onFocus}
+          on:seedFilter={onSeedFilter}
         />
       </div>
       <div class="main">
@@ -103,6 +137,15 @@
               <p class="hint">{$explorer.skipped.toLocaleString()} rows skipped</p>
             {/if}
           </div>
+        {:else if $explorer.filterActive && $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
+          <div class="empty-state">
+            <p>No rows match this filter</p>
+            <p class="hint">
+              {$explorer.columns.length.toLocaleString()}
+              column{$explorer.columns.length === 1 ? "" : "s"}
+            </p>
+            <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
+          </div>
         {:else if $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
           <div class="empty-state">
             <p>No rows in this file</p>
@@ -123,11 +166,15 @@
             columns={$explorer.columns}
             total={$explorer.total}
             focusPath={$explorer.focusPath}
+            resetToken={$explorer.resetToken}
             on:focus={onFocus}
           />
         {/if}
       </div>
     </div>
+    {#if $explorer.status === "ready"}
+      <FilterBar columns={$explorer.columns} open={filterOpen} {seed} />
+    {/if}
     <StatusBar
       tier={$explorer.tier}
       total={$explorer.total}
@@ -139,6 +186,11 @@
       totalPaths={$explorer.totalPaths}
       warnings={$explorer.warnings}
       fetching={$explorer.fetching}
+      filterActive={$explorer.filterActive}
+      counting={$explorer.counting}
+      matchCount={$explorer.matchCount}
+      matchExact={$explorer.matchExact}
+      on:cancelCount={() => explorer.cancelCount()}
     />
   </div>
 {/if}
@@ -302,6 +354,10 @@
 
   .empty-state .hint {
     font-size: 12px;
+  }
+
+  .empty-state .clear-filter {
+    margin-top: var(--space-2);
   }
 
   /* Below this width the sidebar and the table stack instead of sitting

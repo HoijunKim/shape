@@ -12,6 +12,11 @@
   export let columns: Column[] = [];
   export let total = 0;
   export let focusPath = "";
+  // E3 Task 9 (recon GAP 9): bumped by the store on every setFilter() call.
+  // DataTable is the sole owner of the scroll viewport, so the store cannot
+  // reset scroll itself -- it just bumps this counter and this component
+  // reacts. See the prevResetToken guard below.
+  export let resetToken = 0;
 
   const dispatch = createEventDispatcher<{ focus: { path: string } }>();
 
@@ -158,6 +163,34 @@
       viewportEl.scrollLeft = 0;
     }
     recomputeRange();
+  }
+
+  function scrollToTop(): void {
+    if (!viewportEl) return;
+    viewportEl.scrollTop = 0;
+    recomputeRange();
+  }
+
+  // E3 Task 9: react to the store's resetToken (recon GAP 9 -- a filter
+  // change should return the user to row 0, since the previously-scrolled-to
+  // rows may no longer exist/match). Guarded by a prevResetToken sentinel
+  // (mirrors the `columns`-changed guard above) initialized to the prop's OWN
+  // incoming value -- not e.g. null -- so mounting (or a later prop re-pass
+  // that happens to carry the same value) never forces a scroll on its own;
+  // only an actual bump (a real setFilter() call) does. Positioned BEFORE
+  // `visibleRows` below for the exact same reason as the `safeTotal` trigger
+  // and the `columns` guard above (see visibleRows's own "Finding (a)
+  // backstop" comment): recomputeRange() reassigns firstRow/lastRow via a
+  // plain (non-`$:`) mutation, so visibleRows only picks up the fresh values
+  // if this block's own reassignment runs BEFORE visibleRows executes in the
+  // same synchronous update pass -- placed after it, the row window would
+  // silently keep rendering the pre-reset (deep-scrolled) rows forever, since
+  // Svelte does not re-run an earlier `$:` statement mid-pass just because a
+  // later one mutated one of its reads.
+  let prevResetToken = resetToken;
+  $: if (resetToken !== prevResetToken) {
+    prevResetToken = resetToken;
+    scrollToTop();
   }
 
   onMount(() => {

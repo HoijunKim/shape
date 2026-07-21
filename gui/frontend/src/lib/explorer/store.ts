@@ -1,9 +1,18 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel } from "../../../wailsjs/go/main/App";
-import type { Column, FieldDTO, OpenResult, RowSet } from "./types";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
+import type { Column, CountResult, FieldDTO, Filter, OpenResult, RowSet } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
+
+// wailsjs/go/models's Filter is a TS *class* (it carries a convertValues()
+// decoding method for responses coming FROM Go), so its instance type demands
+// that method on anything assigned to it -- a plain object literal can never
+// structurally satisfy it. Same `as unknown as Filter` idiom filterModel.ts
+// already uses for buildFilter's return.
+function matchAllFilter(): Filter {
+  return { combinator: "and" } as unknown as Filter;
+}
 
 export interface ExplorerState {
   status: Status;
@@ -24,6 +33,16 @@ export interface ExplorerState {
   focusPath: string;    // sidebar-selected column path, "" = none
   fetching: boolean;
   version: number;      // bumps whenever a page lands, so views re-read the cache
+  filterActive: boolean; // true when a non-empty Filter is applied (setFilter) -- lets
+                          // the UI/empty-state distinguish "no rows in file" from
+                          // "no rows match filter"
+  resetToken: number;    // bumped on every filter change so DataTable (which owns
+                          // scroll) knows to scroll back to row 0 -- the store cannot
+                          // move the viewport itself
+  // E3 Task 5: a CountMatches request is in flight (the "counting..." affordance).
+  counting: boolean;
+  matchCount: number;    // -1 = unknown; the exact filtered count once CountMatches lands
+  matchExact: boolean;
   // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
   // failure, which still owns the whole pane via `status`/`error`) must be
   // non-destructive -- it must NOT discard an already-rendered grid or the
@@ -37,7 +56,8 @@ const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
-  pageError: "",
+  pageError: "", filterActive: false, resetToken: 0,
+  counting: false, matchCount: -1, matchExact: false,
 };
 
 function createExplorer() {
@@ -49,12 +69,36 @@ function createExplorer() {
   const inflight = new Map<number, string>(); // page index -> requestId
   let seq = 0;
   let gen = 0; // bumps on open()/close(); a fetch from an older gen must not touch state
+  // E3: the filter currently applied to QueryRows, set via setFilter(). A new
+  // file always starts unfiltered -- open()/close() reset this to match-all.
+  let currentFilter: Filter = matchAllFilter();
+  // E3 Task 5: the requestId of the CountMatches call currently in flight, or
+  // null when none is. Its own supersession id -- separate from `gen` -- so a
+  // count for filter A can be told apart from filter B's even when both are
+  // in flight in the same generation's window; see startCount's guard.
+  let countReqId: string | null = null;
   // A5: the most recent range passed to ensurePages(), so retryPageError()
   // can re-request the SAME range a failed fetch belonged to without
   // Explorer.svelte (which has no idea what row range DataTable last
   // scrolled to) needing to supply one.
   let lastFirst = 0;
   let lastLast = 0;
+  // T10 fix: OpenSource's own rowEstimate/rowExact (the file-level total --
+  // exact on memory/sqlite/parquet, a sampled estimate on rescan), kept
+  // separately from the mutable `total`/`totalExact` state so setFilter can
+  // restore it when a filter is CLEARED back to empty. Without this, clearing
+  // a filter on a non-memory tier left `total` stuck at whatever tiny
+  // page-based guess reconcileEof produced from the post-clear page-0 refetch
+  // (e.g. "~400 rows" surviving a clear on a 726,181-row rescan-tier file) --
+  // QueryRows is always called with wantTotal:false (ensurePages), and every
+  // non-memory Backend.Query returns Total:-1 for that case (rescan.go/
+  // sqlbackend.go/parquetbackend.go), so reconcileEof's page-boundary
+  // fallback was the ONLY source left for `total`, and it never climbs back
+  // to the true estimate on its own. On the memory tier this is a no-op:
+  // memBackend.Query always returns the exact count regardless of wantTotal,
+  // so the very next page-0 fetch overwrites whatever we restore here anyway.
+  let baseTotal = -1;
+  let baseTotalExact = false;
 
   async function open(path: string): Promise<void> {
     const prev = get({ subscribe });
@@ -62,6 +106,10 @@ function createExplorer() {
     const myGen = ++gen; // C1: a fetch (here, this whole open()) from an older gen must not touch state
     cache.clear();
     inflight.clear();
+    currentFilter = matchAllFilter(); // a new file always starts unfiltered
+    countReqId = null;
+    baseTotal = -1;
+    baseTotalExact = false;
     set({ ...empty, status: "opening", path });
     try {
       // I-1: send a per-open unique, monotonically-increasing requestId
@@ -91,6 +139,8 @@ function createExplorer() {
         void CloseSource(res.handle).catch(() => {});
         return;
       }
+      baseTotal = res.rowEstimate;
+      baseTotalExact = res.rowExact;
       update((s) => ({
         ...s, status: "ready", handle: res.handle, tier: res.tier, format: res.format,
         warnings: res.warnings ?? [], fields: res.profile?.fields ?? [], columns: res.columns ?? [],
@@ -142,7 +192,7 @@ function createExplorer() {
       inflight.set(page, reqId);
       try {
         const rs: RowSet = await QueryRows({
-          requestId: reqId, handle: s.handle, filter: {} as any, transform: {} as any,
+          requestId: reqId, handle: s.handle, filter: currentFilter, transform: {} as any,
           offset: page * pageRows, limit: pageRows, wantTotal: false,
         } as any);
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
@@ -235,10 +285,110 @@ function createExplorer() {
     if (s.handle) { await CloseSource(s.handle).catch(() => {}); }
     gen++;
     cache.clear(); inflight.clear();
+    currentFilter = matchAllFilter();
+    countReqId = null;
+    baseTotal = -1;
+    baseTotalExact = false;
     set({ ...empty });
   }
 
-  return { subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError };
+  /** E3 Task 5: runs one CountMatches to finality for `filter`, superseded-safe
+   *  via BOTH `countReqId` (a newer count, e.g. filter B's, must win over this
+   *  one even within the same `gen`) and `genAtStart` (belt-and-suspenders: every
+   *  gen-bumping call site -- open()/close()/setFilter(), including the
+   *  cleared-to-empty path -- also resets `countReqId` synchronously in the same
+   *  call, so `countReqId` alone already rejects every stale count reachable
+   *  today; `genAtStart` guards the invariant itself, in case a future
+   *  gen-bumping path is ever added that forgets to touch `countReqId`). The
+   *  memory-tier skip is decided by the caller (setFilter), not here. */
+  async function startCount(handle: string, filter: Filter, genAtStart: number): Promise<void> {
+    const reqId = `c${++seq}`;
+    countReqId = reqId;
+    update((s) => ({ ...s, counting: true }));
+    try {
+      const res: CountResult = await CountMatches({ requestId: reqId, handle, filter } as any);
+      if (countReqId !== reqId || genAtStart !== gen) return; // superseded by a newer filter
+      update((s) => ({
+        ...s, matchCount: res.total, matchExact: res.exact, counting: false,
+        total: res.total, totalExact: res.exact,
+      }));
+    } catch (e) {
+      if (countReqId !== reqId || genAtStart !== gen) return;
+      // A cancelled or failed count is not a page error; just stop counting.
+      update((s) => ({ ...s, counting: false }));
+    } finally {
+      if (countReqId === reqId) countReqId = null;
+    }
+  }
+
+  /** E3 Task 5: the Cancel button behind the "counting..." affordance. */
+  function cancelCount(): void {
+    if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
+    update((s) => ({ ...s, counting: false }));
+  }
+
+  /** E3: applies a live filter to the current file. Recon GAPs 2/3/9 -- see
+   *  the inline comments below for why each step is required. */
+  function setFilter(f: Filter): void {
+    currentFilter = f;
+    const active = !!(f.conditions && f.conditions.length > 0);
+    // Bump gen so any in-flight OLD-filter QueryRows is superseded and cannot
+    // cache.set() into the NEW filter's page slot (recon GAP 2). Cancel and
+    // clear inflight the same way a superseding scroll does, and clear the
+    // page cache so no old-filter rows survive.
+    ++gen;
+    for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
+    inflight.clear();
+    cache.clear();
+    // E3 Task 5: cancel and null out any prior count the same way open()/
+    // close() do. Do this even when no new count is about to start below (the
+    // cleared-to-empty path) -- otherwise a still-set countReqId would let a
+    // late-resolving stale count's own reqId match countReqId again, and only
+    // startCount's genAtStart guard would be left to reject it.
+    if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
+    update((s) => ({
+      ...s,
+      filterActive: active,
+      // Reset the total so the stale unfiltered count is not shown as the
+      // filtered count (recon GAP 3). On the memory tier page 0 immediately
+      // re-fills it exactly; on other tiers it stays -1 (=> "counting...")
+      // until Task 5's CountMatches finalizes it.
+      //
+      // T10 fix: a CLEARED filter (active === false) is not "counting"
+      // anything -- it is just the file's own rows again -- so restore the
+      // file-level baseTotal/baseTotalExact captured at open() rather than
+      // -1. Without this, a non-memory tier's total got stuck at whatever
+      // tiny page-based guess the post-clear page-0 refetch produced (every
+      // non-memory Backend.Query returns Total:-1 for QueryRows'
+      // wantTotal:false, so reconcileEof's page-boundary fallback was the
+      // only thing left feeding `total`, and it never climbs back to the
+      // true estimate on its own -- e.g. clearing a filter on a 726,181-row
+      // rescan-tier file left the status bar reading "~400 rows" forever).
+      total: active ? -1 : baseTotal,
+      totalExact: active ? false : baseTotalExact,
+      version: 0,
+      resetToken: s.resetToken + 1, // DataTable scrolls to row 0 (recon GAP 9)
+      pageError: "",
+      matchCount: -1,
+      matchExact: false,
+      counting: false,
+    }));
+    void ensurePages(0, 0);
+    const s = get({ subscribe });
+    // E3 Task 5: CountMatches is the eager exact source only where QueryRows
+    // can't already give one -- on the memory tier, filtered page 0 already
+    // returns the exact total, so counting there would be a redundant full
+    // re-scan. An empty filter needs no count at all (page 0/the unfiltered
+    // seed already has it).
+    if (active && s.tier !== "memory") {
+      void startCount(s.handle, f, gen);
+    }
+  }
+
+  return {
+    subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
+    setFilter, cancelCount,
+  };
 }
 
 export const explorer = createExplorer();

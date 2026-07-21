@@ -14,6 +14,10 @@ export type OpenResult = query.OpenResult;
 export type ProfileDTO = query.ProfileDTO;
 export type FieldDTO = query.FieldDTO;
 export type CountResult = query.CountResult;
+export type Filter = query.Filter;
+export type Condition = query.Condition;
+export type Value = query.Value;
+export type CountRequest = query.CountRequest;
 
 export const CellKind = query.CellKind;
 export type CellKind = query.CellKind;

@@ -10,10 +10,14 @@
 // Explorer.svelte, not here -- a component-only test like this one cannot
 // tell a correct `totalExact={$explorer.totalExact}` binding apart from a
 // mis-wired `totalExact={!$explorer.sampled}` one.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import StatusBar from "./StatusBar.svelte";
 
-type Instance = { $set: (p: Record<string, unknown>) => void; $destroy: () => void };
+type Instance = {
+  $set: (p: Record<string, unknown>) => void;
+  $destroy: () => void;
+  $on: (event: string, cb: (e: CustomEvent) => void) => () => void;
+};
 
 describe("StatusBar", () => {
   let target: HTMLElement;
@@ -116,5 +120,57 @@ describe("StatusBar", () => {
   it("shows no loading pip when not fetching", () => {
     const idle = mount({ total: 10, totalExact: true, fetching: false });
     expect(idle.querySelector(".loading")).toBeNull();
+  });
+
+  // E3 Task 8: the live filtered count + its Cancel affordance (recon GAP
+  // 1/6). These are ADDITIVE to every fixture above -- none of them pass
+  // filterActive, so the unfiltered rendering above stays untouched.
+  describe("filtered count (E3 Task 8)", () => {
+    it("shows counting… with a Cancel button while a filtered count is in flight", () => {
+      const t = mount({ total: -1, totalExact: false, filterActive: true, counting: true });
+      const metric = t.querySelector(".metric.mono") as HTMLElement;
+      expect(metric.textContent).toBe("counting…");
+      expect(t.querySelector("button.cancel-count")).toBeTruthy();
+    });
+
+    it("dispatches cancelCount when the Cancel button in the counting state is clicked", () => {
+      mount({ total: -1, totalExact: false, filterActive: true, counting: true });
+      const onCancel = vi.fn();
+      cmp!.$on("cancelCount", onCancel);
+      const btn = target.querySelector("button.cancel-count") as HTMLButtonElement;
+      btn.click();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no Cancel button once counting finishes", () => {
+      const t = mount({
+        total: -1, totalExact: false, filterActive: true, counting: false,
+        matchCount: 5, matchExact: true,
+      });
+      expect(t.querySelector("button.cancel-count")).toBeNull();
+    });
+
+    it("shows no Cancel button when not filterActive, even if counting were somehow true", () => {
+      const t = mount({ total: -1, totalExact: false, filterActive: false, counting: true });
+      expect(t.querySelector("button.cancel-count")).toBeNull();
+    });
+
+    it("renders an exact filtered match count with no tilde", () => {
+      const t = mount({
+        total: -1, totalExact: false, filterActive: true, counting: false,
+        matchCount: 42, matchExact: true,
+      });
+      const metric = t.querySelector(".metric.mono") as HTMLElement;
+      expect(metric.textContent).toBe("42 rows");
+    });
+
+    it("renders an inexact filtered match count with a leading tilde", () => {
+      const t = mount({
+        total: -1, totalExact: false, filterActive: true, counting: false,
+        matchCount: 42, matchExact: false,
+      });
+      const metric = t.querySelector(".metric.mono") as HTMLElement;
+      expect(metric.textContent).toBe("~42 rows");
+    });
   });
 });

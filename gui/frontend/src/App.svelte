@@ -17,6 +17,12 @@
   // itself, rendered by Explorer's own error state) -- kept as a small local
   // alert here rather than folded into the store.
   let exportError = "";
+  // E3 Task 7: Header and Explorer are SIBLINGS here, and Explorer does not
+  // render Header -- so this flag (and the toggle event routing it) must
+  // live here, the only place that mounts both. `bind:filterOpen` on
+  // Explorer lets Task 9's seed set it from outside and have it propagate
+  // back up to Header's aria-pressed.
+  let filterOpen = false;
 
   async function load(path: string): Promise<void> {
     if (!path) return;
@@ -74,9 +80,11 @@
     format={$explorer.format}
     canExport={$explorer.status === "ready"}
     {theme}
+    {filterOpen}
     on:open={open}
     on:export={exportSchema}
     on:toggleTheme={toggleTheme}
+    on:toggleFilter={() => (filterOpen = !filterOpen)}
   />
 
   <div class="body">
@@ -84,7 +92,7 @@
       <p class="error" role="alert">{exportError}</p>
     {/if}
 
-    <Explorer on:open={open} />
+    <Explorer on:open={open} bind:filterOpen />
   </div>
 </main>
 

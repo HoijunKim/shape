@@ -29,7 +29,10 @@
   // back to, and it never touches focusPath itself, so it cannot loop.
   export let focusToken = 0;
 
-  const dispatch = createEventDispatcher<{ focus: { path: string } }>();
+  const dispatch = createEventDispatcher<{
+    focus: { path: string };
+    seedFilter: { path: string; type: string };
+  }>();
 
   const INDENT = 14;
 
@@ -72,6 +75,20 @@
     dispatch("focus", { path: node.path });
   }
 
+  // E3 Task 9 (click-to-seed, the second "wow"): the funnel button only ever
+  // renders on isColumn rows (see the template below), so this is never
+  // reachable for a column-less node. stopPropagation is load-bearing, not
+  // decorative: the row itself is the sole interactive control (comment
+  // above onRowClick) and its own on:click handler runs during the bubble
+  // phase, AFTER this button's own click handler -- without stopPropagation
+  // the click would also reach onRowClick and fire a `focus` dispatch on top
+  // of `seedFilter`, scrolling DataTable's column into view at the same time
+  // the filter bar opens (a plan review flagged exactly this double-fire).
+  function onSeedClick(e: MouseEvent): void {
+    e.stopPropagation();
+    dispatch("seedFilter", { path: node.path, type: node.field ? dominantKind(node.field) : "string" });
+  }
+
   // The caret is a plain aria-hidden span, not a nested interactive element
   // (a <button> inside a role="button" row is invalid nesting -- Finding 3),
   // so the ROW is the sole interactive control and click-delegates by
@@ -99,6 +116,13 @@
   // dimmed parent still has structure worth browsing -- but focus dispatch
   // (Enter/Space) stays gated on isColumn, matching Rule 4.
   function onKeydown(e: KeyboardEvent): void {
+    // The seed funnel is a real focusable <button> nested in this row. A
+    // keydown on it bubbles here; without this guard the row would also
+    // preventDefault()+activate() on Enter/Space, stealing focus and (for
+    // Enter) suppressing the button's own click so seedFilter never fires.
+    // Let the button handle its own keyboard activation (native <button>
+    // fires click on Enter/Space -> onSeedClick).
+    if ((e.target as HTMLElement).closest(".seed")) return;
     if (hasChildren && e.key === "ArrowRight") {
       e.preventDefault();
       if (!expanded) expanded = true;
@@ -157,6 +181,20 @@
       <Badge severity="warning" icon="⚠" label="drift" />
     {/if}
   {/if}
+
+  {#if isColumn}
+    <button
+      type="button"
+      class="seed"
+      aria-label="Add filter for {node.path}"
+      title="Add filter for {node.path}"
+      on:click={onSeedClick}
+    >
+      <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">
+        <path d="M1.5 2h13l-5 6v4.5l-3 1.5v-6z" />
+      </svg>
+    </button>
+  {/if}
 </div>
 
 {#if hasChildren && expanded}
@@ -169,6 +207,7 @@
       {expandedAncestors}
       {focusToken}
       on:focus
+      on:seedFilter
     />
   {/each}
 {/if}
@@ -253,5 +292,45 @@
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
+  }
+
+  /* Quiet by default (a dense tree of funnel icons on every row would be
+     noisy) but never fully hidden -- opacity, not display:none, so it stays
+     discoverable and clickable without requiring a hover step first. */
+  .seed {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    opacity: 0.4;
+    cursor: pointer;
+  }
+
+  .seed svg {
+    fill: currentColor;
+  }
+
+  .row:hover .seed,
+  .seed:hover,
+  .seed:focus-visible {
+    opacity: 1;
+  }
+
+  .seed:hover {
+    color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  .seed:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 </style>

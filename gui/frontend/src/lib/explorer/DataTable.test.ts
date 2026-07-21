@@ -96,3 +96,83 @@ describe("DataTable: row window reacts to a shrinking total (finding a)", () => 
     expect(Math.min(...afterShrink)).toBeGreaterThanOrEqual(0);
   });
 });
+
+// E3 Task 9 (recon GAP 9): a filter change bumps the store's resetToken
+// (store.ts's setFilter), and DataTable is the sole owner of the scroll
+// viewport, so it must react by scrolling back to row 0 -- otherwise a user
+// scrolled deep into a large table would have the rows swapped out from under
+// them by the new filter while still looking at a scroll position that made
+// sense for the OLD result set. Mutation: dropping the `$: if (resetToken !==
+// prevResetToken)` reactive block (or its call to scrollToTop()) leaves
+// scrollTop at its deep-scrolled value and this test fails.
+describe("DataTable: resetToken bump scrolls back to the top (T9)", () => {
+  let target: HTMLElement;
+  let cmp: { $set: (props: Record<string, unknown>) => void; $destroy: () => void } | null = null;
+
+  afterEach(() => {
+    cmp?.$destroy();
+    cmp = null;
+    target?.remove();
+  });
+
+  it("bumping resetToken after a deep scroll sets scrollTop back to 0 and recomputes the row window", async () => {
+    const columns = [makeColumn("a")];
+    target = document.createElement("div");
+    document.body.appendChild(target);
+
+    cmp = new DataTable({
+      target,
+      props: { columns, total: 1000, focusPath: "", resetToken: 0 },
+    }) as unknown as { $set: (props: Record<string, unknown>) => void; $destroy: () => void };
+    await tick();
+
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    expect(viewportEl).toBeTruthy();
+    Object.defineProperty(viewportEl, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 300, configurable: true });
+
+    viewportEl.scrollTop = 25000;
+    viewportEl.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => requestAnimationFrame(resolve)); // onScroll is rAF-throttled
+    await tick();
+
+    expect(viewportEl.scrollTop).toBe(25000); // sanity: genuinely scrolled deep
+    const deepIndices = renderedRowIndices(target);
+    expect(Math.max(...deepIndices)).toBeGreaterThan(800); // sanity: deep window rendered
+
+    cmp.$set({ resetToken: 1 });
+    await tick();
+
+    expect(viewportEl.scrollTop).toBe(0);
+    const afterReset = renderedRowIndices(target);
+    expect(Math.min(...afterReset)).toBe(0); // recomputeRange() re-ran against the reset scrollTop
+  });
+
+  it("does not scroll on mount, even though resetToken starts at a value equal to its own default (guard against a false initial trigger)", async () => {
+    const columns = [makeColumn("a")];
+    target = document.createElement("div");
+    document.body.appendChild(target);
+
+    cmp = new DataTable({
+      target,
+      props: { columns, total: 1000, focusPath: "", resetToken: 0 },
+    }) as unknown as { $set: (props: Record<string, unknown>) => void; $destroy: () => void };
+    await tick();
+
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    Object.defineProperty(viewportEl, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 300, configurable: true });
+
+    viewportEl.scrollTop = 12000;
+    viewportEl.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await tick();
+
+    // Re-passing the SAME resetToken value (0) that mount already saw must
+    // not scroll -- only an actual bump does.
+    cmp.$set({ resetToken: 0 });
+    await tick();
+
+    expect(viewportEl.scrollTop).toBe(12000); // unchanged: no spurious reset
+  });
+});

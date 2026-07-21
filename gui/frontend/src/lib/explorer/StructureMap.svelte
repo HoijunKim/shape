@@ -20,7 +20,10 @@
   // interpret it, only forwards it down to every TreeNode.
   export let focusToken = 0;
 
-  const dispatch = createEventDispatcher<{ focus: { path: string } }>();
+  const dispatch = createEventDispatcher<{
+    focus: { path: string };
+    seedFilter: { path: string; type: string };
+  }>();
 
   $: tree = buildTree(fields);
   // Recomputed fresh every time focusPath changes (a sidebar click OR a
@@ -32,6 +35,12 @@
   function onFocus(e: CustomEvent<{ path: string }>): void {
     dispatch("focus", e.detail);
   }
+
+  // E3 Task 9: forward TreeNode's seedFilter straight through -- StructureMap
+  // has no opinion on it, same as the focus forward above.
+  function onSeedFilter(e: CustomEvent<{ path: string; type: string }>): void {
+    dispatch("seedFilter", e.detail);
+  }
 </script>
 
 <nav class="structure-map" aria-label="Field structure">
@@ -39,7 +48,16 @@
     <p class="empty">No fields.</p>
   {:else}
     {#each tree as node (node.path)}
-      <TreeNode {node} depth={0} {focusPath} {columnPaths} {expandedAncestors} {focusToken} on:focus={onFocus} />
+      <TreeNode
+        {node}
+        depth={0}
+        {focusPath}
+        {columnPaths}
+        {expandedAncestors}
+        {focusToken}
+        on:focus={onFocus}
+        on:seedFilter={onSeedFilter}
+      />
     {/each}
   {/if}
 </nav>
