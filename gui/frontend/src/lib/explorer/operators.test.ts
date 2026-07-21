@@ -16,6 +16,28 @@ describe("operatorsForType", () => {
     expect(byId["isnull"].arity).toBe("none");
   });
 
+  // eq/ne are a single OpId each, but their arity/ci DIFFER by column type:
+  // numeric wants a number input and no ci; string wants text + ci. Task 2's
+  // buildFilter reads this arity to pick Value.kind "number" vs "string" -- a
+  // numeric eq that carried the string arity would silently emit a wrong-Kind
+  // condition that zero-matches. Pin BOTH shapes so that regression cannot
+  // pass (swapping NUMERIC_EQ back to OPS.eq must fail here).
+  it("gives numeric eq/ne a number arity and no ci", () => {
+    const byId = Object.fromEntries(operatorsForType("int").map((o) => [o.id, o]));
+    expect(byId["eq"].arity).toBe("number");
+    expect(byId["eq"].ci).toBe(false);
+    expect(byId["ne"].arity).toBe("number");
+    expect(byId["ne"].ci).toBe(false);
+  });
+
+  it("gives string eq/ne a text arity and ci", () => {
+    const byId = Object.fromEntries(operatorsForType("string").map((o) => [o.id, o]));
+    expect(byId["eq"].arity).toBe("text");
+    expect(byId["eq"].ci).toBe(true);
+    expect(byId["ne"].arity).toBe("text");
+    expect(byId["ne"].ci).toBe(true);
+  });
+
   it("returns the 7 string op ids in order", () => {
     expect(operatorsForType("string").map((o) => o.id)).toEqual([
       "eq",
