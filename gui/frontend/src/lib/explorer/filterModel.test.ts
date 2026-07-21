@@ -286,3 +286,42 @@ describe("conditionError", () => {
     expect(conditionError(c)).toBe("");
   });
 });
+
+describe("buildFilter -- coverage added in review of Task 2", () => {
+  const cond = (over: Partial<DraftCondition>): DraftCondition => ({
+    id: 1, path: "x", type: "string", op: "eq", text: "", num: "", bool: false, list: [], ci: false, ...over,
+  });
+  const draft = (conditions: DraftCondition[], combinator: "and" | "or" = "and"): FilterDraft => ({ combinator, conditions });
+
+  it("string eq emits {kind:'string', str} off the type-forked else-branch (no num read)", () => {
+    const f = buildFilter(draft([cond({ path: "name", type: "string", op: "eq", text: "foo" })])) as any;
+    expect(f.conditions[0].value).toEqual({ kind: "string", str: "foo" });
+    expect(f.conditions[0]).not.toHaveProperty("ci"); // ci off => no key
+  });
+
+  it("string ne with ci:true emits {kind:'string', str} plus ci:true", () => {
+    const f = buildFilter(draft([cond({ path: "name", type: "string", op: "ne", text: "foo", ci: true })])) as any;
+    expect(f.conditions[0].value).toEqual({ kind: "string", str: "foo" });
+    expect(f.conditions[0].ci).toBe(true);
+  });
+
+  it("omits a complete-but-invalid regex (unbalanced paren), keeping a valid sibling", () => {
+    const f = buildFilter(draft([
+      cond({ path: "name", type: "string", op: "regex", text: "(" }),
+      cond({ path: "email", type: "string", op: "notnull" }),
+    ])) as any;
+    expect(f.conditions).toHaveLength(1);
+    expect(f.conditions[0].op).toBe("notnull");
+  });
+
+  it("drops a non-finite entry from a numeric `in` list (would coerce to num:NaN -> 0)", () => {
+    const f = buildFilter(draft([cond({ path: "age", type: "int", op: "in", list: ["1", "abc", "2"] })])) as any;
+    expect(f.conditions[0].value.list).toEqual([{ kind: "number", num: 1 }, { kind: "number", num: 2 }]);
+  });
+
+  it("treats an all-non-numeric `in` list on a numeric column as incomplete (omitted)", () => {
+    expect(isConditionComplete(cond({ type: "int", op: "in", list: ["abc", ""] }))).toBe(false);
+    const f = buildFilter(draft([cond({ path: "age", type: "int", op: "in", list: ["abc"] })])) as any;
+    expect(f.conditions === undefined || f.conditions.length === 0).toBe(true);
+  });
+});

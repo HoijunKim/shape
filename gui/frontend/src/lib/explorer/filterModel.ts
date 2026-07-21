@@ -112,7 +112,13 @@ export function isConditionComplete(c: DraftCondition): boolean {
     case "number":
       return c.num !== "" && Number.isFinite(Number(c.num));
     case "list":
-      return c.list.some((x) => x !== "");
+      // On a numeric column an `in` entry must parse as a finite number, or
+      // it would coerce to num:NaN -> JSON null -> Go 0.0 and silently match
+      // numeric 0. Require at least one entry that will actually survive
+      // buildCondition's coercion.
+      return isNumericType(c.type)
+        ? c.list.some((x) => x !== "" && Number.isFinite(Number(x)))
+        : c.list.some((x) => x !== "");
     default:
       return false;
   }
@@ -143,13 +149,21 @@ export function conditionError(c: DraftCondition): string {
   return "";
 }
 
-/** Compiles a draft into the engine Filter: incomplete conditions (per
- *  isConditionComplete) are omitted entirely so the engine never sees a
- *  half-typed request. combinator is always set explicitly (an empty string
- *  would default to AND server-side, but E3 never relies on that default).
- *  groups/negate are never set -- E3 is flat-only. */
+/** Compiles a draft into the engine Filter: a condition is omitted entirely
+ *  unless it is both COMPLETE (isConditionComplete) and VALID
+ *  (conditionError === "") -- a complete-but-invalid regex (a non-empty but
+ *  uncompilable pattern) is complete yet must not be sent, since the engine
+ *  rejects a bad regex by failing the WHOLE QueryRows/CountMatches request
+ *  (filter.go: CompileFilter returns an error). Omitting it here keeps the
+ *  "never send a request the engine will reject" invariant in one place
+ *  rather than relying on every caller to pre-check conditionError.
+ *  combinator is always set explicitly (an empty string would default to AND
+ *  server-side, but E3 never relies on that default). groups/negate are never
+ *  set -- E3 is flat-only. */
 export function buildFilter(draft: FilterDraft): Filter {
-  const conditions = draft.conditions.filter(isConditionComplete).map(buildCondition);
+  const conditions = draft.conditions
+    .filter((c) => isConditionComplete(c) && conditionError(c) === "")
+    .map(buildCondition);
   const filter: PlainFilter = { combinator: draft.combinator };
   if (conditions.length > 0) {
     filter.conditions = conditions;
@@ -203,9 +217,15 @@ function buildCondition(c: DraftCondition): PlainCondition {
       return { path: c.path, op: c.op, value: { kind: "number", num: Number(c.num) } };
 
     case "in": {
+      const numeric = isNumericType(c.type);
       const list: PlainValue[] = c.list
-        .filter((x) => x !== "")
-        .map((x) => (isNumericType(c.type) ? { kind: "number", num: Number(x) } : { kind: "string", str: x }));
+        // Drop empties, and on a numeric column drop non-finite entries too --
+        // Number("abc") is NaN, which serializes to JSON null and unmarshals
+        // to Go 0.0, silently matching numeric 0. isConditionComplete already
+        // requires at least one finite entry to survive, so a genuinely
+        // all-garbage numeric list is omitted upstream.
+        .filter((x) => x !== "" && (!numeric || Number.isFinite(Number(x))))
+        .map((x) => (numeric ? { kind: "number", num: Number(x) } : { kind: "string", str: x }));
       return { path: c.path, op: c.op, value: { kind: "string", list } };
     }
 
