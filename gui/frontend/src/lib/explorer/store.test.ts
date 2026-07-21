@@ -389,8 +389,13 @@ describe("live filtered count via CountMatches (E3 Task 5)", () => {
     expect(get(explorer).counting).toBe(false);
   });
 
-  // Mutation-proof: removing the `countReqId !== reqId` guard in startCount
-  // makes this fail (A's late resolution overwrites B's landed 2 with 1).
+  // This pins GEN-supersession, not the countReqId guard: setFilter bumps gen
+  // per call, so filter A (genAtStart N+1) and filter B (gen N+2) live in
+  // different generations, and A's late resolve is rejected by
+  // `genAtStart !== gen` on its own. Removing the countReqId disjunct leaves
+  // this green -- countReqId's uniquely load-bearing case (a late resolve
+  // AFTER cancelCount, which nulls countReqId WITHOUT bumping gen) is pinned
+  // separately in the cancelCount test below.
   it("count supersession: a slow filter-A count must not overwrite filter-B's later count", async () => {
     await openReadyTier("rescan");
 
@@ -425,8 +430,14 @@ describe("live filtered count via CountMatches (E3 Task 5)", () => {
     expect(vi.mocked(Cancel)).toHaveBeenCalledWith(reqId);
     expect(get(explorer).counting).toBe(false);
 
-    gate.resolve({ total: 1, exact: true, elapsedMs: 0 }); // let it settle so it doesn't leak
+    // The uniquely load-bearing case for the `countReqId` guard: cancelCount
+    // nulls countReqId WITHOUT bumping gen, so this late resolve has
+    // genAtStart === gen and is rejected SOLELY by countReqId(null) !== reqId.
+    // Removing that guard would let a cancelled count land here.
+    gate.resolve({ total: 1, exact: true, elapsedMs: 0 });
     await flush();
+    expect(get(explorer).matchCount).toBe(-1); // the cancelled count must NOT land
+    expect(get(explorer).counting).toBe(false);
   });
 
   it("setFilter back to an empty filter clears matchCount to -1 and does not start a count", async () => {
