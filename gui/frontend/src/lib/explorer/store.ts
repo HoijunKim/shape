@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
-import type { Column, FieldDTO, Filter, OpenResult, RowSet } from "./types";
+import type { Column, CountResult, FieldDTO, Filter, OpenResult, RowSet } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
@@ -39,6 +39,10 @@ export interface ExplorerState {
   resetToken: number;    // bumped on every filter change so DataTable (which owns
                           // scroll) knows to scroll back to row 0 -- the store cannot
                           // move the viewport itself
+  // E3 Task 5: a CountMatches request is in flight (the "counting..." affordance).
+  counting: boolean;
+  matchCount: number;    // -1 = unknown; the exact filtered count once CountMatches lands
+  matchExact: boolean;
   // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
   // failure, which still owns the whole pane via `status`/`error`) must be
   // non-destructive -- it must NOT discard an already-rendered grid or the
@@ -53,6 +57,7 @@ const empty: ExplorerState = {
   warnings: [], fields: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
   pageError: "", filterActive: false, resetToken: 0,
+  counting: false, matchCount: -1, matchExact: false,
 };
 
 function createExplorer() {
@@ -67,6 +72,11 @@ function createExplorer() {
   // E3: the filter currently applied to QueryRows, set via setFilter(). A new
   // file always starts unfiltered -- open()/close() reset this to match-all.
   let currentFilter: Filter = matchAllFilter();
+  // E3 Task 5: the requestId of the CountMatches call currently in flight, or
+  // null when none is. Its own supersession id -- separate from `gen` -- so a
+  // count for filter A can be told apart from filter B's even when both are
+  // in flight in the same generation's window; see startCount's guard.
+  let countReqId: string | null = null;
   // A5: the most recent range passed to ensurePages(), so retryPageError()
   // can re-request the SAME range a failed fetch belonged to without
   // Explorer.svelte (which has no idea what row range DataTable last
@@ -81,6 +91,7 @@ function createExplorer() {
     cache.clear();
     inflight.clear();
     currentFilter = matchAllFilter(); // a new file always starts unfiltered
+    countReqId = null;
     set({ ...empty, status: "opening", path });
     try {
       // I-1: send a per-open unique, monotonically-increasing requestId
@@ -255,7 +266,43 @@ function createExplorer() {
     gen++;
     cache.clear(); inflight.clear();
     currentFilter = matchAllFilter();
+    countReqId = null;
     set({ ...empty });
+  }
+
+  /** E3 Task 5: runs one CountMatches to finality for `filter`, superseded-safe
+   *  via BOTH `countReqId` (a newer count, e.g. filter B's, must win over this
+   *  one even within the same `gen`) and `genAtStart` (belt-and-suspenders: every
+   *  gen-bumping call site -- open()/close()/setFilter(), including the
+   *  cleared-to-empty path -- also resets `countReqId` synchronously in the same
+   *  call, so `countReqId` alone already rejects every stale count reachable
+   *  today; `genAtStart` guards the invariant itself, in case a future
+   *  gen-bumping path is ever added that forgets to touch `countReqId`). The
+   *  memory-tier skip is decided by the caller (setFilter), not here. */
+  async function startCount(handle: string, filter: Filter, genAtStart: number): Promise<void> {
+    const reqId = `c${++seq}`;
+    countReqId = reqId;
+    update((s) => ({ ...s, counting: true }));
+    try {
+      const res: CountResult = await CountMatches({ requestId: reqId, handle, filter } as any);
+      if (countReqId !== reqId || genAtStart !== gen) return; // superseded by a newer filter
+      update((s) => ({
+        ...s, matchCount: res.total, matchExact: res.exact, counting: false,
+        total: res.total, totalExact: res.exact,
+      }));
+    } catch (e) {
+      if (countReqId !== reqId || genAtStart !== gen) return;
+      // A cancelled or failed count is not a page error; just stop counting.
+      update((s) => ({ ...s, counting: false }));
+    } finally {
+      if (countReqId === reqId) countReqId = null;
+    }
+  }
+
+  /** E3 Task 5: the Cancel button behind the "counting..." affordance. */
+  function cancelCount(): void {
+    if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
+    update((s) => ({ ...s, counting: false }));
   }
 
   /** E3: applies a live filter to the current file. Recon GAPs 2/3/9 -- see
@@ -271,6 +318,12 @@ function createExplorer() {
     for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
     inflight.clear();
     cache.clear();
+    // E3 Task 5: cancel and null out any prior count the same way open()/
+    // close() do. Do this even when no new count is about to start below (the
+    // cleared-to-empty path) -- otherwise a still-set countReqId would let a
+    // late-resolving stale count's own reqId match countReqId again, and only
+    // startCount's genAtStart guard would be left to reject it.
+    if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
     update((s) => ({
       ...s,
       filterActive: active,
@@ -283,11 +336,26 @@ function createExplorer() {
       version: 0,
       resetToken: s.resetToken + 1, // DataTable scrolls to row 0 (recon GAP 9)
       pageError: "",
+      matchCount: -1,
+      matchExact: false,
+      counting: false,
     }));
     void ensurePages(0, 0);
+    const s = get({ subscribe });
+    // E3 Task 5: CountMatches is the eager exact source only where QueryRows
+    // can't already give one -- on the memory tier, filtered page 0 already
+    // returns the exact total, so counting there would be a redundant full
+    // re-scan. An empty filter needs no count at all (page 0/the unfiltered
+    // seed already has it).
+    if (active && s.tier !== "memory") {
+      void startCount(s.handle, f, gen);
+    }
   }
 
-  return { subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError, setFilter };
+  return {
+    subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
+    setFilter, cancelCount,
+  };
 }
 
 export const explorer = createExplorer();

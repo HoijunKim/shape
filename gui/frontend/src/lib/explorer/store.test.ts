@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
 import type { Filter } from "./types";
 
 // C1: a slow open() must not clobber a newer file's state, and it must not
@@ -32,8 +32,8 @@ const emptyRowSet = (): any => ({
   scanned: 0, truncated: true, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
 });
 
-const openResult = (handle: string): any => ({
-  handle, format: "json", tier: "memory", columns: [],
+const openResult = (handle: string, tier = "memory"): any => ({
+  handle, format: "json", tier, columns: [],
   profile: { records: 0, skipped: 0, fields: [] },
   sampled: false, rowEstimate: 0, rowExact: true, warnings: [],
   columnsTruncated: false, totalPaths: 0,
@@ -44,6 +44,7 @@ beforeEach(async () => {
   vi.mocked(QueryRows).mockReset().mockResolvedValue(emptyRowSet());
   vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
   vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+  vi.mocked(CountMatches).mockReset(); // E3 Task 5: each test sets its own resolution explicitly
   await explorer.close();
   vi.mocked(CloseSource).mockClear(); // don't count close()'s own no-op call
 });
@@ -311,5 +312,161 @@ describe("setFilter (E3 Task 4)", () => {
     expect(calls.length).toBeGreaterThan(callsBefore);
     const args = calls[callsBefore][0] as any;
     expect(args.filter).toEqual({ combinator: "and" });
+  });
+});
+
+// E3 Task 5: on rescan/sqlite/parquet, a filtered QueryRows(wantTotal:false)
+// returns Total:-1, so CountMatches is the only eager, exact source -- a full
+// residual scan, cancellable via the engine's per-RequestID registry. On the
+// memory tier, QueryRows already returns the exact filtered total on page 0,
+// so a count there would be a redundant full re-scan -- setFilter must skip
+// it. The count carries its own supersession id (countReqId) PLUS the same
+// `gen` guard as everything else, because a slow count for one filter must
+// never overwrite a different filter's (or the cleared, unfiltered) state.
+describe("live filtered count via CountMatches (E3 Task 5)", () => {
+  const filterAge18: Filter = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 18 } }],
+  } as unknown as Filter;
+
+  const filterAge21: Filter = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 21 } }],
+  } as unknown as Filter;
+
+  const matchAll = { combinator: "and" } as unknown as Filter;
+
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  async function openReadyTier(tier: string, handle = "handle-count"): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult(handle, tier));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    await explorer.open("file.ndjson");
+  }
+
+  it("rescan tier: setFilter(nonEmpty) calls CountMatches once with the filter and adopts the result", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(1);
+    const args = vi.mocked(CountMatches).mock.calls[0][0] as any;
+    expect(args.filter).toEqual(filterAge18);
+
+    gate.resolve({ total: 42, exact: true, elapsedMs: 0 });
+    await flush();
+
+    const s = get(explorer);
+    expect(s.matchCount).toBe(42);
+    expect(s.matchExact).toBe(true);
+    expect(s.counting).toBe(false);
+    expect(s.total).toBe(42);
+    expect(s.totalExact).toBe(true);
+  });
+
+  // Mutation-proof: dropping the `s.tier !== "memory"` guard in setFilter
+  // makes this fail (CountMatches gets called).
+  it("memory tier: setFilter(nonEmpty) does NOT call CountMatches", async () => {
+    await openReadyTier("memory");
+
+    explorer.setFilter(filterAge18);
+    await flush();
+
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(0);
+  });
+
+  it("counting is true synchronously after setFilter on a rescan tier, and false once it resolves", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).counting).toBe(true);
+
+    gate.resolve({ total: 1, exact: true, elapsedMs: 0 });
+    await flush();
+    expect(get(explorer).counting).toBe(false);
+  });
+
+  // Mutation-proof: removing the `countReqId !== reqId` guard in startCount
+  // makes this fail (A's late resolution overwrites B's landed 2 with 1).
+  it("count supersession: a slow filter-A count must not overwrite filter-B's later count", async () => {
+    await openReadyTier("rescan");
+
+    const gateA = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateA.promise);
+    explorer.setFilter(filterAge18); // filter A, count A pending
+
+    const gateB = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateB.promise);
+    explorer.setFilter(filterAge21); // filter B, count B pending; supersedes A
+
+    gateB.resolve({ total: 2, exact: true, elapsedMs: 0 });
+    await flush();
+    expect(get(explorer).matchCount).toBe(2);
+
+    gateA.resolve({ total: 1, exact: true, elapsedMs: 0 }); // A lands late
+    await flush();
+    expect(get(explorer).matchCount).toBe(2); // must not flicker to / land on 1
+  });
+
+  it("cancelCount() while counting calls Cancel(countReqId) and sets counting:false", async () => {
+    await openReadyTier("rescan");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gate.promise);
+
+    explorer.setFilter(filterAge18);
+    expect(get(explorer).counting).toBe(true);
+    const reqId = (vi.mocked(CountMatches).mock.calls[0][0] as any).requestId as string;
+
+    explorer.cancelCount();
+
+    expect(vi.mocked(Cancel)).toHaveBeenCalledWith(reqId);
+    expect(get(explorer).counting).toBe(false);
+
+    gate.resolve({ total: 1, exact: true, elapsedMs: 0 }); // let it settle so it doesn't leak
+    await flush();
+  });
+
+  it("setFilter back to an empty filter clears matchCount to -1 and does not start a count", async () => {
+    await openReadyTier("rescan");
+    vi.mocked(CountMatches).mockResolvedValueOnce({ total: 42, exact: true, elapsedMs: 0 } as any);
+    explorer.setFilter(filterAge18);
+    await flush();
+    expect(get(explorer).matchCount).toBe(42);
+
+    const callsBefore = vi.mocked(CountMatches).mock.calls.length;
+    explorer.setFilter(matchAll);
+    await flush();
+
+    expect(get(explorer).matchCount).toBe(-1);
+    expect(get(explorer).matchExact).toBe(false);
+    expect(vi.mocked(CountMatches).mock.calls.length).toBe(callsBefore); // no new count started
+  });
+
+  // The regression the plan review flagged as untested: a filter cleared to
+  // empty starts no new count, so without nulling countReqId on the clear
+  // path a late-resolving stale count from A could still land. NOTE: with
+  // countReqId correctly nulled (as setFilter does), that check alone already
+  // rejects this specific case -- verified by deliberately removing the
+  // `genAtStart !== gen` half of startCount's guard and re-running this test:
+  // it still passed. genAtStart is kept as belt-and-suspenders (see its doc
+  // comment in store.ts) but is not independently exercised by this test.
+  it("cleared-then-late-count: a stale count from filter A must not land after clearing to empty", async () => {
+    await openReadyTier("rescan");
+    const gateA = deferred<any>();
+    vi.mocked(CountMatches).mockImplementationOnce(() => gateA.promise);
+    explorer.setFilter(filterAge18); // filter A, count pending
+
+    explorer.setFilter(matchAll); // clear -- no new count starts, countReqId nulled
+    await flush();
+
+    gateA.resolve({ total: 1, exact: true, elapsedMs: 0 }); // A's stale count lands late
+    await flush();
+
+    const s = get(explorer);
+    expect(s.matchCount).toBe(-1);
+    expect(s.total).not.toBe(1);
   });
 });
