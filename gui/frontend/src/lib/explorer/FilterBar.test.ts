@@ -266,4 +266,19 @@ describe("FilterBar", () => {
 
     setFilterSpy.mockRestore();
   });
+
+  it("mounting with a stale seed already present does NOT re-seed (remount after a file switch, review)", async () => {
+    // Opening a second file dips the store status ready->opening->ready, which
+    // unmounts and remounts FilterBar while Explorer's `seed` local still holds
+    // the PRIOR file's funnel click. A fresh bar must NOT append that stale
+    // condition. prevSeedNonce initialized to the incoming seed's nonce makes
+    // the mount-time reactive run a no-op. Mutation: init prevSeedNonce to -1
+    // -> the mount run sees seed.nonce(5) !== -1 -> appends a stale row here.
+    cmp = new FilterBar({
+      target,
+      props: { columns: [ageColumn], open: true, seed: { path: "age", type: "int", nonce: 5 } },
+    }) as unknown as Instance;
+    await tick();
+    expect(target.querySelectorAll(".condition-row").length).toBe(0);
+  });
 });

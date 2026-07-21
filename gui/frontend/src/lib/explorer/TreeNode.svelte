@@ -116,6 +116,13 @@
   // dimmed parent still has structure worth browsing -- but focus dispatch
   // (Enter/Space) stays gated on isColumn, matching Rule 4.
   function onKeydown(e: KeyboardEvent): void {
+    // The seed funnel is a real focusable <button> nested in this row. A
+    // keydown on it bubbles here; without this guard the row would also
+    // preventDefault()+activate() on Enter/Space, stealing focus and (for
+    // Enter) suppressing the button's own click so seedFilter never fires.
+    // Let the button handle its own keyboard activation (native <button>
+    // fires click on Enter/Space -> onSeedClick).
+    if ((e.target as HTMLElement).closest(".seed")) return;
     if (hasChildren && e.key === "ArrowRight") {
       e.preventDefault();
       if (!expanded) expanded = true;

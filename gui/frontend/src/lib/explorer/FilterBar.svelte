@@ -89,13 +89,17 @@
   }
 
   // E3 Task 9: seed a fresh condition from a sidebar funnel click. Guarded by
-  // a prevSeedNonce sentinel initialized to -1 (never a real nonce, which
-  // Explorer.svelte starts at 0 and only increments) so mounting with `seed`
-  // already non-null (a prop re-pass carrying the SAME seed, which Svelte's
-  // safe_not_equal treats as "changed" for any object-typed prop regardless
-  // of identity/content -- see Explorer.test.ts's focusToken test for the
-  // same caveat) never re-seeds; only an actual nonce bump does.
-  let prevSeedNonce = -1;
+  // a prevSeedNonce sentinel initialized to the CURRENT seed's nonce (or -1
+  // when there is no seed yet), mirroring DataTable's `prevResetToken =
+  // resetToken`. This is load-bearing on REMOUNT: opening a second file dips
+  // the store status ready->opening->ready, which unmounts and remounts this
+  // FilterBar (see the onDestroy comment below), while Explorer's `seed` local
+  // persists the PRIOR file's funnel click. Initializing to -1 would make the
+  // fresh bar's first reactive run see `seed.nonce !== -1` and re-seed file
+  // A's path into file B -- a stale row + focus-steal. Initializing to the
+  // incoming seed's nonce makes that mount run a no-op; a genuine later funnel
+  // click bumps the nonce past it and seeds normally.
+  let prevSeedNonce = seed ? seed.nonce : -1;
   $: if (seed && seed.nonce !== prevSeedNonce) {
     prevSeedNonce = seed.nonce;
     seedCondition(seed.path, seed.type);

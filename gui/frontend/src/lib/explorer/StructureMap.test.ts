@@ -348,6 +348,30 @@ describe("StructureMap + TreeNode", () => {
     expect(focusFired).toBe(false);
   });
 
+  it("a keydown on the seed button does NOT fire the row's focus (onKeydown target guard)", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    cmp = new StructureMap({ target, props: { fields, focusPath: "", columnPaths } }) as unknown as Instance;
+    await tick();
+
+    const idRow = row(target, "id")!;
+    const seedBtn = idRow.querySelector("button.seed") as HTMLButtonElement;
+
+    let focusFired = false;
+    cmp.$on("focus", () => (focusFired = true));
+
+    // Enter/Space on the funnel bubbles a keydown to the row. Without the
+    // onKeydown `.seed` target guard, the row would preventDefault()+activate()
+    // and dispatch `focus`, stealing focus (and, for Enter, suppressing the
+    // button's own click so seedFilter never fires). Mutation: remove that
+    // guard -> focusFired flips true here.
+    seedBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    seedBtn.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await tick();
+
+    expect(focusFired).toBe(false);
+  });
+
   it("forwards seedFilter from a deeply nested row up through the recursive svelte:self chain", async () => {
     target = document.createElement("div");
     document.body.appendChild(target);
