@@ -352,11 +352,11 @@ func TestRescanBackend_Export_StreamsAllMatchingProjectedRows(t *testing.T) {
 		t.Fatalf("Export rows = %d, want %d", n, len(wantNames))
 	}
 	for i, row := range enc.rows {
-		if len(row.Cells) != 1 || row.Cells[0].Str != wantNames[i] {
-			t.Fatalf("rows[%d] = %#v, want a single-cell row with name %q", i, row, wantNames[i])
+		if len(row.values) != 1 || row.values[0] != any(wantNames[i]) {
+			t.Fatalf("rows[%d] = %#v, want a single-value row with name %q", i, row, wantNames[i])
 		}
-		if row.Index != int64(2*i) {
-			t.Fatalf("rows[%d].Index = %d, want %d (absolute record ordinal, even indices)", i, row.Index, 2*i)
+		if row.index != int64(2*i) {
+			t.Fatalf("rows[%d].index = %d, want %d (absolute record ordinal, even indices)", i, row.index, 2*i)
 		}
 	}
 }

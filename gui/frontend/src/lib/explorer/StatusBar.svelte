@@ -29,13 +29,23 @@
   export let counting = false;
   export let matchCount = -1;
   export let matchExact = false;
+  // E4 Task 11: a column PROJECTION is a different thing from the wide-data
+  // cap, and needs its own denominator. Under any Transform.Select the engine
+  // sets totalPaths = len(RowSet.Columns) and columnsTruncated = false
+  // (engine.go's QueryRows), so a 3-of-12 projection would otherwise read
+  // "3 of 3". baseColumnCount is the source's own column count, straight from
+  // $explorer.baseColumns.
+  export let transformActive = false;
+  export let baseColumnCount = 0;
 
   $: rowsText = formatRowCount({
     total, totalExact, rowsLoaded, filterActive, counting, matchCount, matchExact,
   });
-  $: columnsText = columnsTruncated
-    ? `showing ${columnCount.toLocaleString()} of ${totalPaths.toLocaleString()} columns`
-    : `${columnCount.toLocaleString()} column${columnCount === 1 ? "" : "s"}`;
+  $: columnsText = transformActive
+    ? `showing ${columnCount.toLocaleString()} of ${baseColumnCount.toLocaleString()} columns`
+    : columnsTruncated
+      ? `showing ${columnCount.toLocaleString()} of ${totalPaths.toLocaleString()} columns`
+      : `${columnCount.toLocaleString()} column${columnCount === 1 ? "" : "s"}`;
 
   function onCancelClick(): void {
     dispatch("cancelCount");

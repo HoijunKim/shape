@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hoijun-kim/shape/internal/diff"
 	"github.com/hoijun-kim/shape/internal/pipeline"
@@ -25,6 +26,7 @@ type sourceEngine interface {
 	OpenSource(ctx context.Context, req query.OpenRequest) (query.OpenResult, error)
 	QueryRows(ctx context.Context, req query.QueryRequest) (query.RowSet, error)
 	CountMatches(ctx context.Context, req query.CountRequest) (query.CountResult, error)
+	ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error)
 	Cancel(requestID string) error
 	CloseSource(handle string) error
 }
@@ -53,6 +55,16 @@ type App struct {
 	// and the Go memory model guarantees a goroutine's start happens-after
 	// everything that precedes its `go` statement.
 	openGate func()
+
+	// emit, if non-nil, replaces the Wails event emitter. Production code
+	// (NewApp) never sets it; it exists because a.ctx is written only by
+	// startup (see below) and the Go tests never call it, so a progress
+	// emitter that went straight to wr.EventsEmit would emit NOTHING in a
+	// test -- making the throttle it is supposed to prove untestable. A fake
+	// ctx is not an option either: wails' getEvents demands a
+	// frontend.Events value from a package this one cannot import. Same
+	// nil-by-default seam as openGate above.
+	emit func(event string, data map[string]any)
 }
 
 func NewApp() *App { return &App{eng: query.NewEngine()} }
@@ -221,6 +233,88 @@ func (a *App) QueryRows(req query.QueryRequest) (query.RowSet, error) {
 // CountMatches returns the exact match count for a filter (spec §8).
 func (a *App) CountMatches(req query.CountRequest) (query.CountResult, error) {
 	return a.eng.CountMatches(a.reqCtx(), req)
+}
+
+// exportProgressInterval is the minimum wall-clock gap between two
+// shape:progress events for one export. The engine already coarsens its
+// callback to every 4096 rows; this bounds the event rate on a fast source,
+// where 4096 rows can go by in microseconds and a per-callback emit would
+// flood the webview bridge with more messages than it can paint.
+const exportProgressInterval = 200 * time.Millisecond
+
+// ExportQuery writes the current filter+transform result to a file (spec §8).
+//
+// The engine reports progress through a plain Go callback; this is where that
+// becomes a UI event. The first callback always emits (so the dialog updates
+// immediately), and subsequent ones are dropped until exportProgressInterval
+// has passed. "total" is -1 on purpose: the number of MATCHING rows is not
+// known without a second full pass, and inventing a denominator would turn an
+// honest row counter into a fake percentage.
+func (a *App) ExportQuery(req query.ExportRequest) (query.ExportResult, error) {
+	var mu sync.Mutex
+	var last time.Time
+	progress := func(rows int64) {
+		mu.Lock()
+		now := time.Now()
+		if !last.IsZero() && now.Sub(last) < exportProgressInterval {
+			mu.Unlock()
+			return
+		}
+		last = now
+		mu.Unlock()
+		a.emitEvent("shape:progress", map[string]any{
+			"requestId": req.RequestID,
+			"scanned":   rows,
+			"total":     int64(-1),
+		})
+	}
+	return a.eng.ExportQuery(a.reqCtx(), req, progress)
+}
+
+// emitEvent sends a Wails event, or hands it to the test seam when one is
+// installed. Before startup runs, a.ctx is nil and wails' own getEvents would
+// log.Fatalf on it, so a nil ctx is a silent no-op rather than a crash.
+func (a *App) emitEvent(event string, data map[string]any) {
+	if a.emit != nil {
+		a.emit(event, data)
+		return
+	}
+	if a.ctx == nil {
+		return
+	}
+	wr.EventsEmit(a.ctx, event, data)
+}
+
+// exportFileFilters maps an export format to the native save dialog's filter
+// list. An unknown format falls back to "All files", so a new format can never
+// make the picker unusable.
+func exportFileFilters(format string) []wr.FileFilter {
+	switch format {
+	case "json":
+		return []wr.FileFilter{{DisplayName: "JSON (*.json)", Pattern: "*.json"}}
+	case "ndjson":
+		return []wr.FileFilter{{DisplayName: "NDJSON (*.ndjson;*.jsonl)", Pattern: "*.ndjson;*.jsonl"}}
+	case "csv":
+		return []wr.FileFilter{{DisplayName: "CSV (*.csv)", Pattern: "*.csv"}}
+	case "tsv":
+		return []wr.FileFilter{{DisplayName: "TSV (*.tsv)", Pattern: "*.tsv"}}
+	case "parquet":
+		return []wr.FileFilter{{DisplayName: "Parquet (*.parquet)", Pattern: "*.parquet"}}
+	default:
+		return []wr.FileFilter{{DisplayName: "All files (*.*)", Pattern: "*.*"}}
+	}
+}
+
+// SaveFileDialog opens the native save picker for an export and returns the
+// chosen path ("" when cancelled). It writes nothing: ExportQuery does the
+// writing, so a cancelled picker leaves no trace and a chosen path is only a
+// destination until the export actually succeeds.
+func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
+	return wr.SaveFileDialog(a.ctx, wr.SaveDialogOptions{
+		Title:           "Export data",
+		DefaultFilename: defaultName,
+		Filters:         exportFileFilters(format),
+	})
 }
 
 // Cancel interrupts an in-flight request by id (spec §8). An unknown id is a

@@ -529,11 +529,12 @@ func (s *sqlBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 		return 0, fmt.Errorf("query: sqlBackend.Export: nil RowEncoder")
 	}
 	var n int64
+	buf := make([]any, p.Transform.Len()) // reused per record; see RowEncoder
 	scanErr := s.scan(ctx, func(idx int64, rec any) (bool, error) {
 		if !p.Filter.Match(rec) {
 			return false, nil
 		}
-		if err := enc.Encode(p.Transform.Project(rec, idx)); err != nil {
+		if err := enc.Encode(idx, p.Transform.ProjectValues(rec, buf)); err != nil {
 			return true, err
 		}
 		n++

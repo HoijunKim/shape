@@ -571,6 +571,18 @@ func buildColumnModel(disc *columnDiscoverer, prof profile.ProfileResult, source
 			continue // pure interior object with deeper columns: redundant
 		}
 		typ := dk
+		// A column whose values are MOSTLY whole numbers but not entirely --
+		// {10, 11, 12, 10.5} -- is not "drift": profile.IsTypeDrift collapses
+		// KindInt and KindFloat into one "number" bucket on purpose, so
+		// dominantKind returns "int" here. That is fine for display (both
+		// render as numbers) but wrong for anything that has to pick ONE
+		// physical type: the Parquet exporter maps "int" to INT64, and 10.5
+		// then fails ParseInt and is written as NULL -- silent data loss in a
+		// column that looked perfectly ordinary. Promote to "float" whenever
+		// any float share is present; float is the type that can hold both.
+		if typ == string(profile.KindInt) && fp.TypeDist[profile.KindFloat] > 0 {
+			typ = string(profile.KindFloat)
+		}
 		if drift {
 			typ = "mixed"
 		}

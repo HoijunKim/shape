@@ -11,6 +11,8 @@ export function CountMatches(arg1:query.CountRequest):Promise<query.CountResult>
 
 export function DiffFiles(arg1:string,arg2:string):Promise<visual.DiffVisualModel>;
 
+export function ExportQuery(arg1:query.ExportRequest):Promise<query.ExportResult>;
+
 export function OpenFileDialog():Promise<string>;
 
 export function OpenSource(arg1:query.OpenRequest):Promise<query.OpenResult>;
@@ -18,6 +20,8 @@ export function OpenSource(arg1:query.OpenRequest):Promise<query.OpenResult>;
 export function ProfileFile(arg1:string):Promise<visual.VisualModel>;
 
 export function QueryRows(arg1:query.QueryRequest):Promise<query.RowSet>;
+
+export function SaveFileDialog(arg1:string,arg2:string):Promise<string>;
 
 export function SaveText(arg1:string,arg2:string):Promise<string>;
 

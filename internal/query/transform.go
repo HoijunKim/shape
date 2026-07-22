@@ -262,6 +262,72 @@ func (ct *CompiledTransform) Project(rec any, idx int64) Row {
 	return Row{Index: idx, Cells: cells}
 }
 
+// missingValue is the type of the Missing sentinel. It is unexported and
+// zero-size so no value a reader can produce is ever equal to it: nil, false,
+// "" and 0 are all REAL values that must stay distinguishable from "this
+// record does not contain this path at all" (the distinction Project encodes
+// as CellMissing vs CellNull, which ProjectValues has no Cell to carry).
+type missingValue struct{}
+
+// Missing is the value ProjectValues writes for an output column whose path
+// resolves to no value in a record. Compare with IsMissing, never with ==
+// against an arbitrary value's type.
+var Missing any = missingValue{}
+
+// IsMissing reports whether v is the Missing sentinel -- true only for that
+// sentinel, never for a real nil/false/""/0 a record actually held.
+func IsMissing(v any) bool {
+	_, ok := v.(missingValue)
+	return ok
+}
+
+// Len returns how many output columns ct projects, i.e. len(Columns()) without
+// materializing the slice -- the size an Export loop should make its reusable
+// ProjectValues buffer.
+func (ct *CompiledTransform) Len() int {
+	if ct == nil {
+		return 0
+	}
+	return len(ct.cols)
+}
+
+// ProjectValues resolves rec against every output column's compiled segments
+// and returns the RAW resolved values, positionally aligned to Columns() --
+// the export counterpart of Project (which classifies the same values into
+// display Cells).
+//
+// It applies exactly Project's resolution rule -- an empty resolve() set
+// becomes Missing (Project's CellMissing), otherwise the FIRST resolved value
+// is taken, which for a path containing an Elem ("[]") segment is the first
+// array element -- and then stops: no toCell, so container values arrive as
+// the record's own map[string]any/[]any rather than a previewCap-truncated
+// compact-JSON string, and numbers arrive as json.Number rather than a
+// float64 plus a rendered literal. That fidelity is the whole point (see
+// RowEncoder, backend.go).
+//
+// dst is filled and returned when it has room for Len() values (Export passes
+// the same buffer for every record); otherwise a new slice is allocated. The
+// returned slice is only valid until the next call with the same buffer.
+func (ct *CompiledTransform) ProjectValues(rec any, dst []any) []any {
+	if ct == nil {
+		return dst[:0]
+	}
+	n := len(ct.cols)
+	if cap(dst) < n {
+		dst = make([]any, n)
+	}
+	dst = dst[:n]
+	for i, oc := range ct.cols {
+		values := resolve(rec, oc.segs)
+		if len(values) == 0 {
+			dst[i] = Missing
+			continue
+		}
+		dst[i] = values[0]
+	}
+	return dst
+}
+
 // CompiledPlan bundles a compiled Filter, a compiled Transform, and the
 // source ColumnModel they were compiled against into the single unit a
 // Backend needs to run a query: predicate, projection, and column metadata

@@ -18,6 +18,10 @@ export function DiffFiles(arg1, arg2) {
   return window['go']['main']['App']['DiffFiles'](arg1, arg2);
 }
 
+export function ExportQuery(arg1) {
+  return window['go']['main']['App']['ExportQuery'](arg1);
+}
+
 export function OpenFileDialog() {
   return window['go']['main']['App']['OpenFileDialog']();
 }
@@ -32,6 +36,10 @@ export function ProfileFile(arg1) {
 
 export function QueryRows(arg1) {
   return window['go']['main']['App']['QueryRows'](arg1);
+}
+
+export function SaveFileDialog(arg1, arg2) {
+  return window['go']['main']['App']['SaveFileDialog'](arg1, arg2);
 }
 
 export function SaveText(arg1, arg2) {

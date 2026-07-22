@@ -174,3 +174,48 @@ describe("StatusBar", () => {
     });
   });
 });
+
+// --- E4 Task 11: the projection denominator ---------------------------------
+
+describe("StatusBar under a column projection", () => {
+  it("counts a projection against the BASE column count, not totalPaths", () => {
+    // Under any Transform.Select the engine reports totalPaths =
+    // len(RowSet.Columns) and columnsTruncated = false, so deriving the
+    // denominator from totalPaths would render "showing 3 of 3 columns".
+    //
+    // Mutation that must break this: use totalPaths instead of
+    // baseColumnCount in the transformActive branch.
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const bar = new StatusBar({
+      target,
+      props: {
+        tier: "memory", total: 10, totalExact: true, rowsLoaded: true,
+        columnCount: 3, columnsTruncated: false, totalPaths: 3,
+        warnings: [], fetching: false,
+        transformActive: true, baseColumnCount: 12,
+      },
+    });
+    expect(target.textContent).toContain("showing 3 of 12 columns");
+    bar.$destroy();
+    target.remove();
+  });
+
+  it("is unchanged when no projection is applied", () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const bar = new StatusBar({
+      target,
+      props: {
+        tier: "memory", total: 10, totalExact: true, rowsLoaded: true,
+        columnCount: 4, columnsTruncated: false, totalPaths: 4,
+        warnings: [], fetching: false,
+        transformActive: false, baseColumnCount: 4,
+      },
+    });
+    expect(target.textContent).toContain("4 columns");
+    expect(target.textContent).not.toContain("showing");
+    bar.$destroy();
+    target.remove();
+  });
+});

@@ -490,11 +490,12 @@ func (p *parquetBackend) Export(ctx context.Context, plan *CompiledPlan, enc Row
 		return 0, fmt.Errorf("query: parquetBackend.Export: nil RowEncoder")
 	}
 	var n int64
+	buf := make([]any, plan.Transform.Len()) // reused per record; see RowEncoder
 	scanErr := p.scan(ctx, 0, func(idx int64, rec any) (bool, error) {
 		if !plan.Filter.Match(rec) {
 			return false, nil
 		}
-		if err := enc.Encode(plan.Transform.Project(rec, idx)); err != nil {
+		if err := enc.Encode(idx, plan.Transform.ProjectValues(rec, buf)); err != nil {
 			return true, err
 		}
 		n++

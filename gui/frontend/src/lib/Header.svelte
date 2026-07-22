@@ -12,12 +12,17 @@
   export let canExport = false;
   export let theme: "light" | "dark" = "light";
   export let filterOpen = false;
+  // E4: the columns panel's toggle state, owned by App.svelte exactly like
+  // filterOpen (Header and Explorer are siblings there).
+  export let columnsOpen = false;
 
   const dispatch = createEventDispatcher<{
     open: void;
     export: void;
     toggleTheme: void;
     toggleFilter: void;
+    toggleColumns: void;
+    exportData: void;
   }>();
 
   $: fileName = path ? path.replace(/^.*[\\/]/, "") : "";
@@ -45,6 +50,13 @@
       {theme === "dark" ? "☀" : "☾"}
     </button>
     <button
+      on:click={() => dispatch("toggleColumns")}
+      aria-pressed={columnsOpen}
+      title="Choose, reorder and rename columns"
+    >
+      Columns
+    </button>
+    <button
       on:click={() => dispatch("toggleFilter")}
       aria-pressed={filterOpen}
       title="Filter"
@@ -52,8 +64,13 @@
       Filter
     </button>
     <button on:click={() => dispatch("open")}>Open</button>
-    <button class="primary" disabled={!canExport} on:click={() => dispatch("export")}>
-      Export schema
+    <!-- The pre-E4 "Export schema" action, kept working and demoted to a
+         plain button so the primary slot belongs to the DATA export. -->
+    <button disabled={!canExport} on:click={() => dispatch("export")} title="Export the inferred JSON Schema">
+      Schema
+    </button>
+    <button class="primary" disabled={!canExport} on:click={() => dispatch("exportData")}>
+      Export
     </button>
   </div>
 </header>

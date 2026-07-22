@@ -480,8 +480,8 @@ func TestParquetBackend_Export_StreamsAllMatchingProjectedRows(t *testing.T) {
 		t.Fatalf("Export rows = %d, want %d", n, len(wantNames))
 	}
 	for i, row := range enc.rows {
-		if len(row.Cells) != 1 || row.Cells[0].Str != wantNames[i] {
-			t.Fatalf("rows[%d] = %#v, want a single-cell row with name %q", i, row, wantNames[i])
+		if len(row.values) != 1 || row.values[0] != any(wantNames[i]) {
+			t.Fatalf("rows[%d] = %#v, want a single-value row with name %q", i, row, wantNames[i])
 		}
 	}
 }
@@ -717,7 +717,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 	disc, prof := discoverAndProfile(rows)
 	rescanCM := buildColumnModel(disc, prof, nil)
 	rb := newRescanBackend(ndjsonPath, readers.FormatJSON, "", false, rescanCM, prof, 1, 1)
-	rescanHandle := e.register(rb)
+	rescanHandle := e.register(rb, "")
 
 	csvRes, err := e.OpenSource(context.Background(), OpenRequest{Path: csvPath})
 	if err != nil {

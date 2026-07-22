@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
-import type { Filter } from "./types";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery } from "../../../wailsjs/go/main/App";
+import { EventsOn } from "../../../wailsjs/runtime";
+import type { Column, Filter } from "./types";
 
 // C1: a slow open() must not clobber a newer file's state, and it must not
 // leak the backend handle it opened. Mock the Wails bridge so we can control
@@ -15,7 +16,20 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   CloseSource: vi.fn(),
   Cancel: vi.fn(),
   CountMatches: vi.fn(),
+  ExportQuery: vi.fn(),
 }));
+
+// E4: store.ts subscribes to shape:progress per export. The real module reaches
+// for window.runtime, which exists in neither the node nor the jsdom test
+// environment, so the bridge is mocked here the same way App is. `emitProgress`
+// lets a test deliver an event to whatever callback runExport registered.
+let progressHandlers: ((p: any) => void)[] = [];
+vi.mock("../../../wailsjs/runtime", () => ({
+  EventsOn: vi.fn(),
+}));
+function emitProgress(payload: any): void {
+  for (const h of progressHandlers) h(payload);
+}
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -32,8 +46,18 @@ const emptyRowSet = (): any => ({
   scanned: 0, truncated: true, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
 });
 
-const openResult = (handle: string, tier = "memory"): any => ({
-  handle, format: "json", tier, columns: [],
+// wideColumns builds n base columns. 300 is not arbitrary: pageRowsFor clamps
+// to PAGE_ROWS_MAX (200) for every count <= 150, so a narrower fixture cannot
+// tell a stale column count from a fresh one (the same trap Explorer.test.ts
+// documents at its own paging assertions).
+const wideColumns = (n: number): Column[] =>
+  Array.from({ length: n }, (_, i) => ({
+    path: `c${i}`, name: `c${i}`, type: "string",
+    nullable: false, presence: 1, distinct: 1, container: false, index: i,
+  })) as Column[];
+
+const openResult = (handle: string, tier = "memory", columns: Column[] = []): any => ({
+  handle, format: "json", tier, columns,
   profile: { records: 0, skipped: 0, fields: [] },
   sampled: false, rowEstimate: 0, rowExact: true, warnings: [],
   columnsTruncated: false, totalPaths: 0,
@@ -45,6 +69,14 @@ beforeEach(async () => {
   vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
   vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
   vi.mocked(CountMatches).mockReset(); // E3 Task 5: each test sets its own resolution explicitly
+  vi.mocked(ExportQuery).mockReset();
+  progressHandlers = [];
+  vi.mocked(EventsOn).mockReset().mockImplementation((_evt: string, cb: any) => {
+    progressHandlers.push(cb);
+    return () => {
+      progressHandlers = progressHandlers.filter((h) => h !== cb);
+    };
+  });
   await explorer.close();
   vi.mocked(CloseSource).mockClear(); // don't count close()'s own no-op call
 });
@@ -524,5 +556,308 @@ describe("live filtered count via CountMatches (E3 Task 5)", () => {
     const s = get(explorer);
     expect(s.matchCount).toBe(-1);
     expect(s.total).not.toBe(1);
+  });
+});
+
+// --- E4 Task 8: transform threading ------------------------------------------
+
+describe("setTransform", () => {
+  async function openWide(n: number): Promise<Column[]> {
+    const cols = wideColumns(n);
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", cols));
+    await explorer.open("/wide.ndjson");
+    return cols;
+  }
+
+  it("sends the live transform on every QueryRows, not a hardcoded {}", async () => {
+    const cols = await openWide(3);
+    const projected = [{ ...cols[0] }];
+    const transform = { select: [{ path: "c0", as: "c0" }] } as any;
+
+    vi.mocked(QueryRows).mockClear();
+    explorer.setTransform(transform, projected);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const sent = vi.mocked(QueryRows).mock.calls.at(-1)?.[0] as any;
+    expect(sent.transform).toEqual(transform);
+  });
+
+  it("adopts the projected columns SYNCHRONOUSLY, so page arithmetic cannot desync", async () => {
+    const cols = await openWide(300); // pageRowsFor(300) === 100
+    const openLimit = (vi.mocked(QueryRows).mock.calls.at(-1)?.[0] as any).limit;
+    expect(openLimit).toBe(100); // precondition: the wide fixture really does page at 100
+
+    vi.mocked(QueryRows).mockClear();
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [{ ...cols[0] }]);
+
+    // Synchronous, before any fetch resolves.
+    expect(get(explorer).columns).toHaveLength(1);
+    expect(get(explorer).baseColumns).toHaveLength(300); // base set is untouched
+    expect(get(explorer).transformActive).toBe(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const sent = vi.mocked(QueryRows).mock.calls.at(-1)?.[0] as any;
+    // pageRowsFor(1) clamps to PAGE_ROWS_MAX; a stale 300-column count would
+    // still be paging at 100.
+    expect(sent.limit).toBe(200);
+    expect(sent.offset).toBe(0);
+  });
+
+  it("does not disturb the row count: a projection changes columns, not matches", async () => {
+    // The count must already be established when the projection is applied, so
+    // seed it on open()'s own page-0 fetch (page 0 is cached afterwards, and a
+    // second ensurePages for the same range is a no-op).
+    vi.mocked(QueryRows).mockResolvedValue({ ...emptyRowSet(), total: 999, totalExact: true });
+    const cols = await openWide(3);
+    expect(get(explorer).total).toBe(999);
+
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [{ ...cols[0] }]);
+    expect(get(explorer).total).toBe(999);
+  });
+
+  it("bumps resetToken so the table scrolls back to row 0", async () => {
+    const cols = await openWide(3);
+    const before = get(explorer).resetToken;
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [{ ...cols[0] }]);
+    expect(get(explorer).resetToken).toBe(before + 1);
+  });
+
+  it("never lets a pre-transform page land in the new projection's slot", async () => {
+    const cols = await openWide(3);
+    const stale = deferred<any>();
+    vi.mocked(QueryRows).mockReturnValueOnce(stale.promise as any);
+    void explorer.ensurePages(0, 0); // page 0 in flight under the OLD projection
+
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [{ ...cols[0] }]);
+
+    // The old fetch resolves LATE, carrying a distinctive row.
+    stale.resolve({
+      ...emptyRowSet(), total: 1, rows: [{ index: 0, cells: [{ kind: "string", str: "STALE" }] }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const row = explorer.rowAt(0).row as any;
+    expect(row?.cells?.[0]?.str).not.toBe("STALE");
+  });
+
+  it("is reset by open(), so the next file starts unprojected", async () => {
+    const cols = await openWide(3);
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [{ ...cols[0] }]);
+
+    vi.mocked(QueryRows).mockClear();
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h2", "memory", wideColumns(2)));
+    await explorer.open("/other.ndjson");
+
+    const sent = vi.mocked(QueryRows).mock.calls.at(-1)?.[0] as any;
+    expect(sent.transform).toEqual({});
+    expect(get(explorer).transformActive).toBe(false);
+  });
+
+  it("leaves an in-flight count alone (countGen, not gen)", async () => {
+    // On a rescan tier a filter starts a CountMatches; applying a projection
+    // while it is in flight must not strand it at "counting...".
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "rescan", wideColumns(3)));
+    await explorer.open("/big.ndjson");
+    const gate = deferred<any>();
+    vi.mocked(CountMatches).mockReturnValueOnce(gate.promise as any);
+
+    explorer.setFilter({ combinator: "and", conditions: [{ path: "c0", op: "notnull" }] } as any);
+    expect(get(explorer).counting).toBe(true);
+
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [wideColumns(1)[0]]);
+    gate.resolve({ total: 42, exact: true, elapsedMs: 1 });
+    await gate.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(explorer).counting).toBe(false);
+    expect(get(explorer).matchCount).toBe(42);
+  });
+});
+
+// --- E4 Task 8: export lifecycle ---------------------------------------------
+
+describe("runExport", () => {
+  async function openReady(): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/f.ndjson");
+  }
+
+  it("sends the current filter and transform, and records the result", async () => {
+    await openReady();
+    explorer.setFilter({ combinator: "and", conditions: [{ path: "c0", op: "notnull" }] } as any);
+    vi.mocked(ExportQuery).mockResolvedValue({
+      outPath: "/out.csv", rowsOut: 7, bytesOut: 42, elapsedMs: 3, warnings: [],
+    } as any);
+
+    await explorer.runExport("csv", "/out.csv");
+
+    const sent = vi.mocked(ExportQuery).mock.calls.at(-1)?.[0] as any;
+    expect(sent.format).toBe("csv");
+    expect(sent.outPath).toBe("/out.csv");
+    expect(sent.filter.conditions).toHaveLength(1);
+    expect(get(explorer).exportResult?.rowsOut).toBe(7);
+    expect(get(explorer).exporting).toBe(false);
+  });
+
+  it("moves the progress counter only for ITS OWN requestId", async () => {
+    await openReady();
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("ndjson", "/out.ndjson");
+
+    const sentId = (vi.mocked(ExportQuery).mock.calls.at(-1)?.[0] as any).requestId;
+    emitProgress({ requestId: "someone-else", scanned: 999, total: -1 });
+    expect(get(explorer).exportRows).toBe(0);
+
+    emitProgress({ requestId: sentId, scanned: 4096, total: -1 });
+    expect(get(explorer).exportRows).toBe(4096);
+
+    gate.resolve({ outPath: "/out.ndjson", rowsOut: 5000, bytesOut: 1, elapsedMs: 1 });
+    await done;
+    expect(get(explorer).exportRows).toBe(5000);
+  });
+
+  it("unsubscribes from progress once the export settles", async () => {
+    await openReady();
+    vi.mocked(ExportQuery).mockResolvedValue({ outPath: "/a", rowsOut: 1, bytesOut: 1, elapsedMs: 1 } as any);
+    await explorer.runExport("csv", "/a");
+    expect(progressHandlers).toHaveLength(0);
+
+    await explorer.runExport("csv", "/b");
+    expect(progressHandlers).toHaveLength(0);
+  });
+
+  it("records a failure without leaving `exporting` stuck", async () => {
+    await openReady();
+    vi.mocked(ExportQuery).mockRejectedValue(new Error("disk full"));
+    await explorer.runExport("csv", "/out.csv");
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportError).toContain("disk full");
+  });
+});
+
+describe("cancelExport", () => {
+  it("writes the terminal state synchronously and ignores the late settle", async () => {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/f.ndjson");
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("parquet", "/out.parquet");
+
+    const sentId = (vi.mocked(ExportQuery).mock.calls.at(-1)?.[0] as any).requestId;
+    explorer.cancelExport();
+
+    // Synchronous: nulling exportReqId makes runExport's own guards reject its
+    // catch/finally, so nothing else will ever write this state.
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportError).toBe("cancelled");
+    expect(vi.mocked(Cancel).mock.calls.some((c) => c[0] === sentId)).toBe(true);
+
+    // The engine's promise settles LATE; it must change nothing.
+    gate.resolve({ outPath: "/out.parquet", rowsOut: 12, bytesOut: 1, elapsedMs: 1 });
+    await done;
+    expect(get(explorer).exportResult).toBeNull();
+    expect(get(explorer).exportError).toBe("cancelled");
+  });
+
+  it("does nothing when no export is in flight", async () => {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/f.ndjson");
+    vi.mocked(ExportQuery).mockResolvedValue({ outPath: "/a", rowsOut: 3, bytesOut: 1, elapsedMs: 1 } as any);
+    await explorer.runExport("csv", "/a");
+
+    explorer.cancelExport(); // a late Esc on a FINISHED dialog
+    expect(get(explorer).exportError).toBe("");
+    expect(get(explorer).exportResult?.rowsOut).toBe(3);
+  });
+});
+
+// --- E4 branch review regressions -------------------------------------------
+
+describe("an export survives a concurrent filter/transform change (review finding 1)", () => {
+  async function openReady(): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/f.ndjson");
+  }
+
+  it("still lands its result when setTransform runs mid-export", async () => {
+    await openReady();
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("ndjson", "/out.ndjson");
+
+    // A debounced panel edit can fire at ANY moment -- including from a timer
+    // the modal backdrop cannot block.
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [wideColumns(1)[0]]);
+
+    gate.resolve({ outPath: "/out.ndjson", rowsOut: 42, bytesOut: 9, elapsedMs: 1, warnings: [] });
+    await done;
+
+    // Mutation that must break this: restore the `|| myGen !== gen` disjunct in
+    // runExport's two guards -> both terminal writes return early, `exporting`
+    // stays true forever (a permanently stuck modal over an opaque backdrop)
+    // and the successful result is silently discarded.
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportResult?.rowsOut).toBe(42);
+  });
+
+  it("still reports a failure when setFilter runs mid-export", async () => {
+    await openReady();
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("csv", "/out.csv");
+
+    explorer.setFilter({ combinator: "and", conditions: [{ path: "c0", op: "notnull" }] } as any);
+    gate.reject(new Error("disk full"));
+    await done;
+
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportError).toContain("disk full");
+  });
+});
+
+describe("opening or closing a file cancels an export still running (review finding 9)", () => {
+  it("cancels before closing the backend", async () => {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/a.ndjson");
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    void explorer.runExport("ndjson", "/out.ndjson");
+    const sentId = (vi.mocked(ExportQuery).mock.calls.at(-1)?.[0] as any).requestId;
+
+    vi.mocked(Cancel).mockClear();
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h2", "memory", wideColumns(2)));
+    await explorer.open("/b.ndjson");
+
+    // Mutation that must break this: drop the Cancel from open()'s reset ->
+    // the export runs to completion against the file the user left and
+    // renames a result nobody is watching (Close is a no-op on the memory and
+    // rescan tiers, so nothing else stops it).
+    expect(vi.mocked(Cancel).mock.calls.some((c) => c[0] === sentId)).toBe(true);
+    gate.resolve({ outPath: "/out.ndjson", rowsOut: 1, bytesOut: 1, elapsedMs: 1 });
+    await Promise.resolve();
+    expect(get(explorer).exportResult).toBeNull(); // never lands on the NEW file's state
+  });
+});
+
+describe("transformActive keys on the transform actually sent (review finding 7)", () => {
+  it("stays true for a pure rename, which leaves the path list unchanged", async () => {
+    const cols = wideColumns(2);
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", cols));
+    await explorer.open("/f.ndjson");
+
+    // A rename produces a Select while the projected PATHS still equal the
+    // base ones (projectedColumns keeps base paths), so a path comparison
+    // would call this "inactive" and the status bar would go back to
+    // claiming an untruncated column count.
+    explorer.setTransform(
+      { select: [{ path: "c0", as: "Renamed" }, { path: "c1", as: "c1" }] } as any,
+      cols.map((c, i) => ({ ...c, name: i === 0 ? "Renamed" : c.name })),
+    );
+    expect(get(explorer).transformActive).toBe(true);
   });
 });

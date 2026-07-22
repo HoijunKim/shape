@@ -640,15 +640,25 @@ func TestMemBackend_MatchCache_CancelledComputeNotCached(t *testing.T) {
 
 // --- memBackend.Export -------------------------------------------------------
 
-// collectEncoder is a minimal test double for RowEncoder: it just appends
-// every Encode-d Row, in call order, so a test can assert both the count and
-// the exact projected content streamed by Export.
+// collectEncoder is a minimal test double for RowEncoder: it appends every
+// Encode-d row, in call order, so a test can assert both the count and the
+// exact projected values streamed by Export.
+//
+// It COPIES values on the way in, which is not politeness but the interface's
+// contract (backend.go): Export projects every record into ONE reused scratch
+// buffer, so an encoder that retained the slice would end up with every
+// collected row aliasing the last record's values.
 type collectEncoder struct {
-	rows []Row
+	rows []collectedRow
 }
 
-func (c *collectEncoder) Encode(row Row) error {
-	c.rows = append(c.rows, row)
+type collectedRow struct {
+	index  int64
+	values []any
+}
+
+func (c *collectEncoder) Encode(index int64, values []any) error {
+	c.rows = append(c.rows, collectedRow{index: index, values: append([]any(nil), values...)})
 	return nil
 }
 
@@ -672,12 +682,43 @@ func TestMemBackend_Export_StreamsAllMatchingProjectedRows(t *testing.T) {
 		t.Fatalf("collected rows = %d, want %d", len(enc.rows), len(wantNames))
 	}
 	for i, row := range enc.rows {
-		if len(row.Cells) != 1 || row.Cells[0].Str != wantNames[i] {
-			t.Fatalf("rows[%d] = %#v, want a single-cell row with name %q", i, row, wantNames[i])
+		if len(row.values) != 1 || row.values[0] != any(wantNames[i]) {
+			t.Fatalf("rows[%d] = %#v, want a single-value row with name %q", i, row, wantNames[i])
 		}
-		if row.Index != int64(2*i) {
-			t.Fatalf("rows[%d].Index = %d, want %d (absolute record ordinal, even indices)", i, row.Index, 2*i)
+		if row.index != int64(2*i) {
+			t.Fatalf("rows[%d].index = %d, want %d (absolute record ordinal, even indices)", i, row.index, 2*i)
 		}
+	}
+}
+
+// TestMemBackend_Export_ContainerValuesAreNotTruncated is E4's reason for
+// streaming raw values instead of Rows: toCell caps a container's compact-JSON
+// preview at previewCap (200 bytes) and sets HasMore, which is right for a
+// table cell and silently lossy in an exported file.
+//
+// Mutation that must break it: in ProjectValues (transform.go), write
+// toCell(values[0]).Str instead of the raw value -- same signature, same call
+// sites, still compiles -- and the exported value arrives as a 200-byte
+// preview string rather than the whole object.
+func TestMemBackend_Export_ContainerValuesAreNotTruncated(t *testing.T) {
+	rec, meta := bigNestedRecord()
+	mb, cm := newTestMemBackend(t, []map[string]any{rec})
+	p := compilePlan(t, Filter{}, Transform{Select: []ColumnSpec{{Path: "meta", As: "meta"}}}, cm)
+
+	enc := &collectEncoder{}
+	n, err := mb.Export(context.Background(), p, enc)
+	if err != nil {
+		t.Fatalf("Export error = %v, want nil", err)
+	}
+	if n != 1 || len(enc.rows) != 1 {
+		t.Fatalf("Export rows = %d (%d collected), want 1", n, len(enc.rows))
+	}
+	got, ok := enc.rows[0].values[0].(map[string]any)
+	if !ok {
+		t.Fatalf("exported value = %#v (%T), want the raw map[string]any -- a string here means the export went through a Cell preview", enc.rows[0].values[0], enc.rows[0].values[0])
+	}
+	if len(got) != len(meta) {
+		t.Fatalf("exported object has %d keys, want %d (the value was truncated on its way out)", len(got), len(meta))
 	}
 }
 

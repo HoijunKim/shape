@@ -23,6 +23,10 @@
   // Explorer lets Task 9's seed set it from outside and have it propagate
   // back up to Header's aria-pressed.
   let filterOpen = false;
+  // E4: the same ownership rule for the columns panel and the export dialog.
+  // Both are bindable on Explorer so it can close the dialog itself.
+  let columnsOpen = false;
+  let exportOpen = false;
 
   async function load(path: string): Promise<void> {
     if (!path) return;
@@ -81,10 +85,13 @@
     canExport={$explorer.status === "ready"}
     {theme}
     {filterOpen}
+    {columnsOpen}
     on:open={open}
     on:export={exportSchema}
     on:toggleTheme={toggleTheme}
     on:toggleFilter={() => (filterOpen = !filterOpen)}
+    on:toggleColumns={() => (columnsOpen = !columnsOpen)}
+    on:exportData={() => (exportOpen = true)}
   />
 
   <div class="body">
@@ -92,7 +99,7 @@
       <p class="error" role="alert">{exportError}</p>
     {/if}
 
-    <Explorer on:open={open} bind:filterOpen />
+    <Explorer on:open={open} bind:filterOpen bind:columnsOpen bind:exportOpen />
   </div>
 </main>
 

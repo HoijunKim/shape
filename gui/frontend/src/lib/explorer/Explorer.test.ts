@@ -32,7 +32,11 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   CloseSource: vi.fn(),
   Cancel: vi.fn(),
   CountMatches: vi.fn(),
+  // E4: Explorer now mounts ExportDialog, which imports these.
+  ExportQuery: vi.fn(),
+  SaveFileDialog: vi.fn(),
 }));
+vi.mock("../../../wailsjs/runtime", () => ({ EventsOn: vi.fn(() => () => {}) }));
 
 function makeColumn(path: string, over: Record<string, unknown> = {}): any {
   return {
@@ -685,5 +689,129 @@ describe("Explorer", () => {
       );
       setFilterSpy.mockRestore();
     });
+  });
+});
+
+// --- E4 Task 11: a projection must not shrink the filter's vocabulary --------
+
+describe("Explorer under a column projection", () => {
+  let target2: HTMLElement;
+  let cmp2: { $destroy: () => void } | null = null;
+
+  beforeEach(async () => {
+    vi.mocked(OpenSource).mockReset();
+    vi.mocked(QueryRows).mockReset();
+    vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(CountMatches).mockReset();
+    await explorer.close();
+    target2 = document.createElement("div");
+    document.body.appendChild(target2);
+  });
+
+  afterEach(() => {
+    cmp2?.$destroy();
+    cmp2 = null;
+    target2.remove();
+  });
+
+  it("keeps the filter bar and the structure map on the BASE columns", async () => {
+    const cols = [makeColumn("id", { type: "int" }), makeColumn("user.name")];
+    const fields = [makeField("id"), makeField("user.name")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", cols, fields));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(cols));
+    await explorer.open("/two.ndjson");
+    await flush();
+
+    cmp2 = new Explorer({ target: target2, props: { filterOpen: true } });
+    await tick();
+
+    // Project down to one column.
+    explorer.setTransform({ select: [{ path: "id", as: "id" }] } as any, [makeColumn("id", { type: "int" })]);
+    await flush();
+    await tick();
+    expect(get(explorer).columns).toHaveLength(1);
+
+    // The filter bar must still offer BOTH columns: a filter runs on the
+    // record, before projection.
+    //
+    // Mutation that must break this: pass $explorer.columns to FilterBar
+    // instead of $explorer.baseColumns -> "user.name" disappears from the
+    // column <select> and this fails.
+    const addBtn = Array.from(target2.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Add condition"),
+    ) as HTMLButtonElement;
+    addBtn.click();
+    await tick();
+    const colSelect = target2.querySelector('[aria-label="Column"]') as HTMLSelectElement;
+    const offered = Array.from(colSelect.options).map((o) => o.value);
+    expect(offered).toContain("id");
+    expect(offered).toContain("user.name");
+
+    // And the sidebar must still show the hidden column as a real column
+    // (undimmed), because the SOURCE still has it.
+    const dimmed = Array.from(target2.querySelectorAll(".row.dimmed")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(dimmed.some((t) => t.includes("user.name"))).toBe(false);
+  });
+});
+
+// --- E4 branch review, finding 3 --------------------------------------------
+
+describe("transform errors do not outlive the file that caused them", () => {
+  let target3: HTMLElement;
+  let cmp3: { $destroy: () => void } | null = null;
+
+  beforeEach(async () => {
+    vi.mocked(OpenSource).mockReset();
+    vi.mocked(QueryRows).mockReset();
+    vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(CountMatches).mockReset();
+    await explorer.close();
+    target3 = document.createElement("div");
+    document.body.appendChild(target3);
+  });
+
+  afterEach(() => {
+    cmp3?.$destroy();
+    cmp3 = null;
+    target3.remove();
+  });
+
+  it("re-enables Export after opening a different file", async () => {
+    const colsA = [makeColumn("a"), makeColumn("b")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", colsA, [makeField("a"), makeField("b")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(colsA));
+    await explorer.open("/a.ndjson");
+    await flush();
+
+    cmp3 = new Explorer({ target: target3, props: { columnsOpen: true, exportOpen: true } });
+    await tick();
+
+    // Make file A's draft invalid: rename "b" to collide with "a".
+    const renames = Array.from(target3.querySelectorAll(".rename")) as HTMLInputElement[];
+    renames[1].value = "a";
+    renames[1].dispatchEvent(new Event("input"));
+    await tick();
+    const exportBtn = () =>
+      Array.from(target3.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Export") as
+        | HTMLButtonElement
+        | undefined;
+    expect(exportBtn()?.disabled).toBe(true);
+
+    // Open a different file: the panel remounts with a clean draft.
+    const colsB = [makeColumn("x"), makeColumn("y")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h2", colsB, [makeField("x"), makeField("y")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(colsB));
+    await explorer.open("/b.ndjson");
+    await flush();
+    await tick();
+
+    // Mutation that must break this: drop TransformPanel's onMount dispatch ->
+    // Explorer keeps file A's transformErrors and Export stays disabled on a
+    // file whose columns are perfectly valid.
+    expect(exportBtn()?.disabled).toBe(false);
   });
 });
