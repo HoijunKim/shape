@@ -6,7 +6,7 @@
   //
   // Mounted by Explorer.svelte beside FilterBar and rendered only when `open`
   // (Header's Columns button, routed through App.svelte's `columnsOpen`).
-  import { createEventDispatcher, onDestroy } from "svelte";
+  import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
   import {
     buildTransform,
     draftErrors,
@@ -35,11 +35,21 @@
   let prevColumns: Column[] = columns;
   $: if (columns !== prevColumns) {
     prevColumns = columns;
+    // A pending apply belongs to the PREVIOUS file's columns; letting it fire
+    // would project file A's selection onto file B.
+    debouncedApply.cancel();
     draft = draftFromColumns(columns);
     errors = draftErrors(draft);
+    dispatch("errors", errors);
   }
 
-  let errors: string[] = [];
+  let errors: string[] = draftErrors(draft);
+
+  // The parent wires its on:errors handler AFTER construction, so a dispatch
+  // during init reaches nobody -- and the export dialog would keep whatever
+  // disabledReason the PREVIOUS file left it with, disabling Export forever on
+  // a file whose columns are perfectly valid. onMount runs late enough.
+  onMount(() => dispatch("errors", errors));
 
   const debouncedApply = debounce(
     (payload: { draft: DraftColumn[]; cols: Column[] }) =>
@@ -67,6 +77,12 @@
     if (errors.length > 0) {
       // A duplicate or blank name has no correct projection to apply; the
       // engine would reject it too (ExportQuery validates the same rule).
+      //
+      // Cancelling is the load-bearing half: the debounce holds the args from
+      // the last SUCCESSFUL call, and that payload references this very draft
+      // array, whose rows are mutated in place -- so without this, the timer
+      // armed by the last valid keystroke fires with the now-invalid draft.
+      debouncedApply.cancel();
       return;
     }
     debouncedApply.call({ draft, cols: columns });
@@ -82,9 +98,14 @@
     apply();
   }
 
-  function move(i: number, delta: -1 | 1): void {
+  async function move(i: number, delta: -1 | 1, btn?: HTMLElement): Promise<void> {
     draft = moveColumn(draft, i, delta);
     apply();
+    // The keyed {#each} MOVES the same DOM node to its new index, where the
+    // aria-disabled state may flip; without restoring focus the user loses it
+    // to <body> after one press and cannot keep reordering by keyboard.
+    await tick();
+    btn?.focus();
   }
 
   function reset(): void {
@@ -128,19 +149,25 @@
             aria-label="Name for {row.path}"
             on:input={(e) => rename(i, e.currentTarget.value)}
           />
+          <!-- aria-disabled, not disabled: a genuinely disabled element
+               cannot be focused, so the end-of-list buttons would swallow the
+               focus restore above. moveColumn already no-ops an out-of-range
+               move, so pressing them is harmless. -->
           <button
             type="button"
             class="move"
             aria-label="Move {row.path} up"
-            disabled={i === 0}
-            on:click={() => move(i, -1)}>↑</button
+            aria-disabled={i === 0}
+            class:inert={i === 0}
+            on:click={(e) => move(i, -1, e.currentTarget)}>↑</button
           >
           <button
             type="button"
             class="move"
             aria-label="Move {row.path} down"
-            disabled={i === draft.length - 1}
-            on:click={() => move(i, 1)}>↓</button
+            aria-disabled={i === draft.length - 1}
+            class:inert={i === draft.length - 1}
+            on:click={(e) => move(i, 1, e.currentTarget)}>↓</button
           >
         </div>
       {/each}
@@ -242,5 +269,11 @@
     padding: 2px var(--space-2);
     font-size: 12px;
     line-height: 1.2;
+  }
+
+  /* Mirrors the browser's disabled look without taking focusability away. */
+  .move.inert {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>

@@ -148,16 +148,33 @@ describe("projectedColumns", () => {
     expect(projectedColumns(draftFromColumns(COLS), COLS)).toBe(COLS);
   });
 
-  it("mirrors the engine: path AND name become the output name, index renumbered", () => {
+  it("renames only `name`, KEEPING the base path, and renumbers index", () => {
     const draft = draftFromColumns(COLS);
     draft[0].visible = false;
     draft[1].name = "Who";
     const got = projectedColumns(draft, COLS);
     expect(got).toHaveLength(2);
-    expect(got[0].path).toBe("Who");
+    // The header renders `name`, so the rename is visible...
     expect(got[0].name).toBe("Who");
+    // ...but `path` stays in BASE space, which is what the sidebar, the focus
+    // lookup and the header-click event all join on. Overwriting it here
+    // silently disconnects a renamed column from all of them.
+    expect(got[0].path).toBe("user.name");
     expect(got[0].index).toBe(0);
     expect(got[0].type).toBe("string"); // metadata inherited from the base column
     expect(got[1].index).toBe(1);
+  });
+});
+
+describe("whitespace-only renames (E4 branch review, finding 7)", () => {
+  it("treats a trailing-space rename as identity", () => {
+    // Otherwise buildTransform emits a Select whose `as` trims back to the
+    // original name: the engine then reports the projection as un-truncated
+    // while the store, comparing paths, sees no change -- and a wide file's
+    // "showing 200 of 5,000 columns" silently becomes "200 columns".
+    const draft = draftFromColumns(COLS);
+    draft[0].name = "id ";
+    expect(isIdentityDraft(draft, COLS)).toBe(true);
+    expect(buildTransform(draft, COLS)).toEqual({});
   });
 });

@@ -6,7 +6,7 @@
   // + Cancel), done (rows/bytes/path + any fidelity warnings), failed (the
   // error + Retry). A cancelled export lands in `failed` saying "cancelled" --
   // never a silent close, which would look identical to a finished export.
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, tick } from "svelte";
   import { explorer } from "./store";
   import { SaveFileDialog } from "../../../wailsjs/go/main/App";
 
@@ -29,6 +29,66 @@
   let format = "ndjson";
   let outPath = "";
   let pickError = "";
+  let dialogEl: HTMLDivElement | undefined;
+  let restoreTo: HTMLElement | null = null;
+
+  // Focus management for a real modal: move focus in on open, keep Tab inside
+  // while the backdrop covers everything, and give it back on close. Without
+  // it, Tab walks the sidebar/table/panels behind an opaque backdrop and the
+  // keyboard user has no way back to the dialog.
+  $: if (open) void enter();
+
+  async function enter(): Promise<void> {
+    if (restoreTo) return; // already entered; do not re-steal focus on re-render
+    restoreTo = (document.activeElement as HTMLElement) ?? null;
+    await tick();
+    dialogEl?.focus();
+  }
+
+  function focusables(): HTMLElement[] {
+    if (!dialogEl) return [];
+    return Array.from(
+      dialogEl.querySelectorAll<HTMLElement>("button:not([disabled]), select, input, [href], [tabindex]:not([tabindex='-1'])"),
+    );
+  }
+
+  function onTab(e: KeyboardEvent): void {
+    const items = focusables();
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    // Focus escaped the dialog (or never entered it) -- pull it back.
+    if (!active || !dialogEl?.contains(active)) {
+      e.preventDefault();
+      first.focus();
+      return;
+    }
+    if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    }
+  }
+
+  // An advisory, deliberately NOT a block: naming an export whatever you like
+  // is allowed. But writing Parquet bytes into a file called .csv is almost
+  // always a slip, and shape's own reader dispatches on the extension, so the
+  // result would not even re-open here.
+  const EXT_ALIASES: Record<string, string[]> = {
+    json: ["json"],
+    ndjson: ["ndjson", "jsonl"],
+    csv: ["csv"],
+    tsv: ["tsv"],
+    parquet: ["parquet"],
+  };
+  // Exclude BOTH separators: on Windows a dotted directory (C:\dir.v2\out)
+  // would otherwise be read as an extension of "v2\out".
+  $: pathExt = (outPath.match(/\.([^.\\/]+)$/)?.[1] ?? "").toLowerCase();
+  $: extMismatch =
+    outPath !== "" && pathExt !== "" && !(EXT_ALIASES[format] ?? [format]).includes(pathExt);
 
   $: sourceName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "data";
   $: stem = sourceName.replace(/\.[^.]+$/, "") || "data";
@@ -71,14 +131,19 @@
       return;
     }
     explorer.dismissExport();
+    const back = restoreTo;
+    restoreTo = null;
     dispatch("close");
+    back?.focus();
   }
 
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.stopPropagation();
       close();
+      return;
     }
+    if (e.key === "Tab") onTab(e);
   }
 
   function formatBytes(n: number): string {
@@ -99,7 +164,14 @@
 {#if open}
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <div class="backdrop" on:click={close}></div>
-  <div class="dialog" role="dialog" aria-modal="true" aria-label="Export data">
+  <div
+    class="dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Export data"
+    tabindex="-1"
+    bind:this={dialogEl}
+  >
     <div class="head">
       <span class="title">Export</span>
       <button type="button" class="close" aria-label="Close" on:click={close}>✕</button>
@@ -158,6 +230,12 @@
         column{$explorer.columns.length === 1 ? "" : "s"}.
       </p>
 
+      {#if extMismatch}
+        <p class="note">
+          This file ends in <span class="mono">.{pathExt}</span> but will be written as
+          {format.toUpperCase()}.
+        </p>
+      {/if}
       {#if pickError}<p class="state failed" role="alert">{pickError}</p>{/if}
       {#if disabledReason}<p class="state failed" role="alert">{disabledReason}</p>{/if}
 
@@ -239,6 +317,12 @@
   .field input:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+
+  .note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--status-warn, var(--text-muted));
   }
 
   .summary,

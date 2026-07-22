@@ -185,3 +185,66 @@ describe("ExportDialog", () => {
     expect(target.querySelector(".dialog")).toBeNull();
   });
 });
+
+// --- E4 branch review regressions -------------------------------------------
+
+describe("ExportDialog review fixes", () => {
+  it("warns when the chosen file's extension does not match the format, without blocking", async () => {
+    mount();
+    const input = target.querySelector('[aria-label="Output file"]') as HTMLInputElement;
+    input.value = "C:/out.csv";
+    input.dispatchEvent(new Event("input"));
+    const select = target.querySelector('[aria-label="Export format"]') as HTMLSelectElement;
+    select.value = "parquet";
+    select.dispatchEvent(new Event("change"));
+    await tick();
+
+    // Advisory only: an odd name stays allowed, but writing Parquet bytes into
+    // a .csv is almost always a slip -- and shape's own reader dispatches on
+    // the extension, so the result would not re-open here.
+    expect(target.querySelector(".note")?.textContent).toContain("csv");
+    expect(button("Export")!.disabled).toBe(false);
+  });
+
+  it("accepts .jsonl for ndjson (the picker offers it)", async () => {
+    mount();
+    const input = target.querySelector('[aria-label="Output file"]') as HTMLInputElement;
+    input.value = "C:/out.jsonl";
+    input.dispatchEvent(new Event("input"));
+    await tick();
+    expect(target.querySelector(".note")).toBeNull();
+  });
+
+  it("moves focus into the dialog and hands it back on close", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    mount();
+    await tick();
+    await tick();
+    const dlg = target.querySelector(".dialog") as HTMLElement;
+    expect(dlg.contains(document.activeElement) || document.activeElement === dlg).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await tick();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("pulls escaped focus back into the dialog on Tab", async () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    mount();
+    await tick();
+    outside.focus(); // focus escaped behind the backdrop
+
+    const ev = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+    window.dispatchEvent(ev);
+    await tick();
+    const dlg = target.querySelector(".dialog") as HTMLElement;
+    expect(dlg.contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+});

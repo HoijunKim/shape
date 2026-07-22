@@ -46,7 +46,9 @@ export function moveColumn(draft: DraftColumn[], index: number, delta: -1 | 1): 
  *  visible, in the original order, under its original name. */
 export function isIdentityDraft(draft: DraftColumn[], cols: Column[]): boolean {
   if (draft.length !== cols.length) return false;
-  return draft.every((d, i) => d.visible && d.path === cols[i].path && d.name === cols[i].path);
+  return draft.every(
+    (d, i) => d.visible && d.path === cols[i].path && d.name.trim() === cols[i].path,
+  );
 }
 
 /** Everything that would make an export fail or lose data, checked in the UI's
@@ -105,9 +107,17 @@ export function buildTransform(draft: DraftColumn[], cols: Column[]): Transform 
  *  store must adopt SYNCHRONOUSLY with the transform, because page arithmetic
  *  (pageRowsFor) reads the column count before the first projected page lands.
  *
- *  It mirrors the engine's own Select output (transform.go's compileSelect):
- *  Path AND Name both become the output name, Index is renumbered, and the
- *  remaining metadata is inherited from the base column. */
+ *  `name` becomes the output name (that is what the table header renders) and
+ *  `index` is renumbered, but `path` deliberately KEEPS the base column's
+ *  path, unlike the engine's own Select output which overwrites both. The
+ *  whole app joins the table to the sidebar by path -- DataTable's focus
+ *  lookup, its `focused` class, the header click it dispatches, Explorer's
+ *  columnPaths set, the store's focusPath seed -- all of which live in BASE
+ *  path space. Renaming a column into the projected space would silently
+ *  disconnect every one of those, so a renamed column could no longer be
+ *  focused from the sidebar or highlight when clicked. Base paths are unique,
+ *  so the keyed {#each} stays well-formed, and cells are matched positionally
+ *  anyway. The wire Transform comes from buildTransform, not from here. */
 export function projectedColumns(draft: DraftColumn[], cols: Column[]): Column[] {
   if (isIdentityDraft(draft, cols)) return cols;
   const byPath = new Map(cols.map((c) => [c.path, c]));
@@ -116,6 +126,6 @@ export function projectedColumns(draft: DraftColumn[], cols: Column[]): Column[]
     .map((d, i) => {
       const base = byPath.get(d.path);
       const name = d.name.trim();
-      return { ...(base ?? ({} as Column)), path: name, name, index: i } as Column;
+      return { ...(base ?? ({} as Column)), name, index: i } as Column;
     });
 }

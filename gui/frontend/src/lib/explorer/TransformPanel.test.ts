@@ -166,3 +166,64 @@ describe("TransformPanel", () => {
     expect(rows()).toHaveLength(0);
   });
 });
+
+// --- E4 branch review regressions -------------------------------------------
+
+describe("TransformPanel error signalling (review findings 3 and 4)", () => {
+  // NOTE: the onMount dispatch cannot be observed through this file's harness.
+  // `new TransformPanel({ target })` mounts synchronously inside the
+  // constructor, so a $on attached afterwards is already too late -- whereas
+  // Svelte's compiler emits `new Child(props); child.$on(...); mount_component(...)`
+  // for a real parent, which is exactly why onMount reaches it there. The
+  // behaviour is covered end-to-end in Explorer.test.ts ("a transform error
+  // from one file does not disable Export for the next").
+
+  it("re-announces when the source columns change", async () => {
+    mount();
+    const seen: string[][] = [];
+    panel!.$on("errors", (e) => seen.push(e.detail as string[]));
+
+    panel!.$set({ columns: [COLS[0]] });
+    await tick();
+    expect(seen.at(-1)).toEqual([]);
+  });
+
+  it("does not apply an invalid draft via a debounce armed by the last valid edit", async () => {
+    mount();
+    const input = renameInput(1);
+
+    // A valid rename arms the 250ms timer...
+    input.value = "Full Name";
+    input.dispatchEvent(new Event("input"));
+    await tick();
+    vi.advanceTimersByTime(120);
+
+    // ...then a keystroke makes the draft invalid before it fires. The
+    // debounce holds a reference to this very draft array, whose rows are
+    // mutated in place, so the armed timer would apply the INVALID state.
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    await tick();
+    vi.advanceTimersByTime(500);
+
+    // Mutation that must break this: remove debouncedApply.cancel() from the
+    // errors branch of apply() -> setTransform fires with a blank output name,
+    // which the engine then resolves to the column's LEAF, silently colliding
+    // with any sibling that shares it.
+    expect(setTransform).not.toHaveBeenCalled();
+  });
+
+  it("keeps focus on a reorder button after the row moves", async () => {
+    mount();
+    const btn = rows()[1].querySelector('[aria-label="Move user.name up"]') as HTMLButtonElement;
+    btn.focus();
+    btn.click();
+    await tick();
+    await tick();
+
+    // Mutation that must break this: use `disabled` instead of `aria-disabled`
+    // (a disabled element cannot hold focus) or drop the post-move refocus ->
+    // focus falls to <body> and keyboard reordering stops after one press.
+    expect(document.activeElement).toBe(btn);
+  });
+});

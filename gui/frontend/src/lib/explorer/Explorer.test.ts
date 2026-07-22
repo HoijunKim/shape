@@ -756,3 +756,62 @@ describe("Explorer under a column projection", () => {
     expect(dimmed.some((t) => t.includes("user.name"))).toBe(false);
   });
 });
+
+// --- E4 branch review, finding 3 --------------------------------------------
+
+describe("transform errors do not outlive the file that caused them", () => {
+  let target3: HTMLElement;
+  let cmp3: { $destroy: () => void } | null = null;
+
+  beforeEach(async () => {
+    vi.mocked(OpenSource).mockReset();
+    vi.mocked(QueryRows).mockReset();
+    vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(CountMatches).mockReset();
+    await explorer.close();
+    target3 = document.createElement("div");
+    document.body.appendChild(target3);
+  });
+
+  afterEach(() => {
+    cmp3?.$destroy();
+    cmp3 = null;
+    target3.remove();
+  });
+
+  it("re-enables Export after opening a different file", async () => {
+    const colsA = [makeColumn("a"), makeColumn("b")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", colsA, [makeField("a"), makeField("b")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(colsA));
+    await explorer.open("/a.ndjson");
+    await flush();
+
+    cmp3 = new Explorer({ target: target3, props: { columnsOpen: true, exportOpen: true } });
+    await tick();
+
+    // Make file A's draft invalid: rename "b" to collide with "a".
+    const renames = Array.from(target3.querySelectorAll(".rename")) as HTMLInputElement[];
+    renames[1].value = "a";
+    renames[1].dispatchEvent(new Event("input"));
+    await tick();
+    const exportBtn = () =>
+      Array.from(target3.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Export") as
+        | HTMLButtonElement
+        | undefined;
+    expect(exportBtn()?.disabled).toBe(true);
+
+    // Open a different file: the panel remounts with a clean draft.
+    const colsB = [makeColumn("x"), makeColumn("y")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h2", colsB, [makeField("x"), makeField("y")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(colsB));
+    await explorer.open("/b.ndjson");
+    await flush();
+    await tick();
+
+    // Mutation that must break this: drop TransformPanel's onMount dispatch ->
+    // Explorer keeps file A's transformErrors and Export stays disabled on a
+    // file whose columns are perfectly valid.
+    expect(exportBtn()?.disabled).toBe(false);
+  });
+});
