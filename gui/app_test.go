@@ -494,3 +494,116 @@ func TestAppRowSetMarshals(t *testing.T) {
 		t.Errorf("marshaled RowSet missing %q:\n%s", "cells", s)
 	}
 }
+
+// --- ExportQuery binding (E4 Task 6) -----------------------------------------
+
+// exportSpyEngine records the ExportQuery request it was handed and drives the
+// progress callback a scripted number of times, so the throttle can be
+// exercised without a real export.
+type exportSpyEngine struct {
+	*query.Engine
+	gotReq    query.ExportRequest
+	ticks     int
+	res       query.ExportResult
+	err       error
+	afterTick func()
+}
+
+func (e *exportSpyEngine) ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error) {
+	e.gotReq = req
+	for i := 0; i < e.ticks; i++ {
+		progress(int64(i + 1))
+		if e.afterTick != nil {
+			e.afterTick()
+		}
+	}
+	return e.res, e.err
+}
+
+func TestAppExportQueryForwardsTheRequest(t *testing.T) {
+	spy := &exportSpyEngine{
+		Engine: query.NewEngine(),
+		res:    query.ExportResult{OutPath: "C:/out.csv", RowsOut: 7, BytesOut: 42},
+	}
+	a := &App{eng: spy}
+	req := query.ExportRequest{
+		RequestID: "x1", Handle: "h1", Format: "csv", OutPath: "C:/out.csv",
+		Filter: query.Filter{Combinator: query.And},
+	}
+
+	got, err := a.ExportQuery(req)
+	if err != nil {
+		t.Fatalf("ExportQuery error = %v, want nil", err)
+	}
+	if got.RowsOut != 7 || got.OutPath != "C:/out.csv" {
+		t.Fatalf("ExportQuery result = %+v, want the engine's result verbatim", got)
+	}
+	if spy.gotReq.Handle != req.Handle || spy.gotReq.Format != req.Format || spy.gotReq.OutPath != req.OutPath || spy.gotReq.RequestID != req.RequestID {
+		t.Fatalf("engine received %+v, want the request forwarded unchanged (%+v)", spy.gotReq, req)
+	}
+}
+
+// TestAppExportQueryThrottlesProgressEvents pins the throttle that keeps a fast
+// export from flooding the webview bridge: 100 engine callbacks inside one
+// interval must collapse to a single event.
+//
+// Mutation that must break it: drop the exportProgressInterval check in
+// ExportQuery's progress closure -- all 100 callbacks emit and this fails.
+func TestAppExportQueryThrottlesProgressEvents(t *testing.T) {
+	spy := &exportSpyEngine{Engine: query.NewEngine(), ticks: 100}
+	var events []map[string]any
+	a := &App{eng: spy, emit: func(_ string, data map[string]any) {
+		events = append(events, data)
+	}}
+
+	if _, err := a.ExportQuery(query.ExportRequest{RequestID: "x1", Handle: "h1", Format: "ndjson", OutPath: "C:/out.ndjson"}); err != nil {
+		t.Fatalf("ExportQuery error = %v, want nil", err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("no progress event emitted; the first callback must always emit so the dialog updates immediately")
+	}
+	if len(events) > 2 {
+		t.Fatalf("%d progress events for 100 callbacks in one interval, want at most 2", len(events))
+	}
+	ev := events[0]
+	if ev["requestId"] != "x1" {
+		t.Fatalf("event requestId = %v, want x1 (the store drops events whose id does not match)", ev["requestId"])
+	}
+	if ev["total"] != int64(-1) {
+		t.Fatalf("event total = %v, want -1: the matching-row total is genuinely unknown and must not be faked", ev["total"])
+	}
+	if _, ok := ev["scanned"]; !ok {
+		t.Fatalf("event = %v, want a scanned row count", ev)
+	}
+}
+
+// TestAppEmitEventIsANoOpBeforeStartup covers the crash this seam exists to
+// avoid: wails' getEvents calls log.Fatalf on a nil ctx (pkg/runtime), and
+// a.ctx stays nil until startup runs.
+func TestAppEmitEventIsANoOpBeforeStartup(t *testing.T) {
+	a := &App{eng: query.NewEngine()}
+	if a.ctx != nil || a.emit != nil {
+		t.Fatalf("precondition: both the ctx and the test seam must be nil here")
+	}
+	a.emitEvent("shape:progress", map[string]any{"scanned": int64(1)}) // must not die
+}
+
+func TestAppExportFileFilters(t *testing.T) {
+	cases := map[string]string{
+		"json":    "*.json",
+		"ndjson":  "*.ndjson;*.jsonl",
+		"csv":     "*.csv",
+		"tsv":     "*.tsv",
+		"parquet": "*.parquet",
+		"wat":     "*.*", // unknown format still yields a usable picker
+	}
+	for format, wantPattern := range cases {
+		got := exportFileFilters(format)
+		if len(got) != 1 || got[0].Pattern != wantPattern {
+			t.Fatalf("exportFileFilters(%q) = %+v, want a single %q filter", format, got, wantPattern)
+		}
+		if got[0].DisplayName == "" {
+			t.Fatalf("exportFileFilters(%q) has no DisplayName", format)
+		}
+	}
+}
