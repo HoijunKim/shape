@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -459,14 +460,59 @@ func TestExportQuery_ReportsProgress(t *testing.T) {
 	if last > res.RowsOut {
 		t.Fatalf("progress reported %d rows, more than the %d actually written", last, res.RowsOut)
 	}
-	before := atomic.LoadInt64(&calls)
-	if before != atomic.LoadInt64(&calls) {
-		t.Fatalf("progress fired after ExportQuery returned")
-	}
 }
 
+// TestExportQuery_ProgressNeverFiresAfterReturn pins the other half of the
+// progress contract. The obvious spelling of this -- comparing a counter to
+// itself after the call -- is `x != x`, which is false for every execution and
+// proves nothing; this one records whether the callback ran after ExportQuery
+// returned and reports it from t.Cleanup, which is legal from any goroutine.
+//
+// Mutation that must break it: emit progress asynchronously (`go
+// p.progress(p.n)` in progressEncoder.Encode) -- a stray late callback then
+// sets late=true.
+func TestExportQuery_ProgressNeverFiresAfterReturn(t *testing.T) {
+	eng, handle, _ := openExportFixture(t, manyRecords(5000), 0)
+	out := filepath.Join(t.TempDir(), "out.ndjson")
+
+	var mu sync.Mutex
+	returned := false
+	late := false
+	if _, err := eng.ExportQuery(context.Background(), ExportRequest{
+		Handle: handle, Format: string(ExportNDJSON), OutPath: out,
+	}, func(int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if returned {
+			late = true
+		}
+	}); err != nil {
+		t.Fatalf("ExportQuery error = %v, want nil", err)
+	}
+	mu.Lock()
+	returned = true
+	mu.Unlock()
+
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if late {
+			t.Errorf("progress fired after ExportQuery returned")
+		}
+	})
+}
+
+// TestExportQuery_ParquetWarningsReachTheResult pins the ExportResult.Warnings
+// plumbing, which nothing else covers (the encoder's own test calls
+// enc.Warnings() directly).
+//
+// The fixture matters: an int + STRING mix is type DRIFT, so the column is
+// typed "mixed" -> a UTF8 parquet column -> everything coerces -> no warnings
+// at all, and an assertion guarded by `if len(warnings) > 0` would be vacuous.
+// Two integers where one overflows int64 keeps the column typed "int" and
+// makes exactly one value uncoercible.
 func TestExportQuery_ParquetWarningsReachTheResult(t *testing.T) {
-	maps := []map[string]any{{"n": json.Number("1")}, {"n": "not a number"}}
+	maps := []map[string]any{{"n": json.Number("1")}, {"n": json.Number("99999999999999999999999")}}
 	eng, handle, _ := openExportFixture(t, maps, 0)
 	out := filepath.Join(t.TempDir(), "out.parquet")
 
@@ -482,12 +528,132 @@ func TestExportQuery_ParquetWarningsReachTheResult(t *testing.T) {
 	if res.RowsOut != 2 {
 		t.Fatalf("RowsOut = %d, want 2", res.RowsOut)
 	}
-	// The column is typed by the profiler; if it came out as a string column
-	// nothing was coerced away and there is nothing to warn about -- in that
-	// case the assertion below is vacuous, so only demand a warning when the
-	// engine actually typed it numerically.
-	if len(res.Warnings) > 0 && !strings.Contains(res.Warnings[0], "n") {
+	// Guard the premise: if a future profiler change stopped typing this
+	// column "int", the warning path would go unexercised and this test would
+	// hollow out silently.
+	cols := plannedColumnsFor(t, eng, handle, Transform{Select: []ColumnSpec{{Path: "n", As: "n"}}})
+	if cols[0].Type != "int" {
+		t.Fatalf("column type = %q, want int -- the fixture no longer exercises a coercion failure", cols[0].Type)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly one (a value written as null must be reported)", res.Warnings)
+	}
+	if !strings.Contains(res.Warnings[0], "n") {
 		t.Fatalf("warning = %q, want it to name the affected column", res.Warnings[0])
+	}
+}
+
+// plannedColumnsFor returns the output columns a transform would produce for a
+// handle, so a test can assert on the engine's own typing rather than on a
+// hand-built Column.
+func plannedColumnsFor(t *testing.T, eng *Engine, handle string, tr Transform) []Column {
+	t.Helper()
+	backend, err := eng.lookup(handle)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	plan, err := CompilePlan(Filter{}, tr, backend.Columns())
+	if err != nil {
+		t.Fatalf("CompilePlan: %v", err)
+	}
+	return plan.Transform.Columns()
+}
+
+// TestExportQuery_RefusesToOverwriteTheSourceThroughAnAlias covers what
+// string comparison cannot: a destination that reaches the SAME file by a
+// different path. filepath.Abs only Cleans and prepends the cwd -- it never
+// resolves a symlinked or junctioned parent, an 8.3 short name or a subst'd
+// drive -- so a path-equality guard lets the export replace the very file it
+// is streaming out of.
+//
+// The alias here is a symlinked PARENT DIRECTORY, which stays textually
+// distinct after Abs. Creating one needs privileges Windows does not grant by
+// default, so the test skips rather than failing there; on POSIX (and on CI)
+// it runs for real.
+func TestExportQuery_RefusesToOverwriteTheSourceThroughAnAlias(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("cannot create a directory symlink here (%v) -- this guard is exercised on POSIX/CI", err)
+	}
+
+	src := filepath.Join(realDir, "src.ndjson")
+	if err := os.WriteFile(src, []byte(`{"a":1}
+{"a":2}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := NewEngine()
+	res, err := eng.OpenSource(context.Background(), OpenRequest{Path: src})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+	defer eng.CloseSource(res.Handle)
+
+	// Same file, textually different path -- filepath.Abs cannot tell.
+	alias := filepath.Join(linkDir, "src.ndjson")
+	if _, err := eng.ExportQuery(context.Background(), ExportRequest{
+		Handle: res.Handle, Format: string(ExportNDJSON), OutPath: alias,
+	}, nil); err == nil {
+		t.Fatalf("ExportQuery onto a symlinked alias of the source returned nil, want a refusal")
+	}
+	after, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("re-reading the source: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("the source file was overwritten by an export aimed at an alias of itself")
+	}
+}
+
+// TestExportQuery_IntColumnWithFractionsIsTypedFloat is the engine-level guard
+// for the silent-data-loss path a hand-built Column set cannot reach: a column
+// of mostly-whole numbers that also holds a fraction must not be typed "int",
+// or the parquet exporter nulls every fractional value.
+func TestExportQuery_IntColumnWithFractionsIsTypedFloat(t *testing.T) {
+	maps := []map[string]any{
+		{"price": json.Number("10")},
+		{"price": json.Number("11")},
+		{"price": json.Number("12")},
+		{"price": json.Number("10.5")},
+	}
+	eng, handle, _ := openExportFixture(t, maps, 0)
+	out := filepath.Join(t.TempDir(), "out.parquet")
+
+	cols := plannedColumnsFor(t, eng, handle, Transform{})
+	if cols[0].Type != "float" {
+		t.Fatalf("column type = %q, want float -- an int-typed column would write 10.5 as NULL", cols[0].Type)
+	}
+
+	res, err := eng.ExportQuery(context.Background(), ExportRequest{
+		Handle: handle, Format: string(ExportParquet), OutPath: out,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ExportQuery error = %v, want nil", err)
+	}
+	if len(res.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want none: every value is representable in a DOUBLE column", res.Warnings)
+	}
+
+	_, rows := readBackParquet(t, out, 10)
+	if len(rows) != 4 {
+		t.Fatalf("re-opened %d rows, want 4", len(rows))
+	}
+	last := rows[3].Cells[0]
+	if last.Kind == CellNull {
+		t.Fatalf("10.5 read back as NULL -- the fractional value was lost")
+	}
+	if last.Num != 10.5 {
+		t.Fatalf("last value = %#v, want 10.5", last)
 	}
 }
 

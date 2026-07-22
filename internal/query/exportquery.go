@@ -120,11 +120,11 @@ func parseExportFormat(s string) (ExportFormat, error) {
 // validateExportTarget rejects an unusable destination BEFORE anything is
 // created: an empty path, or the source file this handle is reading from.
 //
-// The self-export guard is not pedantry. The export streams FROM that file
-// while writing, the rename would destroy the data mid-read and orphan the
-// backend's open handle, and on Windows the rename fails outright ("Access is
-// denied.") because the source is still open -- a confusing half-failure
-// instead of a clear refusal.
+// The self-export guard is not pedantry: the export streams FROM that file
+// while writing, and the rename would replace the data mid-read. Note that
+// the OS does NOT save us here -- the memory tier holds no file handle at all
+// (the records are already decoded in RAM) and the rescan tier only opens one
+// per scan, so the rename usually succeeds and the source is simply gone.
 func validateExportTarget(outPath, sourcePath string) error {
 	if strings.TrimSpace(outPath) == "" {
 		return fmt.Errorf("query: ExportQuery: an output path is required")
@@ -138,10 +138,21 @@ func validateExportTarget(outPath, sourcePath string) error {
 	return nil
 }
 
-// sameFilePath reports whether two paths denote the same file, comparing
-// cleaned absolute paths (case-insensitively on Windows, whose file system is
-// case-preserving but case-insensitive).
+// sameFilePath reports whether two paths denote the same file.
+//
+// It asks the FILE SYSTEM first (os.SameFile: device+inode on POSIX, volume
+// serial + file index on Windows), because path comparison alone is
+// bypassable in ways users hit by accident: a symlinked or junctioned parent
+// directory, a Windows 8.3 short name, a subst'd drive, a hard link. Getting
+// this wrong destroys the source file, so string equality is only the
+// fallback for when either path cannot be stat'ed (the destination usually
+// does not exist yet, which is exactly the normal case).
 func sameFilePath(a, b string) bool {
+	if fa, errA := os.Stat(a); errA == nil {
+		if fb, errB := os.Stat(b); errB == nil {
+			return os.SameFile(fa, fb)
+		}
+	}
 	absA, err := filepath.Abs(a)
 	if err != nil {
 		absA = filepath.Clean(a)
@@ -254,6 +265,18 @@ func writeExport(
 	if err := tmp.Close(); err != nil {
 		return rows, 0, nil, fmt.Errorf("query: ExportQuery: closing the temporary file: %w", err)
 	}
+	// os.CreateTemp always creates with 0600, and the rename carries that
+	// inode's mode onto the destination -- so re-exporting over a
+	// world-readable file would silently narrow it to owner-only. Match the
+	// destination's existing mode when there is one, else the 0644 the rest
+	// of this app writes with. Best-effort: a mode we cannot set is not a
+	// reason to fail an otherwise good export (and on Windows Chmod only
+	// toggles the read-only bit, so this is a no-op there).
+	perm := os.FileMode(0o644)
+	if fi, statErr := os.Stat(outPath); statErr == nil && fi.Mode().IsRegular() {
+		perm = fi.Mode().Perm()
+	}
+	_ = os.Chmod(tmpName, perm)
 	if err := os.Rename(tmpName, outPath); err != nil {
 		// Both POSIX rename and Windows MoveFileEx replace an existing
 		// destination -- but Windows refuses when the destination is held
