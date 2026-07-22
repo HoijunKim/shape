@@ -223,6 +223,7 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 	// makes the divergence explicit and intentional instead of accidental.
 	const exportCancelCheckStride = 1024
 	var n int64
+	buf := make([]any, p.Transform.Len()) // reused per record; see RowEncoder
 	for i, rec := range m.records {
 		if i%exportCancelCheckStride == 0 {
 			if err := ctx.Err(); err != nil {
@@ -232,7 +233,7 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 		if !p.Filter.Match(rec) {
 			continue
 		}
-		if err := enc.Encode(p.Transform.Project(rec, int64(i))); err != nil {
+		if err := enc.Encode(int64(i), p.Transform.ProjectValues(rec, buf)); err != nil {
 			return n, err
 		}
 		n++

@@ -68,13 +68,29 @@ type RowSet struct {
 
 // RowEncoder is the minimal streaming sink Backend.Export writes projected
 // rows into, one at a time, in match order. It is intentionally the smallest
-// possible interface: format-specific encoders (JSON/NDJSON/CSV/Parquet
-// writers, Task 8/E4) implement Encode however they need to (buffering,
-// flushing, converting Row's Cells to their wire representation); Export
-// itself only needs to hand rows over one by one and react to a write
+// possible interface: format-specific encoders (the JSON/NDJSON/CSV/TSV/
+// Parquet writers in export.go) implement Encode however they need to
+// (buffering, flushing, converting values to their wire representation);
+// Export itself only needs to hand rows over one by one and react to a write
 // failure by aborting the scan.
+//
+// values carries the RAW projected values -- exactly what the record held,
+// via CompiledTransform.ProjectValues -- positionally aligned to
+// CompiledTransform.Columns(), with the Missing sentinel (transform.go) for a
+// path the record does not contain. It is deliberately NOT a Row: Row's Cells
+// are display values, and toCell truncates object/array values to a
+// previewCap-byte preview (columns.go) and renders numbers as text. That is
+// right for a table cell and silently lossy in an exported file, so export
+// bypasses the Cell layer entirely (spec §4's "export is never capped",
+// applied to value fidelity as well as row count).
+//
+// index is the absolute record ordinal, the same value Row.Index carries.
+//
+// values is a SCRATCH BUFFER reused for every record of an export: an encoder
+// that keeps a reference past the call (a batching writer, say) must copy
+// what it needs, or every retained row will end up aliasing the last one.
 type RowEncoder interface {
-	Encode(row Row) error
+	Encode(index int64, values []any) error
 }
 
 // Backend evaluates a CompiledPlan over one opened source (spec §4). The

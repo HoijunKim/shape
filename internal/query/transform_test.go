@@ -509,3 +509,119 @@ func TestIsIdentityTransform(t *testing.T) {
 		})
 	}
 }
+
+// --- ProjectValues (E4 Task 1) -----------------------------------------------
+
+// bigNestedRecord returns a record whose "meta" value is a nested object far
+// larger than previewCap (200 bytes of compact JSON), so a projection that
+// went through toCell would truncate it.
+func bigNestedRecord() (rec map[string]any, meta map[string]any) {
+	meta = map[string]any{}
+	for i := 0; i < 40; i++ {
+		meta[fmt.Sprintf("k%02d", i)] = "vvvvvvvvvv"
+	}
+	return map[string]any{"id": json.Number("1"), "meta": meta}, meta
+}
+
+func TestProjectValues_ContainerIsRawAndUntruncated(t *testing.T) {
+	rec, meta := bigNestedRecord()
+	disc, prof := discoverAndProfile([]map[string]any{rec})
+	cm := buildColumnModel(disc, prof, nil)
+
+	ct, err := CompileTransform(Transform{Select: []ColumnSpec{{Path: "meta", As: "meta"}}}, cm)
+	if err != nil {
+		t.Fatalf("CompileTransform error = %v, want nil", err)
+	}
+	vals := ct.ProjectValues(rec, nil)
+	if len(vals) != 1 {
+		t.Fatalf("len(ProjectValues) = %d, want 1", len(vals))
+	}
+	got, ok := vals[0].(map[string]any)
+	if !ok {
+		t.Fatalf("ProjectValues[0] = %#v (%T), want the raw map[string]any", vals[0], vals[0])
+	}
+	if !reflect.DeepEqual(got, meta) {
+		t.Fatalf("ProjectValues[0] lost data: got %d keys, want %d (a truncated preview string or a re-encoded copy is a bug)", len(got), len(meta))
+	}
+	// The whole point: the compact JSON of this value is longer than the
+	// preview cap a Cell would have applied.
+	if b, _ := json.Marshal(meta); len(b) <= previewCap {
+		t.Fatalf("fixture is not big enough to discriminate: %d bytes <= previewCap %d", len(b), previewCap)
+	}
+}
+
+func TestProjectValues_NumbersKeepTheirExactLiteralType(t *testing.T) {
+	rec := map[string]any{"n": json.Number("123456789012345678901")}
+	disc, prof := discoverAndProfile([]map[string]any{rec})
+	cm := buildColumnModel(disc, prof, nil)
+
+	ct, err := CompileTransform(Transform{}, cm)
+	if err != nil {
+		t.Fatalf("CompileTransform error = %v, want nil", err)
+	}
+	vals := ct.ProjectValues(rec, nil)
+	num, ok := vals[0].(json.Number)
+	if !ok {
+		t.Fatalf("ProjectValues[0] = %#v (%T), want json.Number (a float64 loses precision, a string loses the type)", vals[0], vals[0])
+	}
+	if string(num) != "123456789012345678901" {
+		t.Fatalf("ProjectValues[0] = %q, want the exact source literal", string(num))
+	}
+}
+
+func TestProjectValues_MissingIsDistinctFromNull(t *testing.T) {
+	records := []map[string]any{
+		{"a": json.Number("1"), "b": "x"},
+		{"a": nil}, // b absent, a explicitly null
+	}
+	disc, prof := discoverAndProfile(records)
+	cm := buildColumnModel(disc, prof, nil)
+
+	ct, err := CompileTransform(Transform{}, cm)
+	if err != nil {
+		t.Fatalf("CompileTransform error = %v, want nil", err)
+	}
+	vals := ct.ProjectValues(records[1], nil)
+	byPath := map[string]any{}
+	for i, c := range ct.Columns() {
+		byPath[c.Path] = vals[i]
+	}
+	if IsMissing(byPath["a"]) {
+		t.Fatalf("a (present, JSON null) reported as Missing; missing and null must stay distinguishable")
+	}
+	if byPath["a"] != nil {
+		t.Fatalf("a = %#v, want untyped nil for an explicit JSON null", byPath["a"])
+	}
+	if !IsMissing(byPath["b"]) {
+		t.Fatalf("b = %#v, want Missing (the path resolves to no value at all)", byPath["b"])
+	}
+	if IsMissing(nil) || IsMissing("") || IsMissing(false) || IsMissing(json.Number("0")) {
+		t.Fatalf("IsMissing must be true only for the Missing sentinel, never for a real value")
+	}
+}
+
+func TestProjectValues_ReusesTheSuppliedBuffer(t *testing.T) {
+	records := []map[string]any{{"a": json.Number("1"), "b": "x"}}
+	disc, prof := discoverAndProfile(records)
+	cm := buildColumnModel(disc, prof, nil)
+
+	ct, err := CompileTransform(Transform{}, cm)
+	if err != nil {
+		t.Fatalf("CompileTransform error = %v, want nil", err)
+	}
+	if ct.Len() != len(cm.Columns) {
+		t.Fatalf("Len() = %d, want %d", ct.Len(), len(cm.Columns))
+	}
+	buf := make([]any, ct.Len())
+	got := ct.ProjectValues(records[0], buf)
+	if len(got) != len(buf) {
+		t.Fatalf("len(ProjectValues) = %d, want %d", len(got), len(buf))
+	}
+	if &got[0] != &buf[0] {
+		t.Fatalf("ProjectValues allocated a new slice; it must fill the supplied buffer (Export calls it once per record)")
+	}
+	// A too-small buffer must still work, by allocating.
+	if grown := ct.ProjectValues(records[0], nil); len(grown) != ct.Len() {
+		t.Fatalf("ProjectValues(nil buffer) len = %d, want %d", len(grown), ct.Len())
+	}
+}
