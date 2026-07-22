@@ -775,3 +775,89 @@ describe("cancelExport", () => {
     expect(get(explorer).exportResult?.rowsOut).toBe(3);
   });
 });
+
+// --- E4 branch review regressions -------------------------------------------
+
+describe("an export survives a concurrent filter/transform change (review finding 1)", () => {
+  async function openReady(): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/f.ndjson");
+  }
+
+  it("still lands its result when setTransform runs mid-export", async () => {
+    await openReady();
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("ndjson", "/out.ndjson");
+
+    // A debounced panel edit can fire at ANY moment -- including from a timer
+    // the modal backdrop cannot block.
+    explorer.setTransform({ select: [{ path: "c0", as: "c0" }] } as any, [wideColumns(1)[0]]);
+
+    gate.resolve({ outPath: "/out.ndjson", rowsOut: 42, bytesOut: 9, elapsedMs: 1, warnings: [] });
+    await done;
+
+    // Mutation that must break this: restore the `|| myGen !== gen` disjunct in
+    // runExport's two guards -> both terminal writes return early, `exporting`
+    // stays true forever (a permanently stuck modal over an opaque backdrop)
+    // and the successful result is silently discarded.
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportResult?.rowsOut).toBe(42);
+  });
+
+  it("still reports a failure when setFilter runs mid-export", async () => {
+    await openReady();
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    const done = explorer.runExport("csv", "/out.csv");
+
+    explorer.setFilter({ combinator: "and", conditions: [{ path: "c0", op: "notnull" }] } as any);
+    gate.reject(new Error("disk full"));
+    await done;
+
+    expect(get(explorer).exporting).toBe(false);
+    expect(get(explorer).exportError).toContain("disk full");
+  });
+});
+
+describe("opening or closing a file cancels an export still running (review finding 9)", () => {
+  it("cancels before closing the backend", async () => {
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", wideColumns(2)));
+    await explorer.open("/a.ndjson");
+    const gate = deferred<any>();
+    vi.mocked(ExportQuery).mockReturnValueOnce(gate.promise as any);
+    void explorer.runExport("ndjson", "/out.ndjson");
+    const sentId = (vi.mocked(ExportQuery).mock.calls.at(-1)?.[0] as any).requestId;
+
+    vi.mocked(Cancel).mockClear();
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h2", "memory", wideColumns(2)));
+    await explorer.open("/b.ndjson");
+
+    // Mutation that must break this: drop the Cancel from open()'s reset ->
+    // the export runs to completion against the file the user left and
+    // renames a result nobody is watching (Close is a no-op on the memory and
+    // rescan tiers, so nothing else stops it).
+    expect(vi.mocked(Cancel).mock.calls.some((c) => c[0] === sentId)).toBe(true);
+    gate.resolve({ outPath: "/out.ndjson", rowsOut: 1, bytesOut: 1, elapsedMs: 1 });
+    await Promise.resolve();
+    expect(get(explorer).exportResult).toBeNull(); // never lands on the NEW file's state
+  });
+});
+
+describe("transformActive keys on the transform actually sent (review finding 7)", () => {
+  it("stays true for a pure rename, which leaves the path list unchanged", async () => {
+    const cols = wideColumns(2);
+    vi.mocked(OpenSource).mockResolvedValue(openResult("h1", "memory", cols));
+    await explorer.open("/f.ndjson");
+
+    // A rename produces a Select while the projected PATHS still equal the
+    // base ones (projectedColumns keeps base paths), so a path comparison
+    // would call this "inactive" and the status bar would go back to
+    // claiming an untruncated column count.
+    explorer.setTransform(
+      { select: [{ path: "c0", as: "Renamed" }, { path: "c1", as: "c1" }] } as any,
+      cols.map((c, i) => ({ ...c, name: i === 0 ? "Renamed" : c.name })),
+    );
+    expect(get(explorer).transformActive).toBe(true);
+  });
+});

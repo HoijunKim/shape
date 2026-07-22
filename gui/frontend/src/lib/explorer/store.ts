@@ -143,6 +143,11 @@ function createExplorer() {
 
   async function open(path: string): Promise<void> {
     const prev = get({ subscribe });
+    // Cancel BEFORE closing: cancelling ends the scan before its rename, while
+    // closing first would kill the backend mid-export (sqlite/parquet) or --
+    // worse, on the memory and rescan tiers, where Close is a no-op -- let it
+    // run to completion and rename a file the user is no longer watching.
+    if (exportReqId) { void Cancel(exportReqId).catch(() => {}); exportReqId = null; }
     if (prev.handle) { void CloseSource(prev.handle).catch(() => {}); }
     const myGen = ++gen; // C1: a fetch (here, this whole open()) from an older gen must not touch state
     cache.clear();
@@ -327,6 +332,7 @@ function createExplorer() {
 
   async function close(): Promise<void> {
     const s = get({ subscribe });
+    if (exportReqId) { void Cancel(exportReqId).catch(() => {}); exportReqId = null; }
     if (s.handle) { await CloseSource(s.handle).catch(() => {}); }
     gen++;
     cache.clear(); inflight.clear();
@@ -449,9 +455,14 @@ function createExplorer() {
    *  why that is safe even with a count in flight. */
   function setTransform(t: Transform, projected: Column[]): void {
     currentTransform = t;
-    const s0 = get({ subscribe });
-    const active = projected.length !== s0.baseColumns.length
-      || projected.some((c, i) => c.path !== s0.baseColumns[i]?.path);
+    // Key "active" on the artifact actually sent -- exactly the condition the
+    // engine branches on for its truncation reporting (a non-empty Select).
+    // Comparing projected-vs-base paths instead would call a pure rename, or a
+    // reorder-plus-rename that restores the original path list, "inactive"
+    // while a Select was still sent, and the status bar would quietly go back
+    // to claiming an untruncated column count.
+    const t2 = t as unknown as { select?: unknown[]; drop?: unknown[] };
+    const active = (t2.select?.length ?? 0) > 0 || (t2.drop?.length ?? 0) > 0;
     ++gen;
     for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
     inflight.clear();
@@ -481,7 +492,6 @@ function createExplorer() {
     if (!s0.handle) return;
     const reqId = `x${++seq}`;
     exportReqId = reqId;
-    const myGen = gen;
     update((s) => ({ ...s, exporting: true, exportRows: 0, exportError: "", exportResult: null }));
 
     const off = EventsOn("shape:progress", (p: any) => {
@@ -496,14 +506,29 @@ function createExplorer() {
         filter: currentFilter, transform: currentTransform,
         format, outPath,
       } as any);
-      if (exportReqId !== reqId || myGen !== gen) return; // cancelled, or the file changed under us
+      // Guarded on exportReqId ALONE, deliberately not on `gen`. An export
+      // owns a complete snapshot of its request (filter/transform were
+      // serialised above), so a filter or projection change while it runs
+      // does not invalidate the file it just wrote -- and a debounced
+      // setFilter/setTransform can fire at any moment, including from a timer
+      // the modal backdrop cannot block. Guarding on `gen` made both terminal
+      // writes return early, leaving `exporting` true forever with no writer
+      // left: a permanently stuck modal over an opaque backdrop, its result
+      // silently discarded. exportReqId is the complete supersession key --
+      // open(), close(), cancelExport() and a newer runExport all reset it.
+      if (exportReqId !== reqId) return;
       update((s) => ({ ...s, exporting: false, exportResult: res, exportRows: res.rowsOut }));
     } catch (e) {
-      if (exportReqId !== reqId || myGen !== gen) return;
+      if (exportReqId !== reqId) return;
       update((s) => ({ ...s, exporting: false, exportError: String(e) }));
     } finally {
       off();
-      if (exportReqId === reqId) exportReqId = null;
+      if (exportReqId === reqId) {
+        exportReqId = null;
+        // Belt-and-braces: whatever path we left by, this export is over, so
+        // the spinner must not outlive it.
+        update((s) => (s.exporting ? { ...s, exporting: false } : s));
+      }
     }
   }
 
