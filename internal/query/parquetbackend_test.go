@@ -717,7 +717,7 @@ func TestCrossBackend_AllFourBackendsMatch(t *testing.T) {
 	disc, prof := discoverAndProfile(rows)
 	rescanCM := buildColumnModel(disc, prof, nil)
 	rb := newRescanBackend(ndjsonPath, readers.FormatJSON, "", false, rescanCM, prof, 1, 1)
-	rescanHandle := e.register(rb)
+	rescanHandle := e.register(rb, "")
 
 	csvRes, err := e.OpenSource(context.Background(), OpenRequest{Path: csvPath})
 	if err != nil {

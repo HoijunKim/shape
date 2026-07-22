@@ -22,7 +22,10 @@ import (
 type Engine struct {
 	mu       sync.Mutex
 	backends map[string]Backend
-	next     uint64
+	// sources maps a handle to the path its Backend was opened from, so
+	// ExportQuery can refuse to overwrite the file being read (see register).
+	sources map[string]string
+	next    uint64
 
 	// inflight maps a caller-supplied RequestID to the CancelFunc of the ctx
 	// that request is running under, so Cancel(requestID) can interrupt a
@@ -44,6 +47,7 @@ type inflightEntry struct {
 func NewEngine() *Engine {
 	return &Engine{
 		backends: make(map[string]Backend),
+		sources:  make(map[string]string),
 		inflight: make(map[string]inflightEntry),
 	}
 }
@@ -337,7 +341,7 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 		warnings = append(warnings, "large file — streaming mode (totals are estimates)")
 	}
 
-	handle := e.register(backend)
+	handle := e.register(backend, req.Path)
 	res := OpenResult{
 		Handle:      handle,
 		Format:      string(format),
@@ -421,6 +425,7 @@ func (e *Engine) CloseSource(handle string) error {
 	backend, ok := e.backends[handle]
 	if ok {
 		delete(e.backends, handle)
+		delete(e.sources, handle)
 	}
 	e.mu.Unlock()
 	if !ok {
@@ -429,14 +434,30 @@ func (e *Engine) CloseSource(handle string) error {
 	return backend.Close()
 }
 
-// register assigns backend a new, unique handle string and stores it.
-func (e *Engine) register(backend Backend) string {
+// register assigns backend a new, unique handle string and stores it, together
+// with the file path it was opened from (path may be "" for a backend that has
+// none, e.g. a test double). The path is kept only so ExportQuery can refuse to
+// write onto the very file the handle is reading from -- it is deliberately not
+// part of the Backend interface, which has no business knowing about export
+// destinations.
+func (e *Engine) register(backend Backend, path string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.next++
 	handle := fmt.Sprintf("h%d", e.next)
 	e.backends[handle] = backend
+	if path != "" {
+		e.sources[handle] = path
+	}
 	return handle
+}
+
+// sourcePath returns the file path handle was opened from, or "" if the handle
+// is unknown or was registered without one.
+func (e *Engine) sourcePath(handle string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.sources[handle]
 }
 
 // lookup returns the Backend registered under handle, or an error if no such
