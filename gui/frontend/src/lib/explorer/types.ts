@@ -18,6 +18,10 @@ export type Filter = query.Filter;
 export type Condition = query.Condition;
 export type Value = query.Value;
 export type CountRequest = query.CountRequest;
+export type Transform = query.Transform;
+export type ColumnSpec = query.ColumnSpec;
+export type ExportRequest = query.ExportRequest;
+export type ExportResult = query.ExportResult;
 
 export const CellKind = query.CellKind;
 export type CellKind = query.CellKind;

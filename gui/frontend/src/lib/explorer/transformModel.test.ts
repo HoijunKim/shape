@@ -1,0 +1,163 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildTransform,
+  draftErrors,
+  draftFromColumns,
+  isIdentityDraft,
+  moveColumn,
+  projectedColumns,
+  type DraftColumn,
+} from "./transformModel";
+import type { Column } from "./types";
+
+function col(path: string, type = "string", index = 0): Column {
+  return {
+    path,
+    name: path.split(".").pop() ?? path, // engine names base columns by their LEAF
+    type,
+    nullable: false,
+    presence: 1,
+    distinct: 1,
+    container: false,
+    index,
+  } as Column;
+}
+
+const COLS: Column[] = [col("id", "int", 0), col("user.name", "string", 1), col("meta.name", "string", 2)];
+
+describe("draftFromColumns", () => {
+  it("seeds every column visible, in source order, named by its FULL path", () => {
+    const draft = draftFromColumns(COLS);
+    expect(draft).toEqual([
+      { path: "id", name: "id", visible: true },
+      { path: "user.name", name: "user.name", visible: true },
+      { path: "meta.name", name: "meta.name", visible: true },
+    ]);
+  });
+});
+
+describe("buildTransform", () => {
+  it("returns the EMPTY transform for an untouched draft", () => {
+    const t = buildTransform(draftFromColumns(COLS), COLS) as any;
+    expect(t.select).toBeUndefined();
+    expect(t.drop).toBeUndefined();
+    expect(Object.keys(t)).toHaveLength(0);
+  });
+
+  it("emits an explicit `as` on EVERY spec, never a bare path", () => {
+    // Without `as`, the engine names a selected column by its leaf, so
+    // user.name and meta.name would BOTH become "name" and collide.
+    const draft = draftFromColumns(COLS).filter((d) => d.path !== "id");
+    const t = buildTransform(draft, COLS) as any;
+    expect(t.select).toEqual([
+      { path: "user.name", as: "user.name" },
+      { path: "meta.name", as: "meta.name" },
+    ]);
+    for (const spec of t.select) {
+      expect(spec.as).toBeTruthy();
+    }
+  });
+
+  it("drops hidden columns", () => {
+    const draft = draftFromColumns(COLS);
+    draft[1].visible = false;
+    const t = buildTransform(draft, COLS) as any;
+    expect(t.select.map((s: any) => s.path)).toEqual(["id", "meta.name"]);
+  });
+
+  it("keeps the draft's order", () => {
+    const draft = moveColumn(draftFromColumns(COLS), 2, -1);
+    const t = buildTransform(draft, COLS) as any;
+    expect(t.select.map((s: any) => s.path)).toEqual(["id", "meta.name", "user.name"]);
+  });
+
+  it("carries a rename through as `as`, trimmed", () => {
+    const draft = draftFromColumns(COLS);
+    draft[1].name = "  Full Name  ";
+    const t = buildTransform(draft, COLS) as any;
+    expect(t.select[1]).toEqual({ path: "user.name", as: "Full Name" });
+  });
+});
+
+describe("moveColumn", () => {
+  it("swaps neighbours without mutating the input", () => {
+    const draft = draftFromColumns(COLS);
+    const before = JSON.stringify(draft);
+    const moved = moveColumn(draft, 1, -1);
+    expect(moved.map((d) => d.path)).toEqual(["user.name", "id", "meta.name"]);
+    expect(JSON.stringify(draft)).toBe(before);
+  });
+
+  it("is a no-op at either boundary", () => {
+    const draft = draftFromColumns(COLS);
+    expect(moveColumn(draft, 0, -1)).toBe(draft);
+    expect(moveColumn(draft, draft.length - 1, 1)).toBe(draft);
+  });
+});
+
+describe("isIdentityDraft", () => {
+  it("is true only for untouched drafts", () => {
+    expect(isIdentityDraft(draftFromColumns(COLS), COLS)).toBe(true);
+
+    const hidden = draftFromColumns(COLS);
+    hidden[0].visible = false;
+    expect(isIdentityDraft(hidden, COLS)).toBe(false);
+
+    const renamed = draftFromColumns(COLS);
+    renamed[0].name = "ID";
+    expect(isIdentityDraft(renamed, COLS)).toBe(false);
+
+    expect(isIdentityDraft(moveColumn(draftFromColumns(COLS), 0, 1), COLS)).toBe(false);
+  });
+});
+
+describe("draftErrors", () => {
+  it("returns [] for a valid draft", () => {
+    expect(draftErrors(draftFromColumns(COLS))).toEqual([]);
+  });
+
+  it("flags a duplicate output name", () => {
+    const draft = draftFromColumns(COLS);
+    draft[1].name = "name";
+    draft[2].name = "name";
+    const errors = draftErrors(draft);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("name");
+  });
+
+  it("ignores duplicates among HIDDEN columns", () => {
+    const draft = draftFromColumns(COLS);
+    draft[1].name = "name";
+    draft[2].name = "name";
+    draft[2].visible = false;
+    expect(draftErrors(draft)).toEqual([]);
+  });
+
+  it("flags a blank name and an all-hidden draft", () => {
+    const blank = draftFromColumns(COLS);
+    blank[0].name = "   ";
+    expect(draftErrors(blank).join(" ")).toContain("name");
+
+    const none = draftFromColumns(COLS).map((d) => ({ ...d, visible: false }));
+    expect(draftErrors(none).join(" ")).toContain("at least one");
+  });
+});
+
+describe("projectedColumns", () => {
+  it("returns the base columns unchanged for an identity draft", () => {
+    expect(projectedColumns(draftFromColumns(COLS), COLS)).toBe(COLS);
+  });
+
+  it("mirrors the engine: path AND name become the output name, index renumbered", () => {
+    const draft = draftFromColumns(COLS);
+    draft[0].visible = false;
+    draft[1].name = "Who";
+    const got = projectedColumns(draft, COLS);
+    expect(got).toHaveLength(2);
+    expect(got[0].path).toBe("Who");
+    expect(got[0].name).toBe("Who");
+    expect(got[0].index).toBe(0);
+    expect(got[0].type).toBe("string"); // metadata inherited from the base column
+    expect(got[1].index).toBe(1);
+  });
+});
