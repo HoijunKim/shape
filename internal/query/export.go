@@ -8,10 +8,12 @@ package query
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 )
 
 // ExportFormat is the wire format ExportQuery writes. The names are the
@@ -209,4 +211,118 @@ func needsJSONRewrite(v any) bool {
 	default:
 		return false
 	}
+}
+
+// delimitedEncoder writes projected rows as CSV (comma) or TSV (tab) via
+// encoding/csv, which owns all quoting/escaping decisions -- a value
+// containing the delimiter, a quote, or a newline round-trips through
+// csv.Reader unchanged.
+//
+// Every value becomes exactly one string (see delimitedCell). CSV cannot
+// express structure, so containers are compact JSON in a single field, and
+// missing / null / "" all collapse to an empty field -- a documented,
+// unavoidable loss of the missing-vs-null distinction that JSON, NDJSON and
+// Parquet all keep.
+type delimitedEncoder struct {
+	w      *csv.Writer
+	cols   []Column
+	header bool     // header row already written
+	rec    []string // reused per row
+}
+
+// newDelimitedEncoder returns an encoder writing to w with the given field
+// delimiter (',' for CSV, '\t' for TSV; encoding/csv rejects '"', '\r' and
+// '\n', which is why only those two are offered).
+func newDelimitedEncoder(w io.Writer, cols []Column, comma rune) *delimitedEncoder {
+	cw := csv.NewWriter(w)
+	cw.Comma = comma
+	return &delimitedEncoder{w: cw, cols: cols, rec: make([]string, len(cols))}
+}
+
+// writeHeader writes the header row exactly once. It is called lazily -- from
+// the first Encode AND from Close -- so a zero-row export still describes its
+// own shape (a header-only file) instead of being empty, while a many-row
+// export never repeats it. Header cells are Column.Path, matching the JSON
+// encoders' key choice (base columns are leaf-NAMED, so only the path is
+// unique).
+func (e *delimitedEncoder) writeHeader() error {
+	if e.header {
+		return nil
+	}
+	e.header = true
+	for i, c := range e.cols {
+		e.rec[i] = c.Path
+	}
+	return e.w.Write(e.rec)
+}
+
+// Encode writes one row. values is the caller's reused scratch buffer (see
+// RowEncoder); csv.Writer copies what it needs, so nothing is retained.
+func (e *delimitedEncoder) Encode(_ int64, values []any) error {
+	if err := e.writeHeader(); err != nil {
+		return err
+	}
+	for i := range e.cols {
+		if i >= len(values) {
+			e.rec[i] = ""
+			continue
+		}
+		e.rec[i] = delimitedCell(values[i])
+	}
+	return e.w.Write(e.rec)
+}
+
+// Close writes a header for an otherwise empty export, then flushes.
+func (e *delimitedEncoder) Close() error {
+	if err := e.writeHeader(); err != nil {
+		return err
+	}
+	e.w.Flush()
+	return e.w.Error()
+}
+
+// delimitedCell renders one projected value as a single CSV/TSV field.
+//
+// Numbers keep their EXACT source literal (json.Number is already the text the
+// file contained, so 64-bit ints and long decimals do not degrade through
+// float64). A float64 -- which only reaches here from Parquet/SQLite -- is
+// formatted with 'g'/-1, the shortest representation that round-trips, and
+// non-finite values render as Go's NaN/+Inf/-Inf text rather than an empty
+// field, so they stay visible rather than looking like missing data.
+func delimitedCell(v any) string {
+	if IsMissing(v) || v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(t, 'g', -1, 64)
+	case []byte:
+		return string(t)
+	default:
+		return compactExportJSON(v)
+	}
+}
+
+// compactExportJSON renders v as single-line JSON for a text field, with HTML
+// escaping OFF (a data export must not turn "<x>" into "<x>") and
+// non-finite floats nulled (jsonSafe), so it can never fail mid-row. It is the
+// container representation for CSV/TSV cells and for Parquet's JSON-in-a-
+// string columns.
+func compactExportJSON(v any) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(jsonSafe(v)); err != nil {
+		return ""
+	}
+	return string(bytes.TrimRight(buf.Bytes(), "\n"))
 }
