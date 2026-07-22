@@ -1,6 +1,7 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
-import type { Column, CountResult, FieldDTO, Filter, OpenResult, RowSet } from "./types";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery } from "../../../wailsjs/go/main/App";
+import { EventsOn } from "../../../wailsjs/runtime";
+import type { Column, CountResult, ExportResult, FieldDTO, Filter, OpenResult, RowSet, Transform } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
@@ -14,6 +15,15 @@ function matchAllFilter(): Filter {
   return { combinator: "and" } as unknown as Filter;
 }
 
+/** The generated `Transform` is a TS *class* (it carries convertValues() for
+ *  the Go->JS response path), so a plain object literal can never structurally
+ *  satisfy it -- same idiom as matchAllFilter above and filterModel's
+ *  buildFilter. The EMPTY object is the identity transform: no select, no drop,
+ *  byte-identical to the request the explorer sent before E4. */
+function identityTransform(): Transform {
+  return {} as unknown as Transform;
+}
+
 export interface ExplorerState {
   status: Status;
   error: string;
@@ -23,6 +33,12 @@ export interface ExplorerState {
   format: string;
   warnings: string[];
   fields: FieldDTO[];
+  // baseColumns is the source's own column set, fixed for as long as the file
+  // is open. `columns` is what the TABLE shows, which a transform reprojects.
+  // The split matters: a filter runs on the RECORD, before projection, so the
+  // filter bar and the structure map must keep addressing base paths even
+  // while the table shows renamed/hidden ones.
+  baseColumns: Column[];
   columns: Column[];
   columnsTruncated: boolean;
   totalPaths: number;
@@ -43,6 +59,16 @@ export interface ExplorerState {
   counting: boolean;
   matchCount: number;    // -1 = unknown; the exact filtered count once CountMatches lands
   matchExact: boolean;
+  // E4: true when a non-identity transform is applied (columns hidden,
+  // reordered or renamed), so the status bar can say "showing M of N columns".
+  transformActive: boolean;
+  // E4 export lifecycle. exportRows is the running count from the engine's
+  // shape:progress events; exportResult/exportError are terminal states the
+  // dialog renders until it is dismissed.
+  exporting: boolean;
+  exportRows: number;
+  exportError: string;
+  exportResult: ExportResult | null;
   // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
   // failure, which still owns the whole pane via `status`/`error`) must be
   // non-destructive -- it must NOT discard an already-rendered grid or the
@@ -54,10 +80,12 @@ export interface ExplorerState {
 
 const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
-  warnings: [], fields: [], columns: [], columnsTruncated: false, totalPaths: 0,
+  warnings: [], fields: [], baseColumns: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
   pageError: "", filterActive: false, resetToken: 0,
   counting: false, matchCount: -1, matchExact: false,
+  transformActive: false,
+  exporting: false, exportRows: 0, exportError: "", exportResult: null,
 };
 
 function createExplorer() {
@@ -72,11 +100,24 @@ function createExplorer() {
   // E3: the filter currently applied to QueryRows, set via setFilter(). A new
   // file always starts unfiltered -- open()/close() reset this to match-all.
   let currentFilter: Filter = matchAllFilter();
+  // E4: the projection currently applied to QueryRows, set via setTransform().
+  let currentTransform: Transform = identityTransform();
   // E3 Task 5: the requestId of the CountMatches call currently in flight, or
   // null when none is. Its own supersession id -- separate from `gen` -- so a
   // count for filter A can be told apart from filter B's even when both are
   // in flight in the same generation's window; see startCount's guard.
   let countReqId: string | null = null;
+  // E4: the count's OWN supersession generation, deliberately separate from
+  // `gen`. startCount's guards reject a landing count whose generation moved,
+  // and they return BEFORE writing counting:false -- so if the count keyed on
+  // `gen`, setTransform's ++gen (which must supersede in-flight PAGES) would
+  // strand a perfectly good count at "counting..." forever, with no writer left
+  // to clear it. A projection changes which columns are shown, never which
+  // records match, so it must not disturb a count at all. countGen is bumped
+  // exactly where countReqId is reset: open(), close() and setFilter().
+  let countGen = 0;
+  // E4: the requestId of the export currently in flight, or null.
+  let exportReqId: string | null = null;
   // A5: the most recent range passed to ensurePages(), so retryPageError()
   // can re-request the SAME range a failed fetch belonged to without
   // Explorer.svelte (which has no idea what row range DataTable last
@@ -107,7 +148,10 @@ function createExplorer() {
     cache.clear();
     inflight.clear();
     currentFilter = matchAllFilter(); // a new file always starts unfiltered
+    currentTransform = identityTransform(); // ...and unprojected
     countReqId = null;
+    countGen++;
+    exportReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
     set({ ...empty, status: "opening", path });
@@ -143,7 +187,8 @@ function createExplorer() {
       baseTotalExact = res.rowExact;
       update((s) => ({
         ...s, status: "ready", handle: res.handle, tier: res.tier, format: res.format,
-        warnings: res.warnings ?? [], fields: res.profile?.fields ?? [], columns: res.columns ?? [],
+        warnings: res.warnings ?? [], fields: res.profile?.fields ?? [],
+        baseColumns: res.columns ?? [], columns: res.columns ?? [],
         columnsTruncated: res.columnsTruncated, totalPaths: res.totalPaths,
         total: res.rowEstimate, totalExact: res.rowExact, sampled: res.sampled,
         skipped: res.profile?.skipped ?? 0,
@@ -192,7 +237,7 @@ function createExplorer() {
       inflight.set(page, reqId);
       try {
         const rs: RowSet = await QueryRows({
-          requestId: reqId, handle: s.handle, filter: currentFilter, transform: {} as any,
+          requestId: reqId, handle: s.handle, filter: currentFilter, transform: currentTransform,
           offset: page * pageRows, limit: pageRows, wantTotal: false,
         } as any);
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
@@ -286,7 +331,10 @@ function createExplorer() {
     gen++;
     cache.clear(); inflight.clear();
     currentFilter = matchAllFilter();
+    currentTransform = identityTransform();
     countReqId = null;
+    countGen++;
+    exportReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
     set({ ...empty });
@@ -307,13 +355,13 @@ function createExplorer() {
     update((s) => ({ ...s, counting: true }));
     try {
       const res: CountResult = await CountMatches({ requestId: reqId, handle, filter } as any);
-      if (countReqId !== reqId || genAtStart !== gen) return; // superseded by a newer filter
+      if (countReqId !== reqId || genAtStart !== countGen) return; // superseded by a newer filter
       update((s) => ({
         ...s, matchCount: res.total, matchExact: res.exact, counting: false,
         total: res.total, totalExact: res.exact,
       }));
     } catch (e) {
-      if (countReqId !== reqId || genAtStart !== gen) return;
+      if (countReqId !== reqId || genAtStart !== countGen) return;
       // A cancelled or failed count is not a page error; just stop counting.
       update((s) => ({ ...s, counting: false }));
     } finally {
@@ -324,6 +372,7 @@ function createExplorer() {
   /** E3 Task 5: the Cancel button behind the "counting..." affordance. */
   function cancelCount(): void {
     if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
+    countGen++;
     update((s) => ({ ...s, counting: false }));
   }
 
@@ -346,6 +395,7 @@ function createExplorer() {
     // late-resolving stale count's own reqId match countReqId again, and only
     // startCount's genAtStart guard would be left to reject it.
     if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
+    countGen++; // E4: keep the invariant "countGen moves wherever countReqId is reset"
     update((s) => ({
       ...s,
       filterActive: active,
@@ -381,13 +431,104 @@ function createExplorer() {
     // re-scan. An empty filter needs no count at all (page 0/the unfiltered
     // seed already has it).
     if (active && s.tier !== "memory") {
-      void startCount(s.handle, f, gen);
+      void startCount(s.handle, f, countGen);
     }
+  }
+
+
+  /** E4: applies a column projection. `projected` is what the table will show
+   *  (transformModel.projectedColumns) and MUST be adopted synchronously here:
+   *  ensurePages reads pageRowsFor(columns.length) BEFORE its fetch, so waiting
+   *  for the first projected page to land would page the new projection with
+   *  the old page size and desync every cached page from rowAt's arithmetic.
+   *
+   *  Structurally this is setFilter's supersede dance (bump gen, cancel and
+   *  clear in-flight pages, drop the cache) minus everything about MATCHING: a
+   *  projection changes which columns are shown, never which records match, so
+   *  total/matchCount/counting are deliberately left alone. See countGen for
+   *  why that is safe even with a count in flight. */
+  function setTransform(t: Transform, projected: Column[]): void {
+    currentTransform = t;
+    const s0 = get({ subscribe });
+    const active = projected.length !== s0.baseColumns.length
+      || projected.some((c, i) => c.path !== s0.baseColumns[i]?.path);
+    ++gen;
+    for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
+    inflight.clear();
+    cache.clear();
+    update((s) => ({
+      ...s,
+      columns: projected,
+      transformActive: active,
+      version: 0,
+      resetToken: s.resetToken + 1, // DataTable scrolls back to row 0
+      pageError: "",
+    }));
+    void ensurePages(0, 0);
+  }
+
+  /** E4: exports the CURRENT filter + transform to outPath. The engine streams
+   *  a fresh full pass, so this is never capped by the interactive tier.
+   *
+   *  The shape:progress subscription is per-export and torn down in the same
+   *  finally that clears `exporting`. It must NOT be a module-level EventsOn:
+   *  wailsjs/runtime reaches for window.runtime, which does not exist in the
+   *  node test environment (store.test.ts) or in jsdom, so a module-scope call
+   *  would throw while store.ts is being evaluated and take every test that
+   *  imports it down with it. */
+  async function runExport(format: string, outPath: string): Promise<void> {
+    const s0 = get({ subscribe });
+    if (!s0.handle) return;
+    const reqId = `x${++seq}`;
+    exportReqId = reqId;
+    const myGen = gen;
+    update((s) => ({ ...s, exporting: true, exportRows: 0, exportError: "", exportResult: null }));
+
+    const off = EventsOn("shape:progress", (p: any) => {
+      // A foreign or stale event must not move this export's counter.
+      if (!p || p.requestId !== exportReqId) return;
+      update((s) => (s.exporting ? { ...s, exportRows: Number(p.scanned) || 0 } : s));
+    });
+
+    try {
+      const res: ExportResult = await ExportQuery({
+        requestId: reqId, handle: s0.handle,
+        filter: currentFilter, transform: currentTransform,
+        format, outPath,
+      } as any);
+      if (exportReqId !== reqId || myGen !== gen) return; // cancelled, or the file changed under us
+      update((s) => ({ ...s, exporting: false, exportResult: res, exportRows: res.rowsOut }));
+    } catch (e) {
+      if (exportReqId !== reqId || myGen !== gen) return;
+      update((s) => ({ ...s, exporting: false, exportError: String(e) }));
+    } finally {
+      off();
+      if (exportReqId === reqId) exportReqId = null;
+    }
+  }
+
+  /** E4: stops an in-flight export. The terminal state is written HERE and
+   *  synchronously -- nulling exportReqId makes runExport's own guards reject
+   *  its catch/finally, so waiting for the rejected promise would leave the
+   *  dialog stuck on "exporting..." forever. Mirrors cancelCount above.
+   *
+   *  The early return matters: without it a late Esc would flip an
+   *  already-finished dialog into a failed one. */
+  function cancelExport(): void {
+    if (!exportReqId) return;
+    void Cancel(exportReqId).catch(() => {});
+    exportReqId = null;
+    update((s) => ({ ...s, exporting: false, exportError: "cancelled" }));
+  }
+
+  /** E4: clears a finished export's terminal state (the dialog's dismiss). */
+  function dismissExport(): void {
+    update((s) => ({ ...s, exportResult: null, exportError: "", exportRows: 0 }));
   }
 
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
-    setFilter, cancelCount,
+    setFilter, cancelCount, setTransform, runExport, cancelExport, dismissExport,
   };
 }
 
