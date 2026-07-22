@@ -67,6 +67,38 @@ the app's only view once a file is open:
   again, or switching files, supersedes any count already in flight so a
   stale number can never land.
 
+- **Columns panel (toggled via the header's "Columns" button).** Choose which
+  columns are shown, in what order, and under what name. Hiding, reordering or
+  renaming a column reprojects the table (and everything the export writes)
+  without re-reading the file; "Reset" restores the source's own column set.
+  Two details that are deliberate rather than incidental: a column is named by
+  its FULL dotted path (`user.name`, not `name`), so two nested fields sharing
+  a leaf name never collide; and the FILTER always keeps offering every base
+  column, because a filter runs on the record itself, before any projection --
+  hiding a column from the table does not remove it from the filter's
+  vocabulary. Two columns renamed to the same thing is refused, with the reason
+  shown inline, since JSON keys, a CSV header and a Parquet schema all collapse
+  duplicates.
+- **Export (the header's primary "Export" button).** Writes the CURRENT filter
+  and column selection to JSON (one array), NDJSON, CSV, TSV or Parquet. The
+  export is a fresh full pass over the file, so it is never capped by the
+  interactive view: on a file too large to hold in memory, the table shows a
+  window and an estimated total, and the export still contains every matching
+  row. Values are written in full -- a nested object or array that the table
+  shows as a truncated preview is exported complete, and numbers keep their
+  exact source literal rather than passing through a float. While it runs, the
+  dialog shows a live row count and a Cancel button; cancelling (or Esc) stops
+  the scan and leaves NO partial file behind, because bytes go to a temporary
+  file next to the destination and are moved into place only on success -- an
+  existing file at that path is left untouched unless the export succeeds.
+  Parquet needs one type per column, so a value that cannot be represented in
+  its column's type is written as null AND reported in the dialog, rather than
+  disappearing quietly; exporting as JSON or NDJSON keeps those values.
+  *Known limitation:* a column whose name contains a `.` (which is the default
+  for nested fields) re-opens in shape itself with empty cells, because shape's
+  own reader treats a dot as nesting. The exported file is correct for every
+  other consumer; re-importing into shape is the case to watch.
+
 ## Build order (important)
 
 `frontend/wailsjs/` (the generated Wails TypeScript bindings, from the bound

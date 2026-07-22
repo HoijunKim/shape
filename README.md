@@ -84,9 +84,22 @@ See [action.yml](action.yml) for the full set of inputs.
 
 ## Desktop GUI
 
-A Wails v2 desktop app under [`gui/`](gui/README.md) reuses the same Go core
-to profile a file and export its JSON Schema through a native window. Build
-it with `wails build` (see `gui/README.md` for the required build order).
+A Wails v2 desktop app under [`gui/`](gui/README.md) reuses the same Go core as
+a **data explorer**: drop in any supported file and browse the actual rows, no
+jq or SQL required.
+
+- **Explore** — a virtualized table over the real rows, with a structure map of
+  the file's fields alongside it. Files larger than memory stream instead of
+  loading, and counts that are estimates say so.
+- **Filter** — a visual condition builder (type-aware operators, AND/OR),
+  applied live, with a cancellable exact match count.
+- **Reshape** — choose, reorder and rename the columns you want.
+- **Export** — write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
+  Parquet. The export is always the complete result, never the windowed view,
+  and it lands atomically: a cancelled or failed export leaves no partial file.
+
+It still exports the inferred JSON Schema too (the header's "Schema" button).
+Build it with `wails build` (see `gui/README.md` for the required build order).
 
 ## Supported formats
 
