@@ -10,6 +10,8 @@
   import StatusBar from "./StatusBar.svelte";
   import FileDrop from "../FileDrop.svelte";
   import FilterBar from "./FilterBar.svelte";
+  import TransformPanel from "./TransformPanel.svelte";
+  import ExportDialog from "./ExportDialog.svelte";
 
   // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
   // siblings under App.svelte (Explorer never mounts Header), so App owns
@@ -17,6 +19,18 @@
   // outside and it must propagate back up through App's `bind:filterOpen` to
   // Header's aria-pressed.
   export let filterOpen = false;
+  // E4: same ownership as filterOpen -- App holds them, Explorer mounts the
+  // panels. exportOpen is written back here (the dialog closes itself), which
+  // is why both are bindable props rather than plain locals.
+  export let columnsOpen = false;
+  export let exportOpen = false;
+
+  // E4: the columns panel owns the draft, the export dialog needs to know when
+  // that draft is invalid, and the two are siblings -- so Explorer routes it,
+  // exactly as it routes the sidebar's seedFilter event below. Un-debounced on
+  // the panel's side, so the Export button can never lag the panel's own
+  // inline message.
+  let transformErrors: string[] = [];
 
   // Obligation 1 (carried from earlier reviews): StructureMap deliberately
   // does not own columnPaths -- it must be built here, from $explorer.columns
@@ -26,7 +40,10 @@
   // a close()/open() pair when a second file is opened -- a Set computed
   // once and reused would keep dimming/un-dimming rows by the PREVIOUS
   // file's column set.
-  $: columnPaths = new Set($explorer.columns.map((c) => c.path));
+  // E4: the structure map describes the SOURCE, so it is joined to the base
+  // column set -- under a projection, $explorer.columns holds output names
+  // (possibly renamed), which would dim every row in the sidebar.
+  $: columnPaths = new Set($explorer.baseColumns.map((c) => c.path));
 
   // Obligation 2 (carried from earlier reviews): focusToken must be bumped
   // UNCONDITIONALLY on every focus event, from either StructureMap (a sidebar
@@ -173,7 +190,15 @@
       </div>
     </div>
     {#if $explorer.status === "ready"}
-      <FilterBar columns={$explorer.columns} open={filterOpen} {seed} />
+      <!-- E4: a FILTER runs on the record, before projection, so its column
+           list is the BASE set -- hiding a column in the transform panel must
+           not remove it from the filter's vocabulary. -->
+      <FilterBar columns={$explorer.baseColumns} open={filterOpen} {seed} />
+      <TransformPanel
+        columns={$explorer.baseColumns}
+        open={columnsOpen}
+        on:errors={(e) => (transformErrors = e.detail)}
+      />
     {/if}
     <StatusBar
       tier={$explorer.tier}
@@ -190,7 +215,14 @@
       counting={$explorer.counting}
       matchCount={$explorer.matchCount}
       matchExact={$explorer.matchExact}
+      transformActive={$explorer.transformActive}
+      baseColumnCount={$explorer.baseColumns.length}
       on:cancelCount={() => explorer.cancelCount()}
+    />
+    <ExportDialog
+      open={exportOpen}
+      disabledReason={transformErrors[0] ?? ""}
+      on:close={() => (exportOpen = false)}
     />
   </div>
 {/if}
