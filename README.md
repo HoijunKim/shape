@@ -1,3 +1,19 @@
+<!--
+  LAUNCH ASSETS TO CAPTURE (human task -- cannot be automated/recorded from CI):
+  A demo GIF + a couple of stills belong right here, above the tagline, since
+  this is the first thing a visitor sees. Record ONE continuous ~20s take of the
+  "wow" path, in the desktop GUI (`cd gui && wails build`), on a messy nested
+  file (gui/testdata/nested.ndjson works, or something larger and real):
+    1. Drag the file in -> the explorer profiles it and shows real rows.
+    2. Click a truncated nested object/array cell -> the value tree opens; Copy.
+    3. Type a value in the search box -> rows narrow, the status count follows.
+    4. Open the Code panel -> the jq/SQL reflects the filter + search; copy it.
+    5. Export -> the same result written out in full.
+  Capture in both light and dark (the header toggle) for the two stills. Put the
+  files under docs/ (e.g. docs/demo.gif) and embed here. Do NOT fake or mock
+  these -- they must be the real app.
+-->
+
 # shape
 
 See the real shape of your structured data files.
@@ -93,6 +109,11 @@ jq or SQL required.
   loading, and counts that are estimates say so.
 - **Filter** — a visual condition builder (type-aware operators, AND/OR),
   applied live, with a cancellable exact match count.
+- **Search** — a global search box: type any text and the rows narrow to those
+  where any field's value contains it (case-insensitive, no column to pick),
+  combined with the filter and reflected in the count, the export and the code.
+- **Expand** — click a truncated object/array cell to open its full value as a
+  collapsible tree, with a Copy button for the exact JSON.
 - **Reshape** — choose, reorder and rename the columns you want.
 - **Export** — write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
   Parquet. The export is always the complete result, never the windowed view,
