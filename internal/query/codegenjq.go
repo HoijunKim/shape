@@ -82,10 +82,24 @@ func jqComparison(c Condition, path string, elem bool) (string, []string, error)
 	// rendered lazily -- eagerly formatting c.Value would fail on their empty
 	// Value.Kind.
 	switch c.Op {
-	case OpIsNull:
-		return fmt.Sprintf("(%s == null)", subject), nil, nil
-	case OpNotNull:
-		return fmt.Sprintf("(%s != null)", subject), nil, nil
+	case OpIsNull, OpNotNull:
+		// [subject][0] is null for BOTH an empty resolve (a missing key, or a
+		// scalar/array ancestor that makes .a?.b? yield empty) AND a real JSON
+		// null, matching the engine's non-Elem rule that an empty value set IS
+		// null (filter.go). A bare  would instead yield empty
+		// for a scalar ancestor, which jqFilter pins to false -- dropping a
+		// record the engine keeps.
+		nn := "[" + subject + "][0]"
+		if elem {
+			// Inside an any() body the subject is already a single element; a
+			// scalar cannot have a broken ancestor here.
+			nn = subject
+		}
+		op := "=="
+		if c.Op == OpNotNull {
+			op = "!="
+		}
+		return fmt.Sprintf("(%s %s null)", nn, op), nil, nil
 	}
 
 	lit, err := jqLiteral(c.Value)

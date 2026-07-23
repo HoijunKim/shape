@@ -272,3 +272,25 @@ func TestSQLPushdown_RefusesOversizedInLists(t *testing.T) {
 		t.Fatalf("two lists that together exceed the cap were pushed")
 	}
 }
+
+// TestSQLPushdown_RefusesNonRoundTrippingColumnNames is the I1 regression: a
+// real SQLite column whose name does not round-trip through parsePath ("x.",
+// ".x", `["x"]`) keeps a Path that differs from its single segment's Key. The
+// pushed SQL would quote the real column while the Go predicate resolves the
+// lossy key -> different rows. Such a column must route to the Go path.
+//
+// Mutation that must break it: drop the `segs[0].Key != path` clause -> these
+// become pushable and the pushed WHERE addresses a column the Go predicate
+// never resolves.
+func TestSQLPushdown_RefusesNonRoundTrippingColumnNames(t *testing.T) {
+	for _, name := range []string{"x.", ".x", "a.b."} {
+		cols := codegenModel(t, []map[string]any{{name: "v", "ok": json.Number("1")}})
+		if _, _, exact := sqlPushdown(oneCond(Condition{Path: name, Op: OpEq, Value: str("v")}), cols, nil); exact {
+			t.Fatalf("a non-round-tripping column %q was pushed", name)
+		}
+		// An ordinary column in the same model still pushes.
+		if _, _, exact := sqlPushdown(oneCond(Condition{Path: "ok", Op: OpEq, Value: num(1)}), cols, nil); !exact {
+			t.Fatalf("model %q: an ordinary column stopped pushing", name)
+		}
+	}
+}

@@ -55,8 +55,8 @@ func TestJQCondition_Goldens(t *testing.T) {
 			`(((.name?|type)=="string") and (.name?|test("^a")))`},
 		{"regex ci", Condition{Path: "name", Op: OpRegex, Value: Value{Kind: ValString, Str: "^a"}, CaseInsensitive: true},
 			`(((.name?|type)=="string") and (.name?|test("^a";"i")))`},
-		{"isnull", Condition{Path: "meta", Op: OpIsNull}, `(.meta? == null)`},
-		{"notnull", Condition{Path: "meta", Op: OpNotNull}, `(.meta? != null)`},
+		{"isnull", Condition{Path: "meta", Op: OpIsNull}, `([.meta?][0] == null)`},
+		{"notnull", Condition{Path: "meta", Op: OpNotNull}, `([.meta?][0] != null)`},
 		{"bool true", Condition{Path: "ok", Op: OpBool, Value: Value{Kind: ValBool, Bool: true}},
 			`(.ok? == true)`},
 		{"bool false", Condition{Path: "ok", Op: OpBool, Value: Value{Kind: ValBool, Bool: false}},
@@ -89,11 +89,11 @@ func TestJQFilter_GroupsAndZeroTermNodes(t *testing.T) {
 		want string
 	}{
 		{"two conditions and", Filter{Combinator: And, Conditions: []Condition{c1, c2}},
-			`(((.a? != null) // false) and ((.b? != null) // false))`},
+			`((([.a?][0] != null) // false) and (([.b?][0] != null) // false))`},
 		{"two conditions or", Filter{Combinator: Or, Conditions: []Condition{c1, c2}},
-			`(((.a? != null) // false) or ((.b? != null) // false))`},
+			`((([.a?][0] != null) // false) or (([.b?][0] != null) // false))`},
 		{"negate", Filter{Combinator: And, Conditions: []Condition{c1}, Negate: true},
-			`(((.a? != null) // false) | not)`},
+			`((([.a?][0] != null) // false) | not)`},
 		// A zero-term node emits its combinator's IDENTITY, matching
 		// compileGroup: a childless AND matches everything, a childless OR
 		// matches NOTHING. Emitting nothing at all would flip the OR case.
@@ -101,10 +101,10 @@ func TestJQFilter_GroupsAndZeroTermNodes(t *testing.T) {
 		{"childless or", Filter{Combinator: Or}, `false`},
 		{"childless or nested under an and", Filter{Combinator: And,
 			Conditions: []Condition{c1}, Groups: []Filter{{Combinator: Or}}},
-			`(((.a? != null) // false) and false)`},
+			`((([.a?][0] != null) // false) and false)`},
 		{"childless and nested under an and", Filter{Combinator: And,
 			Conditions: []Condition{c1}, Groups: []Filter{{Combinator: And}}},
-			`(((.a? != null) // false) and true)`},
+			`((([.a?][0] != null) // false) and true)`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestJQProjection_PreservesSelectOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jqProjection error = %v", err)
 	}
-	if want := `{"zeta": .zeta?, "alpha": .alpha?}`; got != want {
+	if want := `{"zeta": [.zeta?][0], "alpha": [.alpha?][0]}`; got != want {
 		t.Fatalf("jqProjection = %s, want %s", got, want)
 	}
 }
@@ -150,7 +150,7 @@ func TestJQProjection_DropAndAliasEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if want := `{"he said \"hi\"": .a?}`; got != want {
+	if want := `{"he said \"hi\"": [.a?][0]}`; got != want {
 		t.Fatalf("jqProjection(quoted alias) = %s, want %s", got, want)
 	}
 
@@ -404,5 +404,92 @@ func TestJQProgram_SelectOverAnArrayPathDoesNotFanOut(t *testing.T) {
 	}
 	if lines[0] != `{"tag":"x"}` || lines[1] != `{"tag":null}` || lines[2] != `{"tag":null}` {
 		t.Fatalf("unexpected projection output:\n%s", out)
+	}
+}
+
+// TestJQProgram_ProjectionDoesNotDropRecords is the C1 regression: a Select
+// over a plain nested path must emit one output record per INPUT record. A
+// bare `{ "B": .a?.b? }` annihilates the object whenever an ancestor is a
+// scalar or array, silently dropping the row -- breaking the panel's one
+// promise ("the same query").
+//
+// Mutation that must break it: make jqProjectionPath skip the [...][0] wrapper
+// for a non-Elem path -> only 2 of 3 records survive.
+func TestJQProgram_ProjectionDoesNotDropRecords(t *testing.T) {
+	input := `{"a":{"b":1}}
+{"a":"scalar"}
+{"a":{"b":2}}
+`
+	prog, _, err := jqProgram(Filter{}, Transform{Select: []ColumnSpec{{Path: "a.b", As: "B"}}},
+		CodegenContext{Format: "ndjson"})
+	if err != nil {
+		t.Fatalf("jqProgram error = %v", err)
+	}
+	out := strings.TrimSpace(strings.ReplaceAll(runJQ(t, prog, input), "\r", ""))
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d records out for 3 in -- a scalar ancestor dropped a row:\n%s", len(lines), out)
+	}
+	if lines[0] != `{"B":1}` || lines[1] != `{"B":null}` || lines[2] != `{"B":2}` {
+		t.Fatalf("unexpected projection output:\n%s", out)
+	}
+}
+
+// TestJQProgram_IsNullOverAScalarAncestorMatchesTheEngine is the I2 regression:
+// Go treats an empty resolve as null, so `a.b is null` selects a record whose
+// `a` is a scalar. A bare `.a?.b? == null` yields empty there, which jqFilter
+// pins to false -- dropping the record.
+//
+// Mutation that must break it: render isnull as `(subject == null)` instead of
+// `([subject][0] == null)` -> the scalar/array/missing rows are dropped.
+func TestJQProgram_IsNullOverAScalarAncestorMatchesTheEngine(t *testing.T) {
+	records := []map[string]any{
+		{"id": json.Number("1"), "a": map[string]any{"b": json.Number("1")}},
+		{"id": json.Number("2"), "a": "scalar"},
+		{"id": json.Number("3"), "a": []any{json.Number("1")}},
+		{"id": json.Number("4")},                                // a missing
+		{"id": json.Number("5"), "a": map[string]any{"b": nil}}, // a.b explicitly null
+	}
+	var input strings.Builder
+	for _, r := range records {
+		b, _ := json.Marshal(r)
+		input.Write(b)
+		input.WriteByte('\n')
+	}
+	for _, op := range []Op{OpIsNull, OpNotNull} {
+		t.Run(string(op), func(t *testing.T) {
+			f := Filter{Combinator: And, Conditions: []Condition{{Path: "a.b", Op: op}}}
+			cf, err := CompileFilter(f, nil)
+			if err != nil {
+				t.Fatalf("CompileFilter: %v", err)
+			}
+			var want []string
+			for _, r := range records {
+				if cf.Match(any(r)) {
+					want = append(want, string(r["id"].(json.Number)))
+				}
+			}
+			prog, _, err := jqProgram(f, Transform{}, CodegenContext{Format: "ndjson"})
+			if err != nil {
+				t.Fatalf("jqProgram: %v", err)
+			}
+			out := strings.TrimSpace(strings.ReplaceAll(runJQ(t, prog, input.String()), "\r", ""))
+			var got []string
+			for _, line := range strings.Split(out, "\n") {
+				if line == "" {
+					continue
+				}
+				var rec map[string]any
+				dec := json.NewDecoder(strings.NewReader(line))
+				dec.UseNumber()
+				if err := dec.Decode(&rec); err != nil {
+					t.Fatalf("bad jq output %q: %v", line, err)
+				}
+				got = append(got, string(rec["id"].(json.Number)))
+			}
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s: jq selected %v, engine selected %v\nprogram: %s", op, got, want, programBody(prog))
+			}
+		})
 	}
 }

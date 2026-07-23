@@ -68,9 +68,9 @@ func TestJQProjectionPath_WrapsElemPaths(t *testing.T) {
 	if got, want := jqProjectionPath(parsePath("tags[]")), "[.tags?[]?][0]"; got != want {
 		t.Fatalf("jqProjectionPath(tags[]) = %q, want %q", got, want)
 	}
-	// A path with no Elem segment must NOT be wrapped -- the wrapper would be
-	// noise, and [.a?][0] is not identical for a value that is itself an array.
-	if got, want := jqProjectionPath(parsePath("a.b")), ".a?.b?"; got != want {
+	// A plain nested path is wrapped too: a scalar ancestor makes .a?.b? yield
+	// EMPTY, which annihilates the enclosing {...} object and drops the record.
+	if got, want := jqProjectionPath(parsePath("a.b")), "[.a?.b?][0]"; got != want {
 		t.Fatalf("jqProjectionPath(a.b) = %q, want %q", got, want)
 	}
 }

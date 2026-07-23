@@ -228,7 +228,13 @@ func (p *pushdownPlanner) column(path string) (Column, bool) {
 		return Column{}, false
 	}
 	segs := p.cols.segs[idx]
-	if len(segs) != 1 || segs[0].Elem {
+	// len(segs)==1 is not sufficient: a real column named "x." or ["x"] keeps
+	// Path=="x." but parses to a SINGLE segment {Key:"x"}. The pushed SQL
+	// would quote the real column name while the Go predicate resolves the
+	// lossy compiled key -> different rows. Requiring the sole segment's key
+	// to equal the full path admits only names that round-trip, restoring
+	// exact-or-nothing; anything else routes to the Go path.
+	if len(segs) != 1 || segs[0].Elem || segs[0].Key != path {
 		return Column{}, false
 	}
 	return p.cols.Columns[idx], true

@@ -390,3 +390,36 @@ func TestSQLBackend_PushedWindowKeepsAbsoluteRowIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLBackend_NonRoundTrippingColumnKeepsTheGoAnswer is the I1 regression at
+// the backend level: a real SQLite column named "x." would, without the
+// round-trip guard, be pushed as a quoted identifier matching the real column,
+// while the Go predicate resolves the map key "x" and finds nothing -- so the
+// pushed path returned rows the Go path did not (verified: pushed=1, go=0).
+func TestSQLBackend_NonRoundTrippingColumnKeepsTheGoAnswer(t *testing.T) {
+	pushed, gopath := pushdownFixture(t,
+		`CREATE TABLE t ("x." TEXT, v INTEGER)`,
+		`INSERT INTO t VALUES ('a', 1)`,
+		`INSERT INTO t VALUES ('b', 2)`,
+		`INSERT INTO t VALUES ('a', 3)`,
+	)
+	f := oneCond(Condition{Path: "x.", Op: OpEq, Value: str("a")})
+	cf, err := CompileFilter(f, pushed.Columns())
+	if err != nil {
+		t.Fatalf("CompileFilter: %v", err)
+	}
+	if _, _, exact := pushed.pushdownFor(cf); exact {
+		t.Fatalf(`the column "x." was pushed; its name does not round-trip through parsePath`)
+	}
+	plan, _ := CompilePlan(f, Transform{}, pushed.Columns())
+	goPlan, _ := CompilePlan(f, Transform{}, gopath.Columns())
+	got, err := pushed.Query(context.Background(), plan, Window{Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	want, err := gopath.Query(context.Background(), goPlan, Window{Limit: 10}, true)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	assertRowSetEqual(t, got, want, `column "x."`)
+}

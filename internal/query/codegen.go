@@ -68,23 +68,27 @@ func jqPredicatePath(segs []Seg) string {
 	return sb.String()
 }
 
-// jqProjectionPath renders segs for use as a Select output VALUE.
+// jqProjectionPath renders segs for use as a Select output VALUE. It is
+// ALWAYS wrapped `[...][0]`, for two distinct reasons that both reduce to "one
+// input record must yield exactly one output value, matching
+// CompiledTransform.Project (transform.go)":
 //
-// It differs from the predicate form in exactly one way: a path containing an
-// array wildcard is wrapped as `[...][0]`. A bare `.tags[]` is a generator --
-// `{ "tag": .tags[] }` emits one record PER ELEMENT, fanning one input row
-// into N -- whereas CompiledTransform.Project takes the FIRST resolved value
-// and emits exactly one row (transform.go). `[...][0]` reproduces that:
-// ["x","y"] -> "x", [] -> null, key absent -> null, [false,..] -> false
-// (preserved, which `// null` would not do).
+//   - An array wildcard makes a bare `.tags[]` a GENERATOR, so
+//     `{ "tag": .tags[] }` would fan one record into N.
+//   - A plain nested path like `.a?.b?` YIELDS EMPTY when an ancestor is a
+//     scalar/array (the `?` suppresses the index error), and an empty value
+//     inside a `{...}` constructor ANNIHILATES THE WHOLE OBJECT -- the record
+//     silently vanishes from the output, where Project emits it with a missing
+//     cell. The panel's one promise is "the same query"; dropping records
+//     breaks it.
+//
+// `[...][0]` fixes both: it collapses a generator to its first element AND
+// turns an empty stream into a single `null`, so exactly one value comes out
+// per record. Verified against jq 1.7.1: ["x","y"] -> "x", [] -> null, key
+// absent -> null, scalar ancestor -> null, [false,..] -> false (preserved,
+// which `// null` would not do).
 func jqProjectionPath(segs []Seg) string {
-	path := jqPredicatePath(segs)
-	for _, s := range segs {
-		if s.Elem {
-			return "[" + path + "][0]"
-		}
-	}
-	return path
+	return "[" + jqPredicatePath(segs) + "][0]"
 }
 
 // sqlPathExpr renders a path as a SQL expression, returning the expression and
