@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -160,11 +161,14 @@ type OpenResult struct {
 	TotalPaths       int  `json:"totalPaths"`
 }
 
-// CountRequest is the CountMatches request DTO (spec §8).
+// CountRequest is the CountMatches request DTO (spec §8). Search is the global
+// search term (empty = none), AND-ed with Filter exactly as in QueryRows so a
+// searched count matches the searched view.
 type CountRequest struct {
 	RequestID string `json:"requestId,omitempty"`
 	Handle    string `json:"handle"`
 	Filter    Filter `json:"filter"`
+	Search    string `json:"search"`
 }
 
 // CountResult is the CountMatches response DTO (spec §8). Exact is false when
@@ -185,7 +189,7 @@ func (e *Engine) CountMatches(ctx context.Context, req CountRequest) (CountResul
 	if err != nil {
 		return CountResult{}, err
 	}
-	cf, err := CompileFilter(req.Filter, backend.Columns())
+	cf, err := CompileFilterWithSearch(req.Filter, req.Search, backend.Columns())
 	if err != nil {
 		return CountResult{}, fmt.Errorf("query: CountMatches: %w", err)
 	}
@@ -200,11 +204,54 @@ func (e *Engine) CountMatches(ctx context.Context, req CountRequest) (CountResul
 	return CountResult{Total: total, Exact: exact, ElapsedMs: time.Since(start).Milliseconds()}, nil
 }
 
-// QueryRequest is the QueryRows request DTO (spec §8).
+// CellRequest is the GetCell request DTO (spec §8): the record at absolute
+// ordinal Index (a Row.Index the table already rendered), and the column Path
+// whose full value to return.
+type CellRequest struct {
+	Handle string `json:"handle"`
+	Index  int64  `json:"index"`
+	Path   string `json:"path"`
+}
+
+// CellResult is the GetCell response DTO (spec §8): the full, untruncated
+// value as raw JSON, plus Found (false when Path resolves to no value in the
+// record -- distinct from a value that IS json null, for which Found is true
+// and Value is "null").
+type CellResult struct {
+	Value json.RawMessage `json:"value"`
+	Found bool            `json:"found"`
+}
+
+// GetCell returns the full, untruncated value at req.Path in the record at
+// req.Index (spec §8): the tree-view escape hatch from Query's previewCap. It
+// compiles req.Path via the validating resolveSegs (NOT raw parsePath: a
+// malformed path is an error rather than a stalled cursor), then reads exactly
+// one record through the backend. No filter or transform is applied, so the
+// value is stable regardless of what filter is active.
+func (e *Engine) GetCell(ctx context.Context, req CellRequest) (CellResult, error) {
+	backend, err := e.lookup(req.Handle)
+	if err != nil {
+		return CellResult{}, err
+	}
+	segs, err := resolveSegs(req.Path, backend.Columns())
+	if err != nil {
+		return CellResult{}, fmt.Errorf("query: GetCell: %w", err)
+	}
+	raw, found, err := backend.GetCell(ctx, req.Index, segs)
+	if err != nil {
+		return CellResult{}, err
+	}
+	return CellResult{Value: raw, Found: found}, nil
+}
+
+// QueryRequest is the QueryRows request DTO (spec §8). Search is the global
+// search term (empty = none), AND-ed with Filter and folded into the same
+// compiled predicate (decision 4).
 type QueryRequest struct {
 	RequestID string    `json:"requestId,omitempty"`
 	Handle    string    `json:"handle"`
 	Filter    Filter    `json:"filter"`
+	Search    string    `json:"search"`
 	Transform Transform `json:"transform"`
 	Offset    int64     `json:"offset"`
 	Limit     int       `json:"limit"`
@@ -388,7 +435,7 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	if err != nil {
 		return RowSet{}, err
 	}
-	plan, err := CompilePlan(req.Filter, req.Transform, backend.Columns())
+	plan, err := CompilePlanWithSearch(req.Filter, req.Search, req.Transform, backend.Columns())
 	if err != nil {
 		return RowSet{}, fmt.Errorf("query: QueryRows: %w", err)
 	}

@@ -1,5 +1,5 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, CountResult, ExportResult, FieldDTO, Filter, Generated, OpenResult, RowSet, Transform } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
@@ -52,6 +52,11 @@ export interface ExplorerState {
   filterActive: boolean; // true when a non-empty Filter is applied (setFilter) -- lets
                           // the UI/empty-state distinguish "no rows in file" from
                           // "no rows match filter"
+  // E6: the global search term currently applied (setSearch), "" = none. Kept
+  // in state (not just the module-level currentSearch) so the search box can
+  // reflect it and Explorer's empty state can say "no rows match your search"
+  // distinct from "no rows in file". searchActive is `search !== ""`.
+  search: string;
   resetToken: number;    // bumped on every filter change so DataTable (which owns
                           // scroll) knows to scroll back to row 0 -- the store cannot
                           // move the viewport itself
@@ -86,7 +91,7 @@ const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], baseColumns: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
-  pageError: "", filterActive: false, resetToken: 0,
+  pageError: "", filterActive: false, search: "", resetToken: 0,
   counting: false, matchCount: -1, matchExact: false,
   transformActive: false,
   exporting: false, exportRows: 0, exportError: "", exportResult: null,
@@ -105,6 +110,11 @@ function createExplorer() {
   // E3: the filter currently applied to QueryRows, set via setFilter(). A new
   // file always starts unfiltered -- open()/close() reset this to match-all.
   let currentFilter: Filter = matchAllFilter();
+  // E6: the global search term applied to QueryRows/CountMatches/Codegen/
+  // Export, set via setSearch(). Threaded alongside currentFilter -- the engine
+  // ANDs the two into one compiled predicate. A new file always starts
+  // unsearched -- open()/close() reset this to "".
+  let currentSearch = "";
   // E4: the projection currently applied to QueryRows, set via setTransform().
   let currentTransform: Transform = identityTransform();
   // E3 Task 5: the requestId of the CountMatches call currently in flight, or
@@ -158,6 +168,7 @@ function createExplorer() {
     cache.clear();
     inflight.clear();
     currentFilter = matchAllFilter(); // a new file always starts unfiltered
+    currentSearch = ""; // ...and unsearched
     currentTransform = identityTransform(); // ...and unprojected
     countReqId = null;
     countGen++;
@@ -248,7 +259,7 @@ function createExplorer() {
       inflight.set(page, reqId);
       try {
         const rs: RowSet = await QueryRows({
-          requestId: reqId, handle: s.handle, filter: currentFilter, transform: currentTransform,
+          requestId: reqId, handle: s.handle, filter: currentFilter, search: currentSearch, transform: currentTransform,
           offset: page * pageRows, limit: pageRows, wantTotal: false,
         } as any);
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
@@ -343,6 +354,7 @@ function createExplorer() {
     gen++;
     cache.clear(); inflight.clear();
     currentFilter = matchAllFilter();
+    currentSearch = "";
     currentTransform = identityTransform();
     countReqId = null;
     countGen++;
@@ -366,7 +378,7 @@ function createExplorer() {
     countReqId = reqId;
     update((s) => ({ ...s, counting: true }));
     try {
-      const res: CountResult = await CountMatches({ requestId: reqId, handle, filter } as any);
+      const res: CountResult = await CountMatches({ requestId: reqId, handle, filter, search: currentSearch } as any);
       if (countReqId !== reqId || genAtStart !== countGen) return; // superseded by a newer filter
       update((s) => ({
         ...s, matchCount: res.total, matchExact: res.exact, counting: false,
@@ -388,46 +400,39 @@ function createExplorer() {
     update((s) => ({ ...s, counting: false }));
   }
 
-  /** E3: applies a live filter to the current file. Recon GAPs 2/3/9 -- see
-   *  the inline comments below for why each step is required. */
-  function setFilter(f: Filter): void {
-    currentFilter = f;
-    const active = !!(f.conditions && f.conditions.length > 0);
-    // Bump gen so any in-flight OLD-filter QueryRows is superseded and cannot
-    // cache.set() into the NEW filter's page slot (recon GAP 2). Cancel and
-    // clear inflight the same way a superseding scroll does, and clear the
-    // page cache so no old-filter rows survive.
+  /** E3/E6: the shared supersede+reset+recount dance behind BOTH setFilter and
+   *  setSearch. It bumps gen so any in-flight OLD QueryRows is superseded and
+   *  cannot cache.set() into the NEW page slot (recon GAP 2); cancels+clears
+   *  inflight and drops the page cache; cancels any running count (E3 Task 5);
+   *  resets the total (recon GAP 3); refetches page 0; re-counts on a non-memory
+   *  tier; and refreshes codegen.
+   *
+   *  E6 §7: the total-reset and the re-count key on filter-OR-search being
+   *  active, NOT the filter alone. Clearing the filter while a search is still
+   *  live must keep the searched (narrowed) count, not snap `total` back to the
+   *  file-level baseline; symmetrically for clearing the search under a live
+   *  filter. Only when BOTH are empty does `total` return to the baseTotal/
+   *  baseTotalExact captured at open() (the T10 restore) and the re-count get
+   *  skipped -- the store analogue of the engine's empty-search no-op. Without
+   *  this, clearing a filter under an active search on a non-memory tier would
+   *  restore the whole-file estimate (e.g. "~726,181 rows") while the table
+   *  shows only the search hits. `filterActive` itself stays keyed on the
+   *  filter alone: it drives the filter bar's own affordance. */
+  function requery(extraPatch: Partial<ExplorerState>): void {
+    const filterActive = !!(currentFilter.conditions && currentFilter.conditions.length > 0);
+    const anyActive = filterActive || currentSearch !== "";
     ++gen;
     for (const [, reqId] of inflight) { void Cancel(reqId).catch(() => {}); }
     inflight.clear();
     cache.clear();
-    // E3 Task 5: cancel and null out any prior count the same way open()/
-    // close() do. Do this even when no new count is about to start below (the
-    // cleared-to-empty path) -- otherwise a still-set countReqId would let a
-    // late-resolving stale count's own reqId match countReqId again, and only
-    // startCount's genAtStart guard would be left to reject it.
     if (countReqId) { void Cancel(countReqId).catch(() => {}); countReqId = null; }
-    countGen++; // E4: keep the invariant "countGen moves wherever countReqId is reset"
+    countGen++; // keep the invariant "countGen moves wherever countReqId is reset"
     update((s) => ({
       ...s,
-      filterActive: active,
-      // Reset the total so the stale unfiltered count is not shown as the
-      // filtered count (recon GAP 3). On the memory tier page 0 immediately
-      // re-fills it exactly; on other tiers it stays -1 (=> "counting...")
-      // until Task 5's CountMatches finalizes it.
-      //
-      // T10 fix: a CLEARED filter (active === false) is not "counting"
-      // anything -- it is just the file's own rows again -- so restore the
-      // file-level baseTotal/baseTotalExact captured at open() rather than
-      // -1. Without this, a non-memory tier's total got stuck at whatever
-      // tiny page-based guess the post-clear page-0 refetch produced (every
-      // non-memory Backend.Query returns Total:-1 for QueryRows'
-      // wantTotal:false, so reconcileEof's page-boundary fallback was the
-      // only thing left feeding `total`, and it never climbs back to the
-      // true estimate on its own -- e.g. clearing a filter on a 726,181-row
-      // rescan-tier file left the status bar reading "~400 rows" forever).
-      total: active ? -1 : baseTotal,
-      totalExact: active ? false : baseTotalExact,
+      ...extraPatch,
+      filterActive,
+      total: anyActive ? -1 : baseTotal,
+      totalExact: anyActive ? false : baseTotalExact,
       version: 0,
       resetToken: s.resetToken + 1, // DataTable scrolls to row 0 (recon GAP 9)
       pageError: "",
@@ -437,15 +442,28 @@ function createExplorer() {
     }));
     void ensurePages(0, 0);
     const s = get({ subscribe });
-    // E3 Task 5: CountMatches is the eager exact source only where QueryRows
-    // can't already give one -- on the memory tier, filtered page 0 already
-    // returns the exact total, so counting there would be a redundant full
-    // re-scan. An empty filter needs no count at all (page 0/the unfiltered
-    // seed already has it).
-    if (active && s.tier !== "memory") {
-      void startCount(s.handle, f, countGen);
+    // CountMatches is the eager exact source only where QueryRows can't already
+    // give one -- on the memory tier, filtered/searched page 0 already returns
+    // the exact total, so counting there would be a redundant full re-scan.
+    // Neither an empty filter nor an empty search needs a count.
+    if (anyActive && s.tier !== "memory") {
+      void startCount(s.handle, currentFilter, countGen);
     }
     void refreshCodegen();
+  }
+
+  /** E3: applies a live filter to the current file (via requery). */
+  function setFilter(f: Filter): void {
+    currentFilter = f;
+    requery({});
+  }
+
+  /** E6: applies a live global search to the current file. Same supersede/
+   *  reset/recount contract as setFilter; the caller (the search box) debounces
+   *  before calling this, exactly as the filter bar does for setFilter. */
+  function setSearch(q: string): void {
+    currentSearch = q;
+    requery({ search: q });
   }
 
 
@@ -505,7 +523,7 @@ function createExplorer() {
     const myGen = gen;
     try {
       const res: Generated = await Codegen({
-        handle: s.handle, filter: currentFilter, transform: currentTransform,
+        handle: s.handle, filter: currentFilter, search: currentSearch, transform: currentTransform,
       } as any);
       if (myGen !== gen) return;
       update((st) => ({ ...st, codegen: res, codegenError: "" }));
@@ -540,7 +558,7 @@ function createExplorer() {
     try {
       const res: ExportResult = await ExportQuery({
         requestId: reqId, handle: s0.handle,
-        filter: currentFilter, transform: currentTransform,
+        filter: currentFilter, search: currentSearch, transform: currentTransform,
         format, outPath,
       } as any);
       // Guarded on exportReqId ALONE, deliberately not on `gen`. An export
@@ -588,10 +606,24 @@ function createExplorer() {
     update((s) => ({ ...s, exportResult: null, exportError: "", exportRows: 0 }));
   }
 
+  /** E6: fetches the FULL, untruncated value of one cell (Backend.GetCell) --
+   *  the tree-view overlay's data source. index is a Row.Index the table
+   *  rendered, path a column path. A thin async wrapper: it owns no store state
+   *  (the overlay owns its own open/loading/error), and a failed fetch rejects
+   *  so the caller can show an error without disturbing the table. Value comes
+   *  back as raw JSON the binding types as number[] but Go marshals as the real
+   *  JSON value, so it is surfaced as `unknown`. */
+  async function getCell(index: number, path: string): Promise<{ value: unknown; found: boolean }> {
+    const s = get({ subscribe });
+    if (!s.handle) throw new Error("no source open");
+    const res = await GetCell({ handle: s.handle, index, path } as any);
+    return { value: (res as any).value as unknown, found: (res as any).found as boolean };
+  }
+
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
-    setFilter, cancelCount, setTransform, runExport, cancelExport, dismissExport,
-    refreshCodegen,
+    setFilter, setSearch, cancelCount, setTransform, runExport, cancelExport, dismissExport,
+    refreshCodegen, getCell,
   };
 }
 

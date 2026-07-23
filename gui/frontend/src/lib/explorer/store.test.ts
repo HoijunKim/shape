@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, Filter } from "./types";
 
@@ -20,6 +20,9 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   // first property read on the result throws.
   Codegen: vi.fn(() => Promise.resolve({ jq: ".", sql: "SELECT * FROM data;", warnings: [] })),
   ExportQuery: vi.fn(),
+  // E6: store.ts calls GetCell for the value-tree overlay; a bare vi.fn()
+  // resolves undefined and the caller's property read throws.
+  GetCell: vi.fn(() => Promise.resolve({ value: null, found: false })),
 }));
 
 // E4: store.ts subscribes to shape:progress per export. The real module reaches
@@ -73,6 +76,10 @@ beforeEach(async () => {
   vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
   vi.mocked(CountMatches).mockReset(); // E3 Task 5: each test sets its own resolution explicitly
   vi.mocked(ExportQuery).mockReset();
+  // E6: keep Codegen's factory implementation (a mockReset would strip it and
+  // make it resolve undefined), just clear its call history between tests.
+  vi.mocked(Codegen).mockClear();
+  vi.mocked(GetCell).mockReset().mockResolvedValue({ value: null, found: false } as any);
   progressHandlers = [];
   vi.mocked(EventsOn).mockReset().mockImplementation((_evt: string, cb: any) => {
     progressHandlers.push(cb);
@@ -862,5 +869,131 @@ describe("transformActive keys on the transform actually sent (review finding 7)
       cols.map((c, i) => ({ ...c, name: i === 0 ? "Renamed" : c.name })),
     );
     expect(get(explorer).transformActive).toBe(true);
+  });
+});
+
+describe("setSearch and getCell (E6 Task 5)", () => {
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+  const filterAge18 = {
+    combinator: "and",
+    conditions: [{ path: "age", op: "gte", value: { kind: "number", num: 18 } }],
+  } as unknown as Filter;
+  const matchAll = { combinator: "and" } as unknown as Filter;
+
+  async function openMemory(base = 100): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce({ ...openResult("h-search"), rowEstimate: base, rowExact: true } as any);
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: base, totalExact: true,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.open("file.ndjson");
+  }
+
+  async function openRescan(base = 726181): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce({
+      ...openResult("h-rescan", "rescan"), rowEstimate: base, rowExact: false, sampled: true,
+    } as any);
+    vi.mocked(QueryRows).mockResolvedValueOnce({
+      columns: [], rows: [{ index: 0, cells: [] }], offset: 0, total: -1, totalExact: false,
+      scanned: 1, truncated: false, elapsedMs: 0, columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await explorer.open("large.ndjson");
+  }
+
+  it("sends the current search to QueryRows", async () => {
+    await openMemory();
+    const before = vi.mocked(QueryRows).mock.calls.length;
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    explorer.setSearch("london");
+    await vi.waitFor(() => expect(vi.mocked(QueryRows).mock.calls.length).toBeGreaterThan(before));
+    const last = vi.mocked(QueryRows).mock.calls.at(-1)![0] as any;
+    expect(last.search).toBe("london");
+    expect(get(explorer).search).toBe("london");
+  });
+
+  it("re-counts on a non-memory tier when the search changes, carrying the search", async () => {
+    await openRescan();
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    vi.mocked(CountMatches).mockResolvedValue({ total: 12, exact: true, elapsedMs: 0 } as any);
+    explorer.setSearch("needle");
+    await vi.waitFor(() => expect(vi.mocked(CountMatches)).toHaveBeenCalled());
+    expect((vi.mocked(CountMatches).mock.calls.at(-1)![0] as any).search).toBe("needle");
+    await vi.waitFor(() => expect(get(explorer).matchCount).toBe(12));
+  });
+
+  it("clearing the search with no filter restores the file baseline synchronously", async () => {
+    await openMemory(100);
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    explorer.setSearch("x");
+    expect(get(explorer).total).toBe(-1); // searched -> unknown until page0/recount
+    await flush();
+    explorer.setSearch(""); // no filter active -> baseline restored
+    expect(get(explorer).total).toBe(100);
+    expect(get(explorer).totalExact).toBe(true);
+    await flush();
+  });
+
+  // E6 §7: the reset/recount predicate keys on filter-OR-search, not the filter
+  // alone. Mutation (key on filterActive alone): clearing the filter under a
+  // live search snaps total back to 726181 and skips the recount -> both the
+  // total assertion and the CountMatches-called assertion fail.
+  it("clearing the filter while a search is active keeps the narrowed total and re-counts", async () => {
+    await openRescan(726181);
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    vi.mocked(CountMatches).mockResolvedValue({ total: 5, exact: true, elapsedMs: 0 } as any);
+    explorer.setSearch("needle");   // search active
+    await flush();
+    explorer.setFilter(filterAge18); // filter + search
+    await flush();
+    const before = vi.mocked(CountMatches).mock.calls.length;
+    explorer.setFilter(matchAll);    // clear the filter; search "needle" still active
+    expect(get(explorer).total).toBe(-1);          // NOT restored to the file baseline
+    expect(get(explorer).total).not.toBe(726181);
+    await vi.waitFor(() => expect(vi.mocked(CountMatches).mock.calls.length).toBeGreaterThan(before));
+    expect((vi.mocked(CountMatches).mock.calls.at(-1)![0] as any).search).toBe("needle");
+    await flush();
+  });
+
+  it("refreshes codegen with the search on a search change", async () => {
+    await openMemory();
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    vi.mocked(Codegen).mockClear();
+    explorer.setSearch("london");
+    await vi.waitFor(() => expect(vi.mocked(Codegen)).toHaveBeenCalled());
+    expect((vi.mocked(Codegen).mock.calls.at(-1)![0] as any).search).toBe("london");
+  });
+
+  it("supersedes a stale pre-search page (the clear+gen dance), like the filter path", async () => {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("h-gen"));
+    const oldGate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => oldGate.promise);
+    const openPromise = explorer.open("gen.ndjson");
+    await flush(); // open() reaches ready and issues its own page-0 fetch (pending on oldGate)
+    expect(get(explorer).status).toBe("ready");
+
+    const newGate = deferred<any>();
+    vi.mocked(QueryRows).mockImplementationOnce(() => newGate.promise);
+    explorer.setSearch("needle"); // supersedes: bumps gen, clears inflight, new page-0 fetch
+
+    oldGate.resolve({
+      columns: [], rows: [{ index: 0, cells: [{ kind: "string", str: "OLD-STALE" }] }], offset: 0,
+      total: 999, totalExact: true, scanned: 1, truncated: false, elapsedMs: 0,
+      columnsTruncated: false, totalPaths: 0,
+    } as any);
+    await flush();
+    expect(explorer.rowAt(0).row).toBeNull(); // the stale pre-search row must never land
+    expect(get(explorer).total).not.toBe(999);
+
+    newGate.resolve(emptyRowSet());
+    await flush();
+    await openPromise;
+  });
+
+  it("getCell forwards handle+index+path and returns the binding result", async () => {
+    await openMemory();
+    vi.mocked(GetCell).mockResolvedValueOnce({ value: { k: 1 }, found: true } as any);
+    const res = await explorer.getCell(42, "user.name");
+    expect(vi.mocked(GetCell).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", index: 42, path: "user.name" });
+    expect(res).toEqual({ value: { k: 1 }, found: true });
   });
 });

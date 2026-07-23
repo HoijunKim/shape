@@ -26,6 +26,12 @@
   // renders exactly as it did in E2 -- `counting`/`matchCount`/`matchExact`
   // are meaningless (and ignored by formatRowCount) unless it is true.
   export let filterActive = false;
+  // E6: a global search runs CountMatches on the non-memory tiers exactly like
+  // a filter, so the counting affordance (the "counting…" match-count branch
+  // AND the Cancel button) must gate on filter-OR-search active, not the filter
+  // alone -- otherwise a search-only count shows "counting…" forever with no
+  // way to cancel it.
+  export let searchActive = false;
   export let counting = false;
   export let matchCount = -1;
   export let matchExact = false;
@@ -38,8 +44,11 @@
   export let transformActive = false;
   export let baseColumnCount = 0;
 
+  // A filtered OR searched view both route through CountMatches and set
+  // matchCount, so formatRowCount's "a match count applies" branch keys on both.
+  $: countActive = filterActive || searchActive;
   $: rowsText = formatRowCount({
-    total, totalExact, rowsLoaded, filterActive, counting, matchCount, matchExact,
+    total, totalExact, rowsLoaded, filterActive: countActive, counting, matchCount, matchExact,
   });
   $: columnsText = transformActive
     ? `showing ${columnCount.toLocaleString()} of ${baseColumnCount.toLocaleString()} columns`
@@ -55,7 +64,7 @@
 <div class="status-bar">
   <div class="metrics" role="status">
     <span class="metric mono" class:estimate={sampled && !totalExact}>{rowsText}</span>
-    {#if filterActive && counting}
+    {#if countActive && counting}
       <button type="button" class="cancel-count" on:click={onCancelClick}>Cancel</button>
     {/if}
     <span class="sep" aria-hidden="true">·</span>

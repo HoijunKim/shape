@@ -20,6 +20,7 @@ type ExportRequest struct {
 	RequestID string    `json:"requestId,omitempty"`
 	Handle    string    `json:"handle"`
 	Filter    Filter    `json:"filter"`
+	Search    string    `json:"search"`
 	Transform Transform `json:"transform"`
 	Format    string    `json:"format"` // json|ndjson|csv|tsv|parquet
 	OutPath   string    `json:"outPath"`
@@ -78,7 +79,12 @@ func (e *Engine) ExportQuery(ctx context.Context, req ExportRequest, progress fu
 	if err != nil {
 		return ExportResult{}, err
 	}
-	plan, err := CompilePlan(req.Filter, req.Transform, backend.Columns())
+	// Search is folded into the plan exactly as QueryRows/CountMatches do, so a
+	// searched export writes filter-AND-search rows -- agreeing with the table,
+	// the dialog's "N matching rows", and the copied jq/SQL. Its src=nil (when
+	// search != "") is what keeps exportPushed from bypassing the search on the
+	// SQLite tier.
+	plan, err := CompilePlanWithSearch(req.Filter, req.Search, req.Transform, backend.Columns())
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("query: ExportQuery: %w", err)
 	}

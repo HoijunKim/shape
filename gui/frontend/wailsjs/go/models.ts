@@ -32,6 +32,36 @@ export namespace query {
 	        this.hasMore = source["hasMore"];
 	    }
 	}
+	export class CellRequest {
+	    handle: string;
+	    index: number;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CellRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.handle = source["handle"];
+	        this.index = source["index"];
+	        this.path = source["path"];
+	    }
+	}
+	export class CellResult {
+	    value: number[];
+	    found: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CellResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.found = source["found"];
+	    }
+	}
 	export class ColumnSpec {
 	    path: string;
 	    as?: string;
@@ -193,6 +223,7 @@ export namespace query {
 	export class CodegenRequest {
 	    handle: string;
 	    filter: Filter;
+	    search: string;
 	    transform: Transform;
 	
 	    static createFrom(source: any = {}) {
@@ -203,6 +234,7 @@ export namespace query {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.handle = source["handle"];
 	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.search = source["search"];
 	        this.transform = this.convertValues(source["transform"], Transform);
 	    }
 	
@@ -256,6 +288,7 @@ export namespace query {
 	    requestId?: string;
 	    handle: string;
 	    filter: Filter;
+	    search: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CountRequest(source);
@@ -266,6 +299,7 @@ export namespace query {
 	        this.requestId = source["requestId"];
 	        this.handle = source["handle"];
 	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.search = source["search"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -306,6 +340,7 @@ export namespace query {
 	    requestId?: string;
 	    handle: string;
 	    filter: Filter;
+	    search: string;
 	    transform: Transform;
 	    format: string;
 	    outPath: string;
@@ -319,6 +354,7 @@ export namespace query {
 	        this.requestId = source["requestId"];
 	        this.handle = source["handle"];
 	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.search = source["search"];
 	        this.transform = this.convertValues(source["transform"], Transform);
 	        this.format = source["format"];
 	        this.outPath = source["outPath"];
@@ -566,6 +602,7 @@ export namespace query {
 	    requestId?: string;
 	    handle: string;
 	    filter: Filter;
+	    search: string;
 	    transform: Transform;
 	    offset: number;
 	    limit: number;
@@ -580,6 +617,7 @@ export namespace query {
 	        this.requestId = source["requestId"];
 	        this.handle = source["handle"];
 	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.search = source["search"];
 	        this.transform = this.convertValues(source["transform"], Transform);
 	        this.offset = source["offset"];
 	        this.limit = source["limit"];

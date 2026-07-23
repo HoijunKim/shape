@@ -26,6 +26,10 @@ export function ExportQuery(arg1) {
   return window['go']['main']['App']['ExportQuery'](arg1);
 }
 
+export function GetCell(arg1) {
+  return window['go']['main']['App']['GetCell'](arg1);
+}
+
 export function OpenFileDialog() {
   return window['go']['main']['App']['OpenFileDialog']();
 }

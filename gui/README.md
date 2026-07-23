@@ -113,6 +113,34 @@ the app's only view once a file is open:
   for a non-database source the SQL is labelled illustrative, over an imagined
   flat table named `data`.
 
+- **Global search (the search box above the table).** Find a value without
+  knowing which column it is in: type any text and the table narrows to the
+  rows where ANY scalar leaf value contains it, case-insensitively (full
+  Unicode folding, not ASCII-only). It matches VALUES, never keys -- searching
+  `name` does not surface every row just because they all have a `name` field.
+  The box is always visible the moment a file is open (deliberately not tucked
+  behind the Filter panel), and its typing is debounced the same ~250ms as the
+  filter. Search combines with the visual filter by AND -- a searched, filtered
+  view shows only rows that satisfy both -- and it participates in the row
+  count, the export, and the Code panel exactly like the filter does: the
+  status bar counts the searched rows, an export writes only them, and the jq/
+  SQL updates to include the search (jq walks every scalar leaf; the SQL is an
+  illustrative `instr` over the top-level columns, since a generic leaf search
+  has no faithful one-line SQL). An empty box is a true no-op -- byte-identical
+  to no search.
+- **Cell value tree (click a truncated object/array cell).** The table shows a
+  nested object or array as a ~200-character preview; hovering such a cell
+  reveals an expand affordance, and clicking it opens an overlay showing the
+  cell's WHOLE value as a collapsible tree -- objects as `key: value`, arrays
+  as `[i]: value`, scalars coloured by kind the same way the table cells are.
+  The first level or two expand by default; deeper levels open on demand, and a
+  very large array renders a capped set of children plus an "N more" note so a
+  100k-element value never freezes the window. A Copy button puts the value's
+  exact JSON on the clipboard. It is read-only -- a way to SEE the full value a
+  table cell can only hint at, not edit or filter from it. (The value is fetched
+  by the cell's absolute row index, so it is the same value regardless of which
+  filter or search is active.)
+
 ## Build order (important)
 
 `frontend/wailsjs/` (the generated Wails TypeScript bindings, from the bound

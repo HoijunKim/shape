@@ -11,6 +11,7 @@ import (
 type CodegenContext struct {
 	Format string       `json:"format"` // "json"|"ndjson"|"csv"|"parquet"|"sqlite"
 	Table  string       `json:"table,omitempty"`
+	Search string       `json:"search,omitempty"` // global search term, AND-ed with the filter
 	Cols   *ColumnModel `json:"-"`
 	// Tainted marks columns whose stored SQLite value differs from the value
 	// shape shows (a BLOB, or a date the driver converts to RFC3339): a
@@ -343,14 +344,45 @@ func jqInvocationNote(format string) string {
 	}
 }
 
-// jqProgram renders the complete jq program for a filter + transform.
+// jqSearchExpr renders the global search as a jq boolean: any scalar LEAF of
+// the record, rendered as text and ASCII-downcased, contains the (lowercased)
+// query. The query is lowercased at generation time so `ABC` matches `abc`;
+// number and boolean leaves are included (tostring), not just strings, matching
+// decision 5.
 //
-// `select` is omitted for an empty filter and the projection stage is omitted
-// for an identity transform, so a match-all identity query generates `.` --
-// not `select(true) | .`, which would be noise the user has to read past.
+// This is NOT exactly equivalent to compileSearch and does not pretend to be:
+// ascii_downcase folds ASCII only (compileSearch folds Unicode) and tostring
+// canonicalises numbers (compileSearch matches the source literal). Both are
+// the same class of divergence E5 already discloses; the caveats ride along in
+// jqProgram (warnCaseInsensitive + warnSearchNumericJQ + a `# note:`).
+func jqSearchExpr(search string) (string, error) {
+	lit, err := jqLiteral(Value{Kind: ValString, Str: strings.ToLower(search)})
+	if err != nil {
+		return "", err
+	}
+	return `[.. | select(type=="string" or type=="number" or type=="boolean") | tostring | ascii_downcase] | any(contains(` + lit + `))`, nil
+}
+
+// jqProgram renders the complete jq program for a filter + transform (+ search).
+//
+// `select` is omitted for an empty filter/search and the projection stage is
+// omitted for an identity transform, so a match-all identity query generates
+// `.` -- not `select(true) | .`, which would be noise the user has to read past.
+// When both a filter and a search are present they combine as
+// `select((search) and (filter))`; a search alone is `select(search)`.
 func jqProgram(f Filter, t Transform, ctx CodegenContext) (string, []string, error) {
 	var warnings []string
 	var stages []string
+
+	searchExpr := ""
+	if ctx.Search != "" {
+		se, err := jqSearchExpr(ctx.Search)
+		if err != nil {
+			return "", nil, err
+		}
+		searchExpr = se
+		warnings = append(warnings, warnCaseInsensitive, warnSearchNumericJQ)
+	}
 
 	if !isEmptyFilter(f) {
 		expr, w, err := jqFilter(f, ctx.Cols)
@@ -358,7 +390,13 @@ func jqProgram(f Filter, t Transform, ctx CodegenContext) (string, []string, err
 			return "", nil, err
 		}
 		warnings = append(warnings, w...)
-		stages = append(stages, "select("+expr+")")
+		if searchExpr != "" {
+			stages = append(stages, "select(("+searchExpr+") and ("+expr+"))")
+		} else {
+			stages = append(stages, "select("+expr+")")
+		}
+	} else if searchExpr != "" {
+		stages = append(stages, "select("+searchExpr+")")
 	}
 	proj, err := jqProjection(t)
 	if err != nil {
@@ -371,5 +409,9 @@ func jqProgram(f Filter, t Transform, ctx CodegenContext) (string, []string, err
 		stages = append(stages, ".")
 	}
 
-	return jqInvocationNote(ctx.Format) + "\n" + strings.Join(stages, " | "), warnings, nil
+	header := jqInvocationNote(ctx.Format)
+	if ctx.Search != "" {
+		header += "\n# note: " + warnSearchNumericJQ
+	}
+	return header + "\n" + strings.Join(stages, " | "), warnings, nil
 }

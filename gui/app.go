@@ -28,6 +28,7 @@ type sourceEngine interface {
 	CountMatches(ctx context.Context, req query.CountRequest) (query.CountResult, error)
 	ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error)
 	Codegen(req query.CodegenRequest) (query.Generated, error)
+	GetCell(ctx context.Context, req query.CellRequest) (query.CellResult, error)
 	Cancel(requestID string) error
 	CloseSource(handle string) error
 }
@@ -324,6 +325,15 @@ func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
 // ctx-less signature is also what keeps *query.Engine satisfying sourceEngine.
 func (a *App) Codegen(req query.CodegenRequest) (query.Generated, error) {
 	return a.eng.Codegen(req)
+}
+
+// GetCell returns the full, untruncated value of one cell (spec §8): the
+// tree-view escape hatch behind a click on a truncated object/array cell. It
+// is a pass-through like CountMatches -- it reads exactly one record, so it is
+// effectively instant, but it still gets a.reqCtx() so it is cancelled at
+// teardown like every other data-touching binding.
+func (a *App) GetCell(req query.CellRequest) (query.CellResult, error) {
+	return a.eng.GetCell(a.reqCtx(), req)
 }
 
 // Cancel interrupts an in-flight request by id (spec §8). An unknown id is a

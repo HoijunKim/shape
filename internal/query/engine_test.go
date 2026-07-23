@@ -1507,3 +1507,75 @@ func TestOpenResult_JSONShape(t *testing.T) {
 		t.Fatalf("marshaled JSON = %s, want it to contain \"totalPaths\"", s)
 	}
 }
+
+// --- GetCell (E6 Task 2) ----------------------------------------------------
+
+func TestEngine_GetCell_FullValueNestedPath(t *testing.T) {
+	maps := []map[string]any{
+		{"user": map[string]any{"name": "alice", "age": json.Number("30")}},
+		{"user": map[string]any{"name": "bob"}},
+	}
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+
+	// A dotted path resolves the same way the table's columns do.
+	cell, err := e.GetCell(context.Background(), CellRequest{Handle: res.Handle, Index: 0, Path: "user.name"})
+	if err != nil {
+		t.Fatalf("GetCell: %v", err)
+	}
+	if !cell.Found {
+		t.Fatalf("Found = false, want true")
+	}
+	if string(cell.Value) != `"alice"` {
+		t.Fatalf("Value = %s, want \"alice\"", cell.Value)
+	}
+
+	// The whole nested object at "user" comes back in full.
+	cell, err = e.GetCell(context.Background(), CellRequest{Handle: res.Handle, Index: 0, Path: "user"})
+	if err != nil {
+		t.Fatalf("GetCell user: %v", err)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(cell.Value, &obj); err != nil || obj["name"] != "alice" {
+		t.Fatalf("Value = %s (err %v), want the full user object", cell.Value, err)
+	}
+}
+
+func TestEngine_GetCell_FoundDistinguishesMissingFromNull(t *testing.T) {
+	maps := []map[string]any{
+		{"a": nil, "b": "x"}, // a present but explicit null
+		{"b": "y"},           // a absent
+	}
+	path := writeNDJSONFile(t, maps)
+	e := NewEngine()
+	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+
+	cell, err := e.GetCell(context.Background(), CellRequest{Handle: res.Handle, Index: 0, Path: "a"})
+	if err != nil {
+		t.Fatalf("GetCell null: %v", err)
+	}
+	if !cell.Found || string(cell.Value) != "null" {
+		t.Fatalf("explicit null: Found=%v Value=%s, want true/null", cell.Found, cell.Value)
+	}
+	cell, err = e.GetCell(context.Background(), CellRequest{Handle: res.Handle, Index: 1, Path: "a"})
+	if err != nil {
+		t.Fatalf("GetCell missing: %v", err)
+	}
+	if cell.Found || string(cell.Value) != "null" {
+		t.Fatalf("missing: Found=%v Value=%s, want false/null", cell.Found, cell.Value)
+	}
+}
+
+func TestEngine_GetCell_UnknownHandleErrors(t *testing.T) {
+	e := NewEngine()
+	if _, err := e.GetCell(context.Background(), CellRequest{Handle: "nope", Index: 0, Path: "x"}); err == nil {
+		t.Fatalf("GetCell(unknown handle) err = nil, want error")
+	}
+}

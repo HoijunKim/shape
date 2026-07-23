@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -309,6 +310,41 @@ func (r *rescanBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEnco
 		return n, scanErr
 	}
 	return n, nil
+}
+
+// GetCell streams the source once and stops at the record whose file-order
+// ordinal equals index (scan's idx IS the absolute record ordinal, the same
+// value Row.Index carries), marshalling the full value at segs. An index past
+// EOF (never reached by the scan) is an error. O(index) records are decoded --
+// a stateless-scan backend has no random access -- but only one is resolved.
+func (r *rescanBackend) GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if index < 0 {
+		return nil, false, fmt.Errorf("query: rescanBackend.GetCell: negative index %d", index)
+	}
+	var (
+		raw   json.RawMessage
+		found bool
+		hit   bool
+	)
+	scanErr := r.scan(ctx, func(idx int64, rec any) (bool, error) {
+		if idx < index {
+			return false, nil
+		}
+		var err error
+		raw, found, err = resolveFullCell(rec, segs)
+		hit = true
+		return true, err // stop; a non-nil err aborts the scan and is returned
+	})
+	if scanErr != nil {
+		return nil, false, scanErr
+	}
+	if !hit {
+		return nil, false, fmt.Errorf("query: rescanBackend.GetCell: index %d past end of source", index)
+	}
+	return raw, found, nil
 }
 
 // Close is a no-op: rescanBackend holds no persistent resource between

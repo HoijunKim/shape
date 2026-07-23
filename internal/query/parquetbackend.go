@@ -12,6 +12,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -505,6 +506,28 @@ func (p *parquetBackend) Export(ctx context.Context, plan *CompiledPlan, enc Row
 		return n, scanErr
 	}
 	return n, nil
+}
+
+// GetCell returns the full value at segs in the record at absolute row ordinal
+// index, seeking straight to it via readWindow (parquet-go's SeekToRow, the
+// same O(window) random access the empty-filter Query fast path uses) rather
+// than scanning from row 0. index is bounds-checked against the footer's exact
+// row count; an out-of-range index is an error.
+func (p *parquetBackend) GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if index < 0 || index >= p.total {
+		return nil, false, fmt.Errorf("query: parquetBackend.GetCell: index %d out of range [0,%d)", index, p.total)
+	}
+	recs, err := p.readWindow(ctx, index, 1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(recs) == 0 {
+		return nil, false, fmt.Errorf("query: parquetBackend.GetCell: index %d past end of file", index)
+	}
+	return resolveFullCell(recs[0], segs)
 }
 
 // Close closes the underlying *os.File. Every *parquet.GenericReader this
