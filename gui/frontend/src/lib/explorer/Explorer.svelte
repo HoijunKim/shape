@@ -13,6 +13,8 @@
   import TransformPanel from "./TransformPanel.svelte";
   import ExportDialog from "./ExportDialog.svelte";
   import CodegenPanel from "./CodegenPanel.svelte";
+  import SearchBar from "./SearchBar.svelte";
+  import ValueTreeOverlay from "./ValueTreeOverlay.svelte";
 
   // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
   // siblings under App.svelte (Explorer never mounts Header), so App owns
@@ -79,6 +81,43 @@
     void explorer.open($explorer.path);
   }
 
+  // E6 Task 7: the cell value-tree overlay. Explorer owns the fetch + the
+  // overlay's open/loading/error/value state; DataTable only dispatches which
+  // cell was clicked. A concurrency guard (cellReq) keeps a slow fetch for cell
+  // A from landing into the overlay after the user has clicked cell B.
+  let cellOpen = false;
+  let cellLoading = false;
+  let cellError = "";
+  let cellValue: unknown = null;
+  let cellFound = true;
+  let cellLabel = "";
+  let cellReq = 0;
+
+  async function onExpandCell(e: CustomEvent<{ index: number; path: string }>): Promise<void> {
+    const { index, path } = e.detail;
+    const myReq = ++cellReq;
+    cellOpen = true;
+    cellLoading = true;
+    cellError = "";
+    cellLabel = path;
+    try {
+      const res = await explorer.getCell(index, path);
+      if (myReq !== cellReq) return; // superseded by a newer expand click
+      cellValue = res.value;
+      cellFound = res.found;
+      cellLoading = false;
+    } catch (err) {
+      if (myReq !== cellReq) return;
+      cellError = String(err);
+      cellLoading = false;
+    }
+  }
+
+  function closeCell(): void {
+    cellReq++; // any in-flight fetch must not reopen the overlay after this
+    cellOpen = false;
+  }
+
   // E3 Task 8: the empty state's "Clear filter" affordance -- distinct from
   // StatusBar's Cancel (which only stops an in-flight CountMatches via
   // explorer.cancelCount()). This resets the filter to match-all so the
@@ -134,6 +173,10 @@
         />
       </div>
       <div class="main">
+        <!-- E6: the global search box is ALWAYS visible here (never gated
+             behind the filter panel's `{#if open}`), so a search is reachable
+             the moment a file is open. -->
+        <SearchBar />
         <!-- A5: a MID-SCROLL page-fetch failure must be non-destructive -- it
              must not discard an already-rendered grid or the user's scroll
              position (unlike `status === "error"` above, which owns the
@@ -165,6 +208,13 @@
             </p>
             <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
           </div>
+        {:else if $explorer.search !== "" && $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
+          <!-- E6 §8: a searched-but-empty result is distinct from an empty file.
+               The search box's own ✕ clears it, so no clear button here. -->
+          <div class="empty-state">
+            <p>No rows match your search</p>
+            <p class="hint">no field contains “{$explorer.search}”</p>
+          </div>
         {:else if $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
           <div class="empty-state">
             <p>No rows in this file</p>
@@ -187,6 +237,7 @@
             focusPath={$explorer.focusPath}
             resetToken={$explorer.resetToken}
             on:focus={onFocus}
+            on:expandCell={onExpandCell}
           />
         {/if}
       </div>
@@ -232,6 +283,15 @@
       open={exportOpen}
       disabledReason={transformErrors[0] ?? ""}
       on:close={() => (exportOpen = false)}
+    />
+    <ValueTreeOverlay
+      open={cellOpen}
+      loading={cellLoading}
+      error={cellError}
+      value={cellValue}
+      found={cellFound}
+      label={cellLabel}
+      on:close={closeCell}
     />
   </div>
 {/if}

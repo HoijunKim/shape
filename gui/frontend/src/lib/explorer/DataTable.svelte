@@ -18,7 +18,19 @@
   // reacts. See the prevResetToken guard below.
   export let resetToken = 0;
 
-  const dispatch = createEventDispatcher<{ focus: { path: string } }>();
+  const dispatch = createEventDispatcher<{
+    focus: { path: string };
+    // E6 Task 7: a click on a container (object/array) cell's expand affordance
+    // asks Explorer to fetch and show the cell's FULL value. index is the
+    // absolute Row.Index the table already rendered; path is the column path.
+    expandCell: { index: number; path: string };
+  }>();
+
+  // Only object/array cells get an expand affordance -- a scalar's full value
+  // is already shown in the cell. Mirrors CellView's container branches.
+  function isContainerCell(kind: CellKind): boolean {
+    return kind === CellKind.OBJECT || kind === CellKind.ARRAY;
+  }
 
   const ROW_H = 28;
   const HEADER_H = 32;
@@ -310,6 +322,15 @@
             >
               {#if row && row.cells[c]}
                 <CellView cell={row.cells[c]} align={alignForKind(row.cells[c].kind)} />
+                {#if isContainerCell(row.cells[c].kind)}
+                  <button
+                    type="button"
+                    class="expand-btn"
+                    aria-label="Expand value"
+                    title="Expand value"
+                    on:click={() => dispatch("expandCell", { index: row.index, path: col.path })}
+                  >⤢</button>
+                {/if}
               {:else if row}
                 <!-- Row landed but this column has no cell. That is a real
                      absence, not a pending fetch, so it must NOT render as a
@@ -433,6 +454,45 @@
     overflow: hidden;
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
+  }
+
+  /* The expand affordance on a container cell. Quiet by default (opacity, not
+     display:none, so it stays discoverable and clickable), lifted on hover of
+     its own cell. */
+  .expand-btn {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .data-cell:hover .expand-btn,
+  .expand-btn:focus-visible {
+    opacity: 1;
+  }
+
+  .expand-btn:hover {
+    color: var(--accent);
+    background: var(--surface-3);
+  }
+
+  .expand-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .skeleton-bar {

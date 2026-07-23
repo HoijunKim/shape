@@ -24,7 +24,7 @@ import { get } from "svelte/store";
 import Explorer from "./Explorer.svelte";
 import { explorer } from "./store";
 import { pageRowsFor } from "./paging";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, GetCell } from "../../../wailsjs/go/main/App";
 
 vi.mock("../../../wailsjs/go/main/App", () => ({
   OpenSource: vi.fn(),
@@ -38,6 +38,8 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   // E4: Explorer now mounts ExportDialog, which imports these.
   ExportQuery: vi.fn(),
   SaveFileDialog: vi.fn(),
+  // E6: store.getCell -> GetCell for the value-tree overlay.
+  GetCell: vi.fn(() => Promise.resolve({ value: null, found: false })),
 }));
 vi.mock("../../../wailsjs/runtime", () => ({ EventsOn: vi.fn(() => () => {}) }));
 
@@ -109,6 +111,7 @@ describe("Explorer", () => {
     vi.mocked(CloseSource).mockReset().mockResolvedValue(undefined as any);
     vi.mocked(Cancel).mockReset().mockResolvedValue(undefined as any);
     vi.mocked(CountMatches).mockReset();
+    vi.mocked(GetCell).mockReset().mockResolvedValue({ value: null, found: false } as any);
     await explorer.close();
     vi.mocked(CloseSource).mockClear(); // don't count close()'s own no-op call
     target = document.createElement("div");
@@ -692,6 +695,63 @@ describe("Explorer", () => {
       );
       setFilterSpy.mockRestore();
     });
+  });
+
+  // E6 §6: the search box must be reachable without opening the filter panel.
+  // Mutation: nest SearchBar inside FilterBar's `{#if open}` -> with the panel
+  // closed the input is absent and this fails.
+  it("renders the global search box even when the filter panel is closed", async () => {
+    const columns = [makeColumn("a")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", columns, [makeField("a")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+    cmp = new Explorer({ target, props: { filterOpen: false } }) as unknown as { $destroy: () => void };
+    await explorer.open("file.ndjson");
+    await tick();
+
+    const searchInput = target.querySelector('input[aria-label="Search all fields"]');
+    expect(searchInput, "the search box must be visible with the filter panel closed").toBeTruthy();
+  });
+
+  // E6 Task 7: clicking a container cell's expand affordance fetches the full
+  // value (explorer.getCell -> GetCell) and mounts it in the ValueTree overlay.
+  it("expands a container cell into the value-tree overlay via getCell", async () => {
+    const columns = [makeColumn("obj")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", columns, [makeField("obj")]));
+    // Page 0's single row has an OBJECT cell and a NON-zero absolute index (7),
+    // so the test proves the dispatch carries row.index, not the render slot.
+    vi.mocked(QueryRows).mockResolvedValue({
+      columns,
+      rows: [{ index: 7, cells: [{ kind: "object", str: "{…}", count: 2, hasMore: true }] }],
+      offset: 0, total: 10, totalExact: true, scanned: 1, truncated: false, elapsedMs: 0,
+      columnsTruncated: false, totalPaths: 1,
+    } as any);
+    vi.mocked(GetCell).mockResolvedValue({ value: { alpha: 1, beta: "greeting" }, found: true } as any);
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("file.ndjson");
+    await tick();
+    await tick();
+
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    Object.defineProperty(viewportEl, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 600, configurable: true });
+    window.dispatchEvent(new Event("resize")); // recompute the row/col window with real dims
+    await tick();
+
+    const expandBtn = target.querySelector(".expand-btn") as HTMLButtonElement;
+    expect(expandBtn, "a container cell must show an expand affordance").toBeTruthy();
+    expandBtn.click();
+    await flush();
+    await tick();
+
+    expect(vi.mocked(GetCell)).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 7, path: "obj" }),
+    );
+    const dialog = target.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog, "the value-tree overlay must open").toBeTruthy();
+    expect(dialog.textContent).toContain("alpha");
+    expect(dialog.textContent).toContain("greeting");
   });
 });
 
