@@ -69,11 +69,22 @@ func TestJQProgram_Search_Goldens(t *testing.T) {
 		}
 	})
 
-	t.Run("empty search adds nothing", func(t *testing.T) {
-		base, _, _ := jqProgram(ageGt, Transform{}, CodegenContext{Format: "ndjson", Cols: cm})
-		withEmpty, _, _ := jqProgram(ageGt, Transform{}, CodegenContext{Format: "ndjson", Search: "", Cols: cm})
-		if base != withEmpty {
-			t.Fatalf("empty search changed the jq program:\n%s\nvs\n%s", base, withEmpty)
+	// Review #1: assert the no-op property DIRECTLY (an empty search emits no
+	// search clause), not by comparing two Search=="" calls -- a tautology,
+	// since both carry the same value. Mutation: drop the `if ctx.Search != ""`
+	// guard in jqProgram -> an empty search emits `any(contains(""))` and the
+	// absence check fails. The non-empty half keeps it discriminating.
+	t.Run("empty search emits no search clause", func(t *testing.T) {
+		prog, _, err := jqProgram(ageGt, Transform{}, CodegenContext{Format: "ndjson", Cols: cm})
+		if err != nil {
+			t.Fatalf("jqProgram: %v", err)
+		}
+		if strings.Contains(prog, "any(contains(") {
+			t.Fatalf("empty search emitted a search clause:\n%s", prog)
+		}
+		withSearch, _, _ := jqProgram(ageGt, Transform{}, CodegenContext{Format: "ndjson", Search: "x", Cols: cm})
+		if !strings.Contains(withSearch, "any(contains(") {
+			t.Fatalf("a non-empty search should add a search clause:\n%s", withSearch)
 		}
 	})
 }
@@ -113,11 +124,45 @@ func TestSQLQuery_Search_Goldens(t *testing.T) {
 		}
 	})
 
-	t.Run("empty search adds nothing", func(t *testing.T) {
-		base, _, _ := sqlQuery(ageGt, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Cols: cm})
-		withEmpty, _, _ := sqlQuery(ageGt, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Search: "", Cols: cm})
-		if base != withEmpty {
-			t.Fatalf("empty search changed the SQL:\n%s\nvs\n%s", base, withEmpty)
+	// Review #2: assert the no-op DIRECTLY (empty search emits no instr clause),
+	// not by comparing two Search=="" calls. Mutation: drop the guard around
+	// sqlSearchClause -> an empty search emits instr(lower(...),lower('')) and
+	// the absence check fails.
+	t.Run("empty search emits no search clause", func(t *testing.T) {
+		sql, _, err := sqlQuery(ageGt, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Cols: cm})
+		if err != nil {
+			t.Fatalf("sqlQuery: %v", err)
+		}
+		if strings.Contains(sql, "instr(lower(") {
+			t.Fatalf("empty search emitted a search clause:\n%s", sql)
+		}
+		withSearch, _, _ := sqlQuery(ageGt, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Search: "x", Cols: cm})
+		if !strings.Contains(withSearch, "instr(lower(") {
+			t.Fatalf("a non-empty search should add a search clause:\n%s", withSearch)
+		}
+	})
+
+	// Review #4: a source with NO top-level (dot/bracket-free) column cannot
+	// represent the search in the illustrative SQL. It must NOT silently emit a
+	// filter-only/SELECT-* query that looks search-inclusive -- it must carry a
+	// caveat. Mutation: drop the `else { warnings = append(..., warnSearchUnrepSQL) }`
+	// branch -> the query has no search clause AND no caveat, and this fails.
+	t.Run("search with no top-level column emits the unrepresented caveat", func(t *testing.T) {
+		nestedOnly := []map[string]any{{"user": map[string]any{"city": "london", "name": "x"}}}
+		disc, prof := discoverAndProfile(nestedOnly)
+		cmNested := buildColumnModel(disc, prof, nil)
+		sql, warnings, err := sqlQuery(Filter{}, Transform{}, CodegenContext{Format: "ndjson", Search: "lond", Cols: cmNested})
+		if err != nil {
+			t.Fatalf("sqlQuery: %v", err)
+		}
+		if strings.Contains(sql, "instr(lower(") {
+			t.Fatalf("expected no search clause (no top-level column):\n%s", sql)
+		}
+		if !containsWarning(warnings, warnSearchUnrepSQL) {
+			t.Fatalf("expected the unrepresented-search caveat in the warnings: %v", warnings)
+		}
+		if !strings.Contains(sql, "-- note: the global search is NOT represented") {
+			t.Fatalf("expected the -- note about the unrepresented search:\n%s", sql)
 		}
 	})
 }

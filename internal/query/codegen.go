@@ -27,6 +27,7 @@ const (
 	warnIllustrativeSQL = "this source is not a database: the SQL is illustrative, over a flat table named data"
 	warnSearchNumericJQ = "global search matches numbers on their source text, but jq's tostring canonicalises them (e.g. 1e3 becomes \"1E+3\"), so a search for an exponent or odd-decimal number can match shape yet not this jq"
 	warnSearchColumnSQL = "the global search here only covers the source's top-level columns; shape searches every nested leaf value generically"
+	warnSearchUnrepSQL  = "the global search is not represented in this illustrative SQL: it searches nested leaf values and this source has no top-level column to translate it onto"
 )
 
 // jqIdentRe matches a path segment that can be written as a bare jq field

@@ -104,24 +104,47 @@ func TestEngine_Search_ComposesWithFilter(t *testing.T) {
 	}
 }
 
+// TestEngine_Search_EmptyIsByteIdenticalToNoSearch pins the ACTUAL contract at
+// the compile level (review #3): CompileFilterWithSearch(f, "", cm) is
+// byte-identical to CompileFilter(f, cm) -- same canonical key AND src
+// preserved (non-nil), so an empty search costs no predicate and never disturbs
+// pure-filter pushdown. Comparing two QueryRows calls that both send Search==""
+// (the old version) was a tautology: they carry the same value, so any
+// empty-search regression would change BOTH identically and stay green. The
+// non-empty half keeps this discriminating -- a real search MUST change the key
+// and null src.
 func TestEngine_Search_EmptyIsByteIdenticalToNoSearch(t *testing.T) {
 	maps := fixtureRecords()
-	path := writeNDJSONFile(t, maps)
-	e := NewEngine()
-	res, err := e.OpenSource(context.Background(), OpenRequest{Path: path})
+	disc, prof := discoverAndProfile(maps)
+	cm := buildColumnModel(disc, prof, nil)
+	f := evenFilter()
+
+	plain, err := CompileFilter(f, cm)
 	if err != nil {
-		t.Fatalf("OpenSource: %v", err)
+		t.Fatalf("CompileFilter: %v", err)
 	}
-	a, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: evenFilter(), Limit: 10, WantTotal: true})
+	withEmpty, err := CompileFilterWithSearch(f, "", cm)
 	if err != nil {
-		t.Fatalf("QueryRows(no search): %v", err)
+		t.Fatalf("CompileFilterWithSearch(\"\"): %v", err)
 	}
-	b, err := e.QueryRows(context.Background(), QueryRequest{Handle: res.Handle, Filter: evenFilter(), Search: "", Limit: 10, WantTotal: true})
+	if withEmpty.Key() != plain.Key() {
+		t.Fatalf("empty-search key %q != plain key %q", withEmpty.Key(), plain.Key())
+	}
+	if withEmpty.src == nil {
+		t.Fatalf("empty search nulled src -- pure-filter pushdown would be lost")
+	}
+
+	// Discriminating half: a NON-empty search MUST change the key (so caches
+	// never alias it) and null src (so sqlBackend cannot push it away).
+	withSearch, err := CompileFilterWithSearch(f, "london", cm)
 	if err != nil {
-		t.Fatalf("QueryRows(empty search): %v", err)
+		t.Fatalf("CompileFilterWithSearch(\"london\"): %v", err)
 	}
-	if a.Total != b.Total || len(a.Rows) != len(b.Rows) {
-		t.Fatalf("empty search changed results: %d/%d vs %d/%d", a.Total, len(a.Rows), b.Total, len(b.Rows))
+	if withSearch.Key() == plain.Key() {
+		t.Fatalf("a non-empty search must change the canonical key")
+	}
+	if withSearch.src != nil {
+		t.Fatalf("a non-empty search must null src (the pushdown fallback)")
 	}
 }
 

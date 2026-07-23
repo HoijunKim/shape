@@ -358,6 +358,13 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 		if sc := sqlSearchClause(ctx.Search, ctx); sc != "" {
 			whereParts = append(whereParts, sc)
 			warnings = append(warnings, warnCaseInsensitive, warnSearchColumnSQL)
+		} else {
+			// A search is active but there is no top-level column to translate
+			// it onto, so the illustrative SQL cannot represent it at all. Say
+			// so with a caveat -- otherwise a filter-only (or bare SELECT *)
+			// statement would look like a complete, search-inclusive query
+			// while silently returning a LARGER row set than the engine.
+			warnings = append(warnings, warnSearchUnrepSQL)
 		}
 	}
 	if len(whereParts) > 0 {
@@ -378,6 +385,9 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 	}
 	if containsWarning(warnings, warnSearchColumnSQL) {
 		lines = append(lines, "-- note: shape's search scans every leaf value generically; this SQL only covers the source's top-level columns")
+	}
+	if containsWarning(warnings, warnSearchUnrepSQL) {
+		lines = append(lines, "-- note: the global search is NOT represented below -- it matches nested leaf values and this source has no top-level column to translate it onto, so this query returns more rows than the searched view")
 	}
 	return strings.Join(lines, "\n"), warnings, nil
 }
