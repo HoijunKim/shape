@@ -15,6 +15,8 @@
   // E4: the columns panel's toggle state, owned by App.svelte exactly like
   // filterOpen (Header and Explorer are siblings there).
   export let columnsOpen = false;
+  // E5: the jq/SQL panel's toggle, owned by App.svelte like the others.
+  export let codeOpen = false;
 
   const dispatch = createEventDispatcher<{
     open: void;
@@ -22,6 +24,7 @@
     toggleTheme: void;
     toggleFilter: void;
     toggleColumns: void;
+    toggleCode: void;
     exportData: void;
   }>();
 
@@ -62,6 +65,13 @@
       title="Filter"
     >
       Filter
+    </button>
+    <button
+      on:click={() => dispatch("toggleCode")}
+      aria-pressed={codeOpen}
+      title="Show the equivalent jq and SQL"
+    >
+      Code
     </button>
     <button on:click={() => dispatch("open")}>Open</button>
     <!-- The pre-E4 "Export schema" action, kept working and demoted to a

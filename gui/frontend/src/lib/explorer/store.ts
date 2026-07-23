@@ -1,7 +1,7 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
-import type { Column, CountResult, ExportResult, FieldDTO, Filter, OpenResult, RowSet, Transform } from "./types";
+import type { Column, CountResult, ExportResult, FieldDTO, Filter, Generated, OpenResult, RowSet, Transform } from "./types";
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
@@ -69,6 +69,10 @@ export interface ExplorerState {
   exportRows: number;
   exportError: string;
   exportResult: ExportResult | null;
+  // E5: the jq/SQL equivalent of the CURRENT filter+transform, refreshed
+  // whenever either changes. null until the first refresh lands.
+  codegen: Generated | null;
+  codegenError: string;
   // A5: a mid-scroll page-fetch failure (as opposed to an open()-time
   // failure, which still owns the whole pane via `status`/`error`) must be
   // non-destructive -- it must NOT discard an already-rendered grid or the
@@ -86,6 +90,7 @@ const empty: ExplorerState = {
   counting: false, matchCount: -1, matchExact: false,
   transformActive: false,
   exporting: false, exportRows: 0, exportError: "", exportResult: null,
+  codegen: null, codegenError: "",
 };
 
 function createExplorer() {
@@ -200,6 +205,7 @@ function createExplorer() {
         focusPath: (res.columns && res.columns.length > 0) ? res.columns[0].path : "",
       }));
       await ensurePages(0, 0);
+      void refreshCodegen();
     } catch (e) {
       if (myGen !== gen) return; // superseded: a healthy newer file must not be marked errored by this one's failure
       update((s) => ({ ...s, status: "error", error: String(e) }));
@@ -439,6 +445,7 @@ function createExplorer() {
     if (active && s.tier !== "memory") {
       void startCount(s.handle, f, countGen);
     }
+    void refreshCodegen();
   }
 
 
@@ -476,6 +483,36 @@ function createExplorer() {
       pageError: "",
     }));
     void ensurePages(0, 0);
+    void refreshCodegen();
+  }
+
+  /** E5: re-renders the jq/SQL equivalent of the current filter+transform.
+   *
+   *  Guarded on `gen`, not on `handle`: none of the three triggers
+   *  (open/setFilter/setTransform) changes the handle, all of them bump gen
+   *  first, and Wails runs every binding call in its own goroutine -- so
+   *  resolution order is not call order and a stale render could otherwise
+   *  overwrite a newer one.
+   *
+   *  A failure leaves the LAST GOOD output in place and only sets
+   *  codegenError: blanking on every failed keystroke would make the panel
+   *  flicker, and a stale-but-labelled program is more useful than an empty
+   *  box. There is deliberately no loading flag -- the call is pure and
+   *  instant (Engine.Codegen never touches data). */
+  async function refreshCodegen(): Promise<void> {
+    const s = get({ subscribe });
+    if (!s.handle) return;
+    const myGen = gen;
+    try {
+      const res: Generated = await Codegen({
+        handle: s.handle, filter: currentFilter, transform: currentTransform,
+      } as any);
+      if (myGen !== gen) return;
+      update((st) => ({ ...st, codegen: res, codegenError: "" }));
+    } catch (e) {
+      if (myGen !== gen) return;
+      update((st) => ({ ...st, codegenError: String(e) }));
+    }
   }
 
   /** E4: exports the CURRENT filter + transform to outPath. The engine streams
@@ -554,6 +591,7 @@ function createExplorer() {
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
     setFilter, cancelCount, setTransform, runExport, cancelExport, dismissExport,
+    refreshCodegen,
   };
 }
 

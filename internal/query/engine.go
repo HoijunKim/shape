@@ -22,9 +22,13 @@ import (
 type Engine struct {
 	mu       sync.Mutex
 	backends map[string]Backend
-	// sources maps a handle to the path its Backend was opened from, so
-	// ExportQuery can refuse to overwrite the file being read (see register).
-	sources map[string]string
+	// sources maps a handle to what the Engine knows ABOUT that source but
+	// cannot ask the Backend for: the path it was opened from (so ExportQuery
+	// can refuse to overwrite the file being read) and the format/table
+	// Codegen needs to render an invocation note and a FROM clause. The
+	// Backend interface deliberately exposes none of this -- a Backend serves
+	// rows, it does not describe its own provenance.
+	sources map[string]sourceMeta
 	next    uint64
 
 	// inflight maps a caller-supplied RequestID to the CancelFunc of the ctx
@@ -47,7 +51,7 @@ type inflightEntry struct {
 func NewEngine() *Engine {
 	return &Engine{
 		backends: make(map[string]Backend),
-		sources:  make(map[string]string),
+		sources:  make(map[string]sourceMeta),
 		inflight: make(map[string]inflightEntry),
 	}
 }
@@ -318,7 +322,7 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 	ctx, release := e.begin(ctx, req.RequestID)
 	defer release()
 
-	backend, format, tier, err := openBackend(ctx, req)
+	backend, format, tier, cgFormat, err := openBackend(ctx, req)
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -341,7 +345,14 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 		warnings = append(warnings, "large file — streaming mode (totals are estimates)")
 	}
 
-	handle := e.register(backend, req.Path)
+	meta := sourceMeta{path: req.Path, format: cgFormat}
+	// The RESOLVED table, not req.Table -- which is usually "" and let
+	// sqliteChooseTable pick. Same-package assertion rather than a new
+	// Backend method: provenance is the Engine's business, not a Backend's.
+	if sb, ok := backend.(*sqlBackend); ok {
+		meta.table = sb.table
+	}
+	handle := e.register(backend, meta)
 	res := OpenResult{
 		Handle:      handle,
 		Format:      string(format),
@@ -440,21 +451,37 @@ func (e *Engine) CloseSource(handle string) error {
 // write onto the very file the handle is reading from -- it is deliberately not
 // part of the Backend interface, which has no business knowing about export
 // destinations.
-func (e *Engine) register(backend Backend, path string) string {
+func (e *Engine) register(backend Backend, meta sourceMeta) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.next++
 	handle := fmt.Sprintf("h%d", e.next)
 	e.backends[handle] = backend
-	if path != "" {
-		e.sources[handle] = path
-	}
+	// Unconditional: a backend with no path (a test double) still has a
+	// format and a table, and gating the whole write on the path would drop
+	// those too.
+	e.sources[handle] = meta
 	return handle
+}
+
+// sourceMeta is what the Engine remembers about an open source beyond its
+// Backend.
+type sourceMeta struct {
+	path   string // file path, "" for a backend that has none
+	format string // codegen format: json|ndjson|csv|parquet|sqlite
+	table  string // resolved SQLite table name, "" otherwise
 }
 
 // sourcePath returns the file path handle was opened from, or "" if the handle
 // is unknown or was registered without one.
 func (e *Engine) sourcePath(handle string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.sources[handle].path
+}
+
+// sourceMetaOf returns what the Engine knows about handle's source.
+func (e *Engine) sourceMetaOf(handle string) sourceMeta {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.sources[handle]

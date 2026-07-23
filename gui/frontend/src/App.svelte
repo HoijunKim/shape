@@ -27,6 +27,7 @@
   // Both are bindable on Explorer so it can close the dialog itself.
   let columnsOpen = false;
   let exportOpen = false;
+  let codeOpen = false;
 
   async function load(path: string): Promise<void> {
     if (!path) return;
@@ -86,11 +87,13 @@
     {theme}
     {filterOpen}
     {columnsOpen}
+    {codeOpen}
     on:open={open}
     on:export={exportSchema}
     on:toggleTheme={toggleTheme}
     on:toggleFilter={() => (filterOpen = !filterOpen)}
     on:toggleColumns={() => (columnsOpen = !columnsOpen)}
+    on:toggleCode={() => (codeOpen = !codeOpen)}
     on:exportData={() => (exportOpen = true)}
   />
 
@@ -99,7 +102,7 @@
       <p class="error" role="alert">{exportError}</p>
     {/if}
 
-    <Explorer on:open={open} bind:filterOpen bind:columnsOpen bind:exportOpen />
+    <Explorer on:open={open} bind:filterOpen bind:columnsOpen bind:exportOpen bind:codeOpen />
   </div>
 </main>
 

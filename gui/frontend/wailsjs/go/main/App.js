@@ -10,6 +10,10 @@ export function CloseSource(arg1) {
   return window['go']['main']['App']['CloseSource'](arg1);
 }
 
+export function Codegen(arg1) {
+  return window['go']['main']['App']['Codegen'](arg1);
+}
+
 export function CountMatches(arg1) {
   return window['go']['main']['App']['CountMatches'](arg1);
 }

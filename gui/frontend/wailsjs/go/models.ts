@@ -32,32 +32,6 @@ export namespace query {
 	        this.hasMore = source["hasMore"];
 	    }
 	}
-	export class Column {
-	    path: string;
-	    name: string;
-	    type: string;
-	    nullable: boolean;
-	    presence: number;
-	    distinct: number;
-	    container: boolean;
-	    index: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new Column(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.name = source["name"];
-	        this.type = source["type"];
-	        this.nullable = source["nullable"];
-	        this.presence = source["presence"];
-	        this.distinct = source["distinct"];
-	        this.container = source["container"];
-	        this.index = source["index"];
-	    }
-	}
 	export class ColumnSpec {
 	    path: string;
 	    as?: string;
@@ -71,6 +45,40 @@ export namespace query {
 	        this.path = source["path"];
 	        this.as = source["as"];
 	    }
+	}
+	export class Transform {
+	    select?: ColumnSpec[];
+	    drop?: string[];
+	    flattenObjects: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Transform(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.select = this.convertValues(source["select"], ColumnSpec);
+	        this.drop = source["drop"];
+	        this.flattenObjects = source["flattenObjects"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Value {
 	    kind: string;
@@ -182,6 +190,68 @@ export namespace query {
 		    return a;
 		}
 	}
+	export class CodegenRequest {
+	    handle: string;
+	    filter: Filter;
+	    transform: Transform;
+	
+	    static createFrom(source: any = {}) {
+	        return new CodegenRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.handle = source["handle"];
+	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.transform = this.convertValues(source["transform"], Transform);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Column {
+	    path: string;
+	    name: string;
+	    type: string;
+	    nullable: boolean;
+	    presence: number;
+	    distinct: number;
+	    container: boolean;
+	    index: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Column(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.nullable = source["nullable"];
+	        this.presence = source["presence"];
+	        this.distinct = source["distinct"];
+	        this.container = source["container"];
+	        this.index = source["index"];
+	    }
+	}
+	
+	
 	export class CountRequest {
 	    requestId?: string;
 	    handle: string;
@@ -231,40 +301,6 @@ export namespace query {
 	        this.exact = source["exact"];
 	        this.elapsedMs = source["elapsedMs"];
 	    }
-	}
-	export class Transform {
-	    select?: ColumnSpec[];
-	    drop?: string[];
-	    flattenObjects: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new Transform(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.select = this.convertValues(source["select"], ColumnSpec);
-	        this.drop = source["drop"];
-	        this.flattenObjects = source["flattenObjects"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 	export class ExportRequest {
 	    requestId?: string;
@@ -403,6 +439,22 @@ export namespace query {
 		}
 	}
 	
+	export class Generated {
+	    jq: string;
+	    sql: string;
+	    warnings?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Generated(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jq = source["jq"];
+	        this.sql = source["sql"];
+	        this.warnings = source["warnings"];
+	    }
+	}
 	export class OpenRequest {
 	    requestId?: string;
 	    path: string;

@@ -32,6 +32,9 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   CloseSource: vi.fn(),
   Cancel: vi.fn(),
   CountMatches: vi.fn(),
+  // E5: store.ts calls Codegen; a bare vi.fn() resolves undefined and the
+  // first property read on the result throws.
+  Codegen: vi.fn(() => Promise.resolve({ jq: ".", sql: "SELECT * FROM data;", warnings: [] })),
   // E4: Explorer now mounts ExportDialog, which imports these.
   ExportQuery: vi.fn(),
   SaveFileDialog: vi.fn(),

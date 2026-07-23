@@ -270,12 +270,28 @@ func Codegen(f Filter, t Transform, ctx CodegenContext) (Generated, error)
 | eq | `(.p != null and .p == V)` | `"p" = V` |
 | ne | `(.p != null and .p != V)` | `"p" <> V` |
 | lt/lte/gt/gte | `(.p != null and .p < V)` … | `"p" < V` … |
-| contains (CS/CI) | `(.p\|type=="string" and (.p\|contains(V)))` / `…ascii_downcase…` | `instr("p",V)>0` / `instr(lower("p"),lower(V))>0` |
-| regex | `(.p\|type=="string" and (.p\|test(R)))` | `"p" REGEXP 'R'` + caveat comment; **never pushed down** |
+| contains (CS/CI) | `((.p\|type=="string") and (.p\|contains(V)))` / `…ascii_downcase…` | `instr("p",V)>0` / `instr(lower("p"),lower(V))>0` |
+| regex | `((.p\|type=="string") and (.p\|test(R)))` | `"p" REGEXP 'R'` + caveat comment; **never pushed down** |
 | in | `(.p as $x\|any(V1,V2,…;.==$x))` | `"p" IN (V1,V2,…)` |
 | isnull / notnull | `(.p == null)` / `(.p != null)` | `"p" IS NULL` / `"p" IS NOT NULL` |
 | bool | `(.p == true)` / `(.p == false)` | `"p" = 1` / `"p" = 0` |
 | `[]`+op | `any(.tags[]; . <op> V)` | `EXISTS(SELECT 1 FROM json_each("tags") j WHERE j.value <op> V)` |
+
+> **Correction (E5, verified against jq 1.7.1).** The jq templates in this
+> section were written with the parentheses in the wrong place. jq's `|` is the
+> LOWEST-precedence operator and rebinds `.`, so `(.p|type=="string" and
+> (.p|contains(V)))` parses as `.p | (type=="string" and (.p|contains(V)))`;
+> the inner `.p` then indexes the already-piped string and jq aborts with
+> "Cannot index string with string" -- on precisely the rows the condition was
+> meant to match, because `and` short-circuits. Every `|` inside a generated
+> expression must be parenthesised on its own. Three further deviations E5
+> makes deliberately, all for the same reason (this section's forms do not
+> match the Go semantics in §5): `ne` and the ordering ops carry an explicit
+> guard on the OPERAND's kind, since jq orders across types while the engine
+> returns false on a mismatch; every path segment is `?`-suffixed and each
+> condition wrapped in `(... ) // false`, so one sparse record cannot abort the
+> whole stream; and `[]`-paths use `any(.tags[]?; ...)`. See
+> `docs/superpowers/plans/2026-07-23-shape-e5-codegen.md` decisions 13-15.
 
 **Groups/negate:** jq `(… and …)`/`(… or …)`/`(… \| not)`; SQL `(… AND …)`/`(… OR …)`/`NOT (…)` — always parenthesized (stable golden strings). **Value escaping:** jq strings/regex → `json.Marshal` (exact JSON escaping); SQL strings → single-quoted with `'`→`''`; numbers as canonical `strconv`; bool→`true/false` (jq) / `1/0` (SQL); null→`null`/`NULL`. `contains` uses `instr` to sidestep `%`/`_`/`ESCAPE` foot-guns. Empty `in`-list → jq `false` / SQL `1=0` with a warning (never a syntax error). **Regex caveat comment** notes RE2 (shape's authority) ≠ jq Oniguruma ≠ SQLite REGEXP-function-required.
 

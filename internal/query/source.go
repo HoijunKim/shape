@@ -11,6 +11,7 @@ import (
 	"github.com/hoijun-kim/shape/internal/pipeline"
 	"github.com/hoijun-kim/shape/internal/profile"
 	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijun-kim/shape/internal/readers/jsonreader"
 )
 
 // DefaultMemBudgetBytes is OpenSource's default ingest budget (spec §4):
@@ -75,10 +76,34 @@ func fileSizeOf(path string) int64 {
 // cancelled (or dies partway through) makes this function return before a
 // handle is ever built, so Engine.OpenSource (its only caller) never
 // registers a Backend for a cancelled open.
-func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format readers.Format, tier string, err error) {
+// codegenFormatOf classifies a source for CODEGEN, which needs a finer
+// distinction than readers.Format offers: a JSON array and an NDJSON stream
+// are one readers.FormatJSON but need different jq invocations (".[] |" vs
+// none). It asks jsonreader.DetectMode -- the same function the reader itself
+// uses -- rather than trusting the caller's explicit flag, which is usually
+// empty.
+func codegenFormatOf(path, rawFormat string, peek []byte, format readers.Format) string {
+	switch format {
+	case readers.FormatJSON:
+		if jsonreader.DetectMode(path, rawFormat, peek) == jsonreader.LineMode {
+			return "ndjson"
+		}
+		return "json"
+	case readers.FormatCSV:
+		return "csv"
+	case readers.FormatParquet:
+		return "parquet"
+	case readers.FormatSQLite:
+		return "sqlite"
+	default:
+		return string(format)
+	}
+}
+
+func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format readers.Format, tier string, cgFormat string, err error) {
 	src, closeSrc, err := pipeline.OpenSource(req.Path)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("query: open %s: %w", req.Path, err)
+		return nil, "", "", "", fmt.Errorf("query: open %s: %w", req.Path, err)
 	}
 	defer closeSrc()
 	src.RawFormat = req.Format
@@ -86,30 +111,31 @@ func openBackend(ctx context.Context, req OpenRequest) (backend Backend, format 
 	src.Table = req.Table
 
 	format = readers.DetectFormat(req.Path, req.Format, src.Peek)
+	cgFormat = codegenFormatOf(req.Path, req.Format, src.Peek, format)
 
 	switch format {
 	case readers.FormatJSON, readers.FormatCSV:
 		stream, closeStream, oerr := openReaderStream(format, src)
 		if oerr != nil {
-			return nil, format, "", fmt.Errorf("query: open reader for %s: %w", req.Path, oerr)
+			return nil, format, "", cgFormat, fmt.Errorf("query: open reader for %s: %w", req.Path, oerr)
 		}
 		defer closeStream()
 		backend, tier, err = openIngestBackend(ctx, req.Path, format, req.Format, req.CSVRaw, stream, budgetBytesOf(req))
-		return backend, format, tier, err
+		return backend, format, tier, cgFormat, err
 	case readers.FormatSQLite:
 		sb, serr := newSQLBackend(ctx, req.Path, req.Table)
 		if serr != nil {
-			return nil, format, "", fmt.Errorf("query: open sqlite backend for %s: %w", req.Path, serr)
+			return nil, format, "", cgFormat, fmt.Errorf("query: open sqlite backend for %s: %w", req.Path, serr)
 		}
-		return sb, format, "sqlite", nil
+		return sb, format, "sqlite", cgFormat, nil
 	case readers.FormatParquet:
 		pb, perr := newParquetBackend(ctx, req.Path)
 		if perr != nil {
-			return nil, format, "", fmt.Errorf("query: open parquet backend for %s: %w", req.Path, perr)
+			return nil, format, "", cgFormat, fmt.Errorf("query: open parquet backend for %s: %w", req.Path, perr)
 		}
-		return pb, format, "parquet", nil
+		return pb, format, "parquet", cgFormat, nil
 	default:
-		return nil, format, "", fmt.Errorf("query: unsupported format %q", format)
+		return nil, format, "", cgFormat, fmt.Errorf("query: unsupported format %q", format)
 	}
 }
 

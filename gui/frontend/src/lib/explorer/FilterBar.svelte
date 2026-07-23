@@ -176,8 +176,6 @@
     padding: var(--space-3) var(--space-4);
     background: var(--surface-1);
     border-top: 1px solid var(--border);
-    max-height: 45vh;
-    overflow-y: auto;
     box-sizing: border-box;
   }
 

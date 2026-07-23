@@ -304,7 +304,7 @@ func TestExportQuery_RejectsBadRequestsWithoutTouchingTheFilesystem(t *testing.T
 
 func TestExportQuery_RejectsAnEmptyColumnSet(t *testing.T) {
 	eng := NewEngine()
-	handle := eng.register(&emptyColumnsBackend{}, "")
+	handle := eng.register(&emptyColumnsBackend{}, sourceMeta{})
 	out := filepath.Join(t.TempDir(), "out.csv")
 
 	if _, err := eng.ExportQuery(context.Background(), ExportRequest{
@@ -325,7 +325,7 @@ func TestExportQuery_RejectsAnEmptyColumnSet(t *testing.T) {
 func TestExportQuery_FailedExportLeavesNothingBehind(t *testing.T) {
 	eng := NewEngine()
 	boom := errors.New("backend exploded")
-	handle := eng.register(&scriptedExportBackend{cols: oneColumnModel(t), err: boom}, "")
+	handle := eng.register(&scriptedExportBackend{cols: oneColumnModel(t), err: boom}, sourceMeta{})
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.ndjson")
 
@@ -364,7 +364,7 @@ func TestExportQuery_CancelledShortExportIsNotRenamed(t *testing.T) {
 			<-release
 		},
 	}
-	handle := eng.register(be, "")
+	handle := eng.register(be, sourceMeta{})
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.ndjson")
 
@@ -421,7 +421,7 @@ func TestExportQuery_ReplacesAnExistingDestination(t *testing.T) {
 
 func TestExportQuery_FailedExportLeavesAnExistingDestinationIntact(t *testing.T) {
 	eng := NewEngine()
-	handle := eng.register(&scriptedExportBackend{cols: oneColumnModel(t), err: errors.New("boom")}, "")
+	handle := eng.register(&scriptedExportBackend{cols: oneColumnModel(t), err: errors.New("boom")}, sourceMeta{})
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.ndjson")
 	if err := os.WriteFile(out, []byte("OLD CONTENT\n"), 0o644); err != nil {

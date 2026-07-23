@@ -83,6 +83,22 @@ type Filter struct {
 type CompiledFilter struct {
 	pred func(rec any) bool
 	key  string // canonical Filter hash; see Key
+
+	// src is the Filter this predicate was compiled from, retained so a
+	// backend that can push work to its storage engine (sqlBackend) can
+	// inspect the AST -- the closure above is opaque, and neither
+	// CompiledPlan nor Backend.Query carries the original.
+	//
+	// It is a POINTER on purpose. The zero Filter IS the match-all filter, so
+	// a hand-built &CompiledFilter{pred: ...} (which this package's own tests
+	// do, to decorate a real predicate) would present as "empty filter" and a
+	// planner would push a WHERE-less query returning EVERY row while the
+	// predicate was supposed to filter. nil means "unknown -- do not push",
+	// which is the only safe default.
+	//
+	// The retained Filter must not be mutated after compilation: its slices
+	// are shared with the caller.
+	src *Filter
 }
 
 // Key returns a canonical, stable cache key for the Filter this predicate was
@@ -131,13 +147,13 @@ func CompileFilter(f Filter, cm *ColumnModel) (*CompiledFilter, error) {
 		return nil, fmt.Errorf("query: compile filter: key: %w", err)
 	}
 	if isEmptyFilter(f) {
-		return &CompiledFilter{key: key}, nil // nil pred: match-all
+		return &CompiledFilter{key: key, src: &f}, nil // nil pred: match-all
 	}
 	pred, err := compileGroup(f, cm)
 	if err != nil {
 		return nil, err
 	}
-	return &CompiledFilter{pred: pred, key: key}, nil
+	return &CompiledFilter{pred: pred, key: key, src: &f}, nil
 }
 
 // isEmptyFilter reports whether f has no Conditions, no Groups, and no

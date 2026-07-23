@@ -7,6 +7,8 @@ export function Cancel(arg1:string):Promise<void>;
 
 export function CloseSource(arg1:string):Promise<void>;
 
+export function Codegen(arg1:query.CodegenRequest):Promise<query.Generated>;
+
 export function CountMatches(arg1:query.CountRequest):Promise<query.CountResult>;
 
 export function DiffFiles(arg1:string,arg2:string):Promise<visual.DiffVisualModel>;
