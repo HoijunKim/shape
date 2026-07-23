@@ -24,7 +24,11 @@
   export let root = true;
 
   $: kind = valueKind(value);
-  $: token = KIND_TOKEN[kind];
+  // valueKind returns "number" (JS has one number type), but KIND_TOKEN keys on
+  // the profiler's int/float and folds BOTH to the "number" token -- it has no
+  // "number" key -- so map it here rather than render every number in the muted
+  // fallback colour.
+  $: token = kind === "number" ? "number" : KIND_TOKEN[kind];
   $: color = token ? `var(--kind-${token})` : "var(--text-muted)";
   $: container = isContainer(value);
   $: count = container ? childCount(value) : 0;

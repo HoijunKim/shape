@@ -199,30 +199,41 @@
               <p class="hint">{$explorer.skipped.toLocaleString()} rows skipped</p>
             {/if}
           </div>
-        {:else if $explorer.filterActive && $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
-          <div class="empty-state">
-            <p>No rows match this filter</p>
-            <p class="hint">
-              {$explorer.columns.length.toLocaleString()}
-              column{$explorer.columns.length === 1 ? "" : "s"}
-            </p>
-            <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
-          </div>
-        {:else if $explorer.search !== "" && $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
-          <!-- E6 §8: a searched-but-empty result is distinct from an empty file.
-               The search box's own ✕ clears it, so no clear button here. -->
-          <div class="empty-state">
-            <p>No rows match your search</p>
-            <p class="hint">no field contains “{$explorer.search}”</p>
-          </div>
         {:else if $explorer.total === 0 && ($explorer.totalExact || $explorer.version > 0)}
-          <div class="empty-state">
-            <p>No rows in this file</p>
-            <p class="hint">
-              {$explorer.columns.length.toLocaleString()}
-              column{$explorer.columns.length === 1 ? "" : "s"}
-            </p>
-          </div>
+          <!-- E6 §8 + review #7: an empty result is one of four distinct cases,
+               checked in order so filter+search-both-active never mislabels the
+               cause. A Clear-filter button appears only where clearing the
+               filter is a plausible remedy (it is not when a live search is the
+               reason, so the search-only case relies on the box's own ✕). -->
+          {#if $explorer.filterActive && $explorer.search !== ""}
+            <div class="empty-state">
+              <p>No rows match your filter and search</p>
+              <p class="hint">no field contains “{$explorer.search}” among the filtered rows</p>
+              <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
+            </div>
+          {:else if $explorer.filterActive}
+            <div class="empty-state">
+              <p>No rows match this filter</p>
+              <p class="hint">
+                {$explorer.columns.length.toLocaleString()}
+                column{$explorer.columns.length === 1 ? "" : "s"}
+              </p>
+              <button type="button" class="clear-filter" on:click={clearFilter}>Clear filter</button>
+            </div>
+          {:else if $explorer.search !== ""}
+            <div class="empty-state">
+              <p>No rows match your search</p>
+              <p class="hint">no field contains “{$explorer.search}”</p>
+            </div>
+          {:else}
+            <div class="empty-state">
+              <p>No rows in this file</p>
+              <p class="hint">
+                {$explorer.columns.length.toLocaleString()}
+                column{$explorer.columns.length === 1 ? "" : "s"}
+              </p>
+            </div>
+          {/if}
         {:else}
           <!-- Obligation 3 (carried from earlier reviews): DataTable's
                `columns` prop must be $explorer.columns DIRECTLY, never a
@@ -272,6 +283,7 @@
       warnings={$explorer.warnings}
       fetching={$explorer.fetching}
       filterActive={$explorer.filterActive}
+      searchActive={$explorer.search !== ""}
       counting={$explorer.counting}
       matchCount={$explorer.matchCount}
       matchExact={$explorer.matchExact}

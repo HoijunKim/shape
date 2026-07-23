@@ -151,6 +151,18 @@ describe("ValueTree component", () => {
     expect(target.textContent).toContain("just a string");
   });
 
+  // Review #5: valueKind returns "number", but KIND_TOKEN has no "number" key
+  // (it folds the profiler's int/float onto the "number" token). Without the
+  // explicit map, a number leaf would render in the muted fallback colour.
+  // Mutation: token = KIND_TOKEN[kind] (no "number" special-case) -> the style
+  // carries var(--text-muted) instead and this fails.
+  it("colours a number leaf with the number kind token, not the muted fallback", () => {
+    mount({ value: 42 });
+    const scalar = target.querySelector(".scalar") as HTMLElement;
+    expect(scalar).toBeTruthy();
+    expect(scalar.getAttribute("style") || "").toContain("var(--kind-number)");
+  });
+
   it("Copy puts the EXACT JSON of the value on the clipboard", async () => {
     const value = { n: 42, s: "hi", nested: { a: [1, 2] } };
     mount({ value });

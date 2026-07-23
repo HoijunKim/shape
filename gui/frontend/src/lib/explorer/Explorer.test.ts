@@ -753,6 +753,38 @@ describe("Explorer", () => {
     expect(dialog.textContent).toContain("alpha");
     expect(dialog.textContent).toContain("greeting");
   });
+
+  // E6 review #7: when a filter AND a search are both active and zero rows
+  // match, the empty state must name both, not mislabel it "No rows match this
+  // filter" (clearing the filter alone may not restore rows). Mutation: let the
+  // filterActive-only branch win -> the text reads "No rows match this filter".
+  it("labels the empty state for filter+search when both are active and zero rows match", async () => {
+    const columns = [makeColumn("city")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", columns, [makeField("city")]));
+    vi.mocked(QueryRows).mockResolvedValueOnce(rowSetFor(columns)); // open's page 0 (non-empty)
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("file.ndjson");
+    await tick();
+
+    // Both active, and the query now returns zero rows.
+    vi.mocked(QueryRows).mockResolvedValue({
+      columns, rows: [], offset: 0, total: 0, totalExact: true, scanned: 0,
+      truncated: true, elapsedMs: 0, columnsTruncated: false, totalPaths: 1,
+    } as any);
+    explorer.setFilter({
+      combinator: "and",
+      conditions: [{ path: "city", op: "eq", value: { kind: "string", str: "zzz" } }],
+    } as any);
+    explorer.setSearch("zzz");
+    await flush();
+    await tick();
+
+    const empty = target.querySelector(".empty-state") as HTMLElement;
+    expect(empty, "an empty state must show").toBeTruthy();
+    expect(empty.textContent).toContain("filter and search");
+    expect(empty.textContent).not.toContain("No rows match this filter");
+  });
 });
 
 // --- E4 Task 11: a projection must not shrink the filter's vocabulary --------

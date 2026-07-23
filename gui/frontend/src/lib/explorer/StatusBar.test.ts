@@ -150,9 +150,27 @@ describe("StatusBar", () => {
       expect(t.querySelector("button.cancel-count")).toBeNull();
     });
 
-    it("shows no Cancel button when not filterActive, even if counting were somehow true", () => {
-      const t = mount({ total: -1, totalExact: false, filterActive: false, counting: true });
+    it("shows no Cancel button when neither filter nor search is active, even if counting were somehow true", () => {
+      const t = mount({ total: -1, totalExact: false, filterActive: false, searchActive: false, counting: true });
       expect(t.querySelector("button.cancel-count")).toBeNull();
+    });
+
+    // E6 review #6: a global search runs CountMatches on the non-memory tiers
+    // exactly like a filter, so a search-only count must also show counting…
+    // and a Cancel button. Mutation: gate on filterActive alone -> no Cancel
+    // here and the match count is not shown.
+    it("shows counting… with Cancel for a search-only count (no filter)", () => {
+      const t = mount({ total: -1, totalExact: false, filterActive: false, searchActive: true, counting: true });
+      expect((t.querySelector(".metric.mono") as HTMLElement).textContent).toBe("counting…");
+      expect(t.querySelector("button.cancel-count")).toBeTruthy();
+    });
+
+    it("renders a search-only exact match count with no tilde", () => {
+      const t = mount({
+        total: -1, totalExact: false, filterActive: false, searchActive: true, counting: false,
+        matchCount: 7, matchExact: true,
+      });
+      expect((t.querySelector(".metric.mono") as HTMLElement).textContent).toBe("7 rows");
     });
 
     it("renders an exact filtered match count with no tilde", () => {
