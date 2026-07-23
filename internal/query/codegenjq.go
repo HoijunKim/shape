@@ -12,6 +12,12 @@ type CodegenContext struct {
 	Format string       `json:"format"` // "json"|"ndjson"|"csv"|"parquet"|"sqlite"
 	Table  string       `json:"table,omitempty"`
 	Cols   *ColumnModel `json:"-"`
+	// Tainted marks columns whose stored SQLite value differs from the value
+	// shape shows (a BLOB, or a date the driver converts to RFC3339): a
+	// condition on one of these cannot be trusted to match the same rows in
+	// SQLite, so the generated SQL says so. Populated by the engine from
+	// sqlBackend's raw-value probe; nil for every non-SQLite source.
+	Tainted map[string]bool `json:"-"`
 }
 
 // jqCondition renders one Condition as a jq boolean expression.
