@@ -504,3 +504,62 @@ func TestSQLQuery_MinorFidelityFixes(t *testing.T) {
 		}
 	})
 }
+
+// TestElemNullOps_MatchTheEngine (branch-review M1) covers isnull/notnull over
+// an ARRAY path, which the engine treats as "empty-or-any-null" (isnull) and
+// "non-empty-and-all-non-null" (notnull) -- NOT the existential any()/EXISTS
+// the value ops use. Runs the generated SQL against real SQLite and asserts
+// the exact row set matches CompileFilter().Match.
+func TestElemNullOps_MatchTheEngine(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE t (tags TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	// json text per row; the reader would deliver these as []any/scalar/nil.
+	rowsJSON := []any{`[1,2]`, `[1,null]`, `[]`, nil, `"scalar"`}
+	for _, v := range rowsJSON {
+		if _, err := db.Exec(`INSERT INTO t VALUES (?)`, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The engine sees decoded values, not the json text.
+	records := []map[string]any{
+		{"tags": []any{json.Number("1"), json.Number("2")}},
+		{"tags": []any{json.Number("1"), nil}},
+		{"tags": []any{}},
+		{},
+		{"tags": "scalar"},
+	}
+	ctx := CodegenContext{Format: "sqlite", Table: "t",
+		Cols: codegenModel(t, records)}
+
+	for _, op := range []Op{OpIsNull, OpNotNull} {
+		t.Run(string(op), func(t *testing.T) {
+			f := Filter{Combinator: And, Conditions: []Condition{{Path: "tags[]", Op: op}}}
+
+			cf, err := CompileFilter(f, ctx.Cols)
+			if err != nil {
+				t.Fatalf("CompileFilter: %v", err)
+			}
+			var want []int64
+			for i, r := range records {
+				if cf.Match(any(r)) {
+					want = append(want, int64(i+1))
+				}
+			}
+
+			where, _, err := sqlWhere(f, ctx)
+			if err != nil {
+				t.Fatalf("sqlWhere: %v", err)
+			}
+			got := execRowIDs(t, db, where)
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("%s: SQL rowids %v, engine %v\nSQL: %s", op, got, want, where)
+			}
+		})
+	}
+}

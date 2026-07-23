@@ -55,6 +55,24 @@ func sqlCondition(c Condition, ctx CodegenContext) (string, []string, error) {
 	if hasElemSeg(segs) {
 		base, w := sqlPathExpr(elemBasePath(c.Path), elemBaseSegs(segs), ctx.Cols, ctx.sqlTargetsSQLite())
 		warnings = append(warnings, w...)
+		// isnull/notnull over an array are not existential (see the jq side):
+		// the engine's isnull matches an empty-or-any-null set, notnull a
+		// non-empty all-non-null set. json_each also yields a row for a scalar,
+		// so both are gated on json_type(base)='array'.
+		switch c.Op {
+		case OpIsNull:
+			// isnull matches when the element set is empty-or-has-a-null. The
+			// set is also empty when the base is NOT an array (a scalar or a
+			// missing column resolves to no elements in the engine), so those
+			// count as isnull too.
+			return fmt.Sprintf(
+				"(json_type(%s) IS NOT 'array' OR json_array_length(%s)=0 OR EXISTS(SELECT 1 FROM json_each(%s) j WHERE j.value IS NULL))",
+				base, base, base), warnings, nil
+		case OpNotNull:
+			return fmt.Sprintf(
+				"(json_type(%s)='array' AND json_array_length(%s)>0 AND NOT EXISTS(SELECT 1 FROM json_each(%s) j WHERE j.value IS NULL))",
+				base, base, base), warnings, nil
+		}
 		inner, w2, err := sqlComparison(c, "j.value", false)
 		if err != nil {
 			return "", nil, err

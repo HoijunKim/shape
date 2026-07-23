@@ -48,10 +48,21 @@ func jqCondition(c Condition, cols *ColumnModel) (string, []string, error) {
 	segs := parsePath(c.Path)
 	var warnings []string
 
-	// An Elem path is a generator, so the whole condition becomes any(...),
-	// whose empty case is already false -- matching the Go rule that a path
-	// resolving to no values makes the condition false.
 	if hasElemSeg(segs) {
+		// isnull/notnull over an array are NOT existential in the engine: an
+		// Elem-path isnull matches an empty-or-any-null set, notnull matches a
+		// non-empty set with every element non-null (filter.go). any()/all()
+		// over the resolved elements reproduce exactly that; the general
+		// any(...; comparison) form below is only correct for the value ops.
+		if c.Op == OpIsNull {
+			return fmt.Sprintf("([%s] | length==0 or any(.[];.==null))", jqPredicatePath(segs)), nil, nil
+		}
+		if c.Op == OpNotNull {
+			return fmt.Sprintf("([%s] | length>0 and all(.[];.!=null))", jqPredicatePath(segs)), nil, nil
+		}
+		// Every value op is a generator, so the condition becomes any(...),
+		// whose empty case is already false -- matching the Go rule that a
+		// path resolving to no values makes the condition false.
 		inner, w, err := jqComparison(c, "", true)
 		if err != nil {
 			return "", nil, err

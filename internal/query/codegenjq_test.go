@@ -493,3 +493,57 @@ func TestJQProgram_IsNullOverAScalarAncestorMatchesTheEngine(t *testing.T) {
 		})
 	}
 }
+
+// TestJQProgram_ElemNullOpsMatchTheEngine is the jq half of branch-review M1:
+// isnull/notnull over an array path are not existential.
+func TestJQProgram_ElemNullOpsMatchTheEngine(t *testing.T) {
+	records := []map[string]any{
+		{"id": json.Number("1"), "tags": []any{json.Number("1"), json.Number("2")}},
+		{"id": json.Number("2"), "tags": []any{json.Number("1"), nil}},
+		{"id": json.Number("3"), "tags": []any{}},
+		{"id": json.Number("4")},
+		{"id": json.Number("5"), "tags": "scalar"},
+	}
+	var input strings.Builder
+	for _, r := range records {
+		b, _ := json.Marshal(r)
+		input.Write(b)
+		input.WriteByte('\n')
+	}
+	for _, op := range []Op{OpIsNull, OpNotNull} {
+		t.Run(string(op), func(t *testing.T) {
+			f := Filter{Combinator: And, Conditions: []Condition{{Path: "tags[]", Op: op}}}
+			cf, err := CompileFilter(f, nil)
+			if err != nil {
+				t.Fatalf("CompileFilter: %v", err)
+			}
+			var want []string
+			for _, r := range records {
+				if cf.Match(any(r)) {
+					want = append(want, string(r["id"].(json.Number)))
+				}
+			}
+			prog, _, err := jqProgram(f, Transform{}, CodegenContext{Format: "ndjson"})
+			if err != nil {
+				t.Fatalf("jqProgram: %v", err)
+			}
+			out := strings.TrimSpace(strings.ReplaceAll(runJQ(t, prog, input.String()), "\r", ""))
+			var got []string
+			for _, line := range strings.Split(out, "\n") {
+				if line == "" {
+					continue
+				}
+				var rec map[string]any
+				dec := json.NewDecoder(strings.NewReader(line))
+				dec.UseNumber()
+				if err := dec.Decode(&rec); err != nil {
+					t.Fatalf("bad jq output %q: %v", line, err)
+				}
+				got = append(got, string(rec["id"].(json.Number)))
+			}
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s: jq %v, engine %v\nprogram: %s", op, got, want, programBody(prog))
+			}
+		})
+	}
+}
