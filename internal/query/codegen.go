@@ -25,6 +25,8 @@ const (
 	warnEmptyIn         = "an empty in-list matches nothing (rendered as false / 1=0)"
 	warnTypeGuard       = "!= and the ordering operators (< <= > >=) here have no type guard: unlike shape, SQL compares across types, so a column holding text can match a numeric operand and vice versa"
 	warnIllustrativeSQL = "this source is not a database: the SQL is illustrative, over a flat table named data"
+	warnSearchNumericJQ = "global search matches numbers on their source text, but jq's tostring canonicalises them (e.g. 1e3 becomes \"1E+3\"), so a search for an exponent or odd-decimal number can match shape yet not this jq"
+	warnSearchColumnSQL = "the global search here only covers the source's top-level columns; shape searches every nested leaf value generically"
 )
 
 // jqIdentRe matches a path segment that can be written as a bare jq field
@@ -222,10 +224,13 @@ type Generated struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// CodegenRequest is the Codegen request DTO (spec §8).
+// CodegenRequest is the Codegen request DTO (spec §8). Search is the global
+// search term (empty = none): the panel must show the search alongside the
+// filter, or "copy the query" would omit part of what the view is showing.
 type CodegenRequest struct {
 	Handle    string    `json:"handle"`
 	Filter    Filter    `json:"filter"`
+	Search    string    `json:"search"`
 	Transform Transform `json:"transform"`
 }
 
@@ -281,6 +286,7 @@ func (e *Engine) Codegen(req CodegenRequest) (Generated, error) {
 	ctx := CodegenContext{
 		Format: meta.format,
 		Table:  meta.table,
+		Search: req.Search,
 		Cols:   backend.Columns(),
 	}
 	if sb, ok := backend.(*sqlBackend); ok {

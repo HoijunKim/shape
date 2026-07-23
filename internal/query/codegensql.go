@@ -340,13 +340,28 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 	}
 
 	stmt := "SELECT " + sqlSelectList(t, ctx) + " FROM " + ctx.sqlTable()
+
+	var whereParts []string
 	if !isEmptyFilter(f) {
 		where, w, err := sqlWhere(f, ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		warnings = append(warnings, w...)
-		stmt += " WHERE " + where
+		whereParts = append(whereParts, where)
+	}
+	// The search is illustrative only (decision 8: never executed) -- an
+	// OR-of-instr across the source's top-level columns, AND-ed with the
+	// filter. It carries the ASCII-fold caveat (warnCaseInsensitive) and a note
+	// that it does not reach nested leaves the way shape's search does.
+	if ctx.Search != "" {
+		if sc := sqlSearchClause(ctx.Search, ctx); sc != "" {
+			whereParts = append(whereParts, sc)
+			warnings = append(warnings, warnCaseInsensitive, warnSearchColumnSQL)
+		}
+	}
+	if len(whereParts) > 0 {
+		stmt += " WHERE " + strings.Join(whereParts, " AND ")
 	}
 	lines = append(lines, stmt+";")
 
@@ -361,7 +376,36 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 	if containsWarning(warnings, warnTypeGuard) {
 		lines = append(lines, "-- note: != and the ordering operators have no type guard here; SQL compares across types, so a column holding text can match a numeric operand (and vice versa) where shape would not")
 	}
+	if containsWarning(warnings, warnSearchColumnSQL) {
+		lines = append(lines, "-- note: shape's search scans every leaf value generically; this SQL only covers the source's top-level columns")
+	}
 	return strings.Join(lines, "\n"), warnings, nil
+}
+
+// sqlSearchClause renders the global search as an illustrative OR-of-instr over
+// the source's TOP-LEVEL columns (paths with no "." or "[]"): each column's
+// lowercased text is tested for the lowercased query. It is never executed by
+// the engine (decision 8); the "-- note" in sqlQuery flags that it does not
+// reach nested leaves. Returns "" when there are no top-level columns to search.
+func sqlSearchClause(search string, ctx CodegenContext) string {
+	if ctx.Cols == nil {
+		return ""
+	}
+	lit, err := sqlValueLiteral(Value{Kind: ValString, Str: search})
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	for _, col := range ctx.Cols.Columns {
+		if strings.Contains(col.Path, ".") || strings.Contains(col.Path, "[") {
+			continue // top-level columns only (see the -- note)
+		}
+		parts = append(parts, fmt.Sprintf("instr(lower(%s),lower(%s))>0", sqliteQuoteIdent(col.Path), lit))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
 }
 
 func containsWarning(warnings []string, want string) bool {

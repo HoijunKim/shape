@@ -223,6 +223,7 @@ export namespace query {
 	export class CodegenRequest {
 	    handle: string;
 	    filter: Filter;
+	    search: string;
 	    transform: Transform;
 	
 	    static createFrom(source: any = {}) {
@@ -233,6 +234,7 @@ export namespace query {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.handle = source["handle"];
 	        this.filter = this.convertValues(source["filter"], Filter);
+	        this.search = source["search"];
 	        this.transform = this.convertValues(source["transform"], Transform);
 	    }
 	
