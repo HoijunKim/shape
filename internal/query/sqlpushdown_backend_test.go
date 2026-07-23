@@ -382,7 +382,7 @@ func TestSQLBackend_PushedWindowKeepsAbsoluteRowIndex(t *testing.T) {
 		// Spelled out, so the intent survives even if RowSet grows a field:
 		// the indexes are the ABSOLUTE ordinals of the matching rows.
 		for i, r := range got.Rows {
-			wantIdx := (w.Offset+int64(i))*2 // rows 0,2,4,... are the odd ones
+			wantIdx := (w.Offset + int64(i)) * 2 // rows 0,2,4,... are the odd ones
 			if r.Index != wantIdx {
 				t.Fatalf("window %+v row %d Index = %d, want %d (absolute ordinal, not match position)",
 					w, i, r.Index, wantIdx)
