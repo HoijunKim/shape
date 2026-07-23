@@ -34,8 +34,8 @@ func pushdownModel(t *testing.T) *ColumnModel {
 	})
 }
 
-func num(f float64) Value  { return Value{Kind: ValNumber, Num: f} }
-func str(s string) Value   { return Value{Kind: ValString, Str: s} }
+func num(f float64) Value { return Value{Kind: ValNumber, Num: f} }
+func str(s string) Value  { return Value{Kind: ValString, Str: s} }
 func inList(vs ...Value) Value {
 	return Value{Kind: ValString, List: vs}
 }
