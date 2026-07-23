@@ -17,6 +17,15 @@ import (
 	"strings"
 )
 
+// Warnings the generated programs carry when a construct cannot mean exactly
+// what the engine means. They are emitted once per output, not per condition.
+const (
+	warnRegex = "regex matching differs by target: shape uses Go RE2, jq uses Oniguruma, and SQLite has no REGEXP function unless one is registered"
+	warnCaseInsensitive = "case-insensitive matching folds ASCII only in both jq (ascii_downcase) and SQLite (lower()); shape folds full Unicode, so non-ASCII letters can differ"
+	warnEmptyIn = "an empty in-list matches nothing (rendered as false / 1=0)"
+	warnIllustrativeSQL = "this source is not a database: the SQL is illustrative, over a flat table named data"
+)
+
 // jqIdentRe matches a path segment that can be written as a bare jq field
 // (`.name`); anything else must go through the bracket form (`.["odd key"]`).
 var jqIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
