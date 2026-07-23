@@ -230,3 +230,45 @@ func TestCompileFilter_RetainsTheSourceAST(t *testing.T) {
 		t.Fatalf("a hand-built CompiledFilter must not present a source AST")
 	}
 }
+
+// TestSQLPushdown_RefusesOversizedInLists covers a failure mode the other
+// gates do not: too many bound parameters makes SQLite REFUSE the statement,
+// so a pushed query errors where the Go path answers normally. Verified
+// against the vendored driver: 32766 elements yields "too many SQL variables".
+//
+// Mutation that must break it: remove the maxPushedParams check -> the huge
+// list becomes pushable.
+func TestSQLPushdown_RefusesOversizedInLists(t *testing.T) {
+	cols := pushdownModel(t)
+
+	small := make([]Value, 0, 100)
+	for i := 0; i < 100; i++ {
+		small = append(small, num(float64(i)))
+	}
+	if _, _, exact := sqlPushdown(oneCond(Condition{Path: "id", Op: OpIn,
+		Value: Value{Kind: ValNumber, List: small}}), cols, nil); !exact {
+		t.Fatalf("an ordinary 100-element in-list must still push")
+	}
+
+	huge := make([]Value, 0, maxPushedParams+1)
+	for i := 0; i <= maxPushedParams; i++ {
+		huge = append(huge, num(float64(i)))
+	}
+	if _, _, exact := sqlPushdown(oneCond(Condition{Path: "id", Op: OpIn,
+		Value: Value{Kind: ValNumber, List: huge}}), cols, nil); exact {
+		t.Fatalf("an in-list past the parameter cap was pushed; SQLite would refuse the statement")
+	}
+
+	// The cap counts parameters across the WHOLE filter, not per condition.
+	half := make([]Value, 0, maxPushedParams/2)
+	for i := 0; i < maxPushedParams/2; i++ {
+		half = append(half, num(float64(i)))
+	}
+	two := Filter{Combinator: And, Conditions: []Condition{
+		{Path: "id", Op: OpIn, Value: Value{Kind: ValNumber, List: half}},
+		{Path: "id", Op: OpIn, Value: Value{Kind: ValNumber, List: half}},
+	}}
+	if _, _, exact := sqlPushdown(two, cols, nil); exact {
+		t.Fatalf("two lists that together exceed the cap were pushed")
+	}
+}

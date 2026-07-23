@@ -17,6 +17,22 @@ import (
 // already aliases with 2^53+1. NaN/±Inf fail it for free.
 const maxExactFloat = float64(1 << 53)
 
+// maxPushedParams bounds how many bound parameters one pushed WHERE may use.
+//
+// SQLite refuses a statement with more variables than
+// SQLITE_LIMIT_VARIABLE_NUMBER and the pushed query then FAILS -- verified
+// against the vendored driver: an `in` list of 32766 elements returns "SQL
+// logic error: too many SQL variables" while the Go path answers normally.
+// An optimisation must never turn a working query into an error, so a list
+// past this bound simply is not pushed.
+//
+// 900 rather than the 32766 this build actually allows: that limit was 999 in
+// older SQLite builds and is a compile-time option, so a generous cap would
+// re-introduce the failure on a different build. The cost of being wrong in
+// this direction is only that a very large in-list runs through the Go
+// predicate, which is what happens for every other non-pushable filter.
+const maxPushedParams = 900
+
 // sqlPushdown compiles f into a parameterised WHERE fragment for sqlBackend,
 // or reports that it cannot.
 //
@@ -158,6 +174,10 @@ func (p *pushdownPlanner) condition(c Condition) (string, bool) {
 	case OpIn:
 		if len(c.Value.List) == 0 {
 			return "1=0", true
+		}
+		// Leave headroom for the LIMIT/OFFSET parameters the window adds.
+		if len(p.args)+len(c.Value.List)+2 > maxPushedParams {
+			return "", false
 		}
 		placeholders := make([]string, 0, len(c.Value.List))
 		for _, item := range c.Value.List {
