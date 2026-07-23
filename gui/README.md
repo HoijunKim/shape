@@ -99,6 +99,20 @@ the app's only view once a file is open:
   own reader treats a dot as nesting. The exported file is correct for every
   other consumer; re-importing into shape is the case to watch.
 
+- **Code panel (toggled via the header's "Code" button).** The same filter and
+  column selection, written out as an equivalent `jq` expression and SQL query,
+  with a Copy button for each. It is the power-user hook -- take the query
+  somewhere else -- and a way to learn either syntax from your own data rather
+  than from a tutorial. Read-only by design: it shows what shape is doing, it
+  is not a query console.
+  The panel is honest about the places the three engines genuinely differ, and
+  says so inline rather than quietly generating something that means something
+  else: `REGEXP` needs a user-defined function SQLite does not ship (shape
+  matches with Go RE2); case-insensitive matching folds ASCII only in both jq
+  (`ascii_downcase`) and SQLite (`lower()`) while shape folds full Unicode; and
+  for a non-database source the SQL is labelled illustrative, over an imagined
+  flat table named `data`.
+
 ## Build order (important)
 
 `frontend/wailsjs/` (the generated Wails TypeScript bindings, from the bound

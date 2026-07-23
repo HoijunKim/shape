@@ -97,6 +97,13 @@ jq or SQL required.
 - **Export** — write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
   Parquet. The export is always the complete result, never the windowed view,
   and it lands atomically: a cancelled or failed export leaves no partial file.
+- **Take the query with you** — the Code panel shows the equivalent `jq`
+  expression and SQL query for whatever you built by clicking, ready to copy,
+  with the places the three engines genuinely differ called out rather than
+  glossed over. On a SQLite source shape also *runs* that SQL: a filter it can
+  translate exactly is pushed into the database (measured ~12x faster on a
+  200k-row count), and anything it cannot vouch for falls back to the same Go
+  predicate every other format uses, so the answer never changes.
 
 It still exports the inferred JSON Schema too (the header's "Schema" button).
 Build it with `wails build` (see `gui/README.md` for the required build order).
