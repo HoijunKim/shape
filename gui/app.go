@@ -27,6 +27,7 @@ type sourceEngine interface {
 	QueryRows(ctx context.Context, req query.QueryRequest) (query.RowSet, error)
 	CountMatches(ctx context.Context, req query.CountRequest) (query.CountResult, error)
 	ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error)
+	Codegen(req query.CodegenRequest) (query.Generated, error)
 	Cancel(requestID string) error
 	CloseSource(handle string) error
 }
@@ -315,6 +316,14 @@ func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
 		DefaultFilename: defaultName,
 		Filters:         exportFileFilters(format),
 	})
+}
+
+// Codegen returns the jq expression and SQL query equivalent to a request's
+// filter+transform (spec §8). No ctx: codegen is pure and instant -- it reads
+// the handle's format/table/columns and renders strings, never data -- and a
+// ctx-less signature is also what keeps *query.Engine satisfying sourceEngine.
+func (a *App) Codegen(req query.CodegenRequest) (query.Generated, error) {
+	return a.eng.Codegen(req)
 }
 
 // Cancel interrupts an in-flight request by id (spec §8). An unknown id is a

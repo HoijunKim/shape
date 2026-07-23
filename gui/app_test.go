@@ -607,3 +607,49 @@ func TestAppExportFileFilters(t *testing.T) {
 		}
 	}
 }
+
+// --- Codegen binding (E5 Task 7) ---------------------------------------------
+
+// codegenSpyEngine records the request the binding forwards. It needs its own
+// override: gatedOpenEngine and exportSpyEngine each override one OTHER
+// method, so an un-overridden Codegen would reach the real engine and fail on
+// an unknown handle.
+type codegenSpyEngine struct {
+	*query.Engine
+	gotReq query.CodegenRequest
+	res    query.Generated
+	err    error
+}
+
+func (e *codegenSpyEngine) Codegen(req query.CodegenRequest) (query.Generated, error) {
+	e.gotReq = req
+	return e.res, e.err
+}
+
+func TestAppCodegenForwardsTheRequest(t *testing.T) {
+	spy := &codegenSpyEngine{
+		Engine: query.NewEngine(),
+		res:    query.Generated{JQ: ".", SQL: "SELECT * FROM t;", Warnings: []string{"w"}},
+	}
+	a := &App{eng: spy}
+	req := query.CodegenRequest{
+		Handle: "h1",
+		Filter: query.Filter{Combinator: query.And, Conditions: []query.Condition{
+			{Path: "a", Op: query.OpNotNull},
+		}},
+		Transform: query.Transform{Select: []query.ColumnSpec{{Path: "a", As: "a"}}},
+	}
+
+	got, err := a.Codegen(req)
+	if err != nil {
+		t.Fatalf("Codegen error = %v, want nil", err)
+	}
+	if got.JQ != "." || got.SQL != "SELECT * FROM t;" || len(got.Warnings) != 1 {
+		t.Fatalf("Codegen result = %+v, want the engine's result verbatim", got)
+	}
+	if spy.gotReq.Handle != req.Handle ||
+		len(spy.gotReq.Filter.Conditions) != 1 ||
+		len(spy.gotReq.Transform.Select) != 1 {
+		t.Fatalf("engine received %+v, want the request forwarded unchanged", spy.gotReq)
+	}
+}
