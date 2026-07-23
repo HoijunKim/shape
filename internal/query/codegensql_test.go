@@ -97,7 +97,7 @@ func TestSQLWhere_GroupsAndZeroTermNodes(t *testing.T) {
 		{"or", Filter{Combinator: Or, Conditions: []Condition{c1, c2}},
 			`("a" IS NOT NULL OR "b" IS NOT NULL)`},
 		{"negate", Filter{Combinator: And, Conditions: []Condition{c1}, Negate: true},
-			`NOT ("a" IS NOT NULL)`},
+			`NOT IFNULL("a" IS NOT NULL,0)`},
 		{"childless and", Filter{Combinator: And}, `1=1`},
 		{"childless or", Filter{Combinator: Or}, `1=0`},
 		// A childless OR must stay "matches nothing". Dropping the empty
@@ -439,4 +439,68 @@ func hasRegexCondition(f Filter) bool {
 		}
 	}
 	return false
+}
+
+// TestSQLQuery_MinorFidelityFixes covers the display-SQL divergences the
+// branch review found -- each executed against real SQLite where a row set is
+// at stake.
+func TestSQLQuery_MinorFidelityFixes(t *testing.T) {
+	t.Run("M2: negate keeps NULL-column rows (NOT IFNULL, not NOT)", func(t *testing.T) {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.Exec(`CREATE TABLE t (name TEXT)`)
+		for _, v := range []any{"ada", "bob", nil} {
+			db.Exec(`INSERT INTO t VALUES (?)`, v)
+		}
+		ctx := CodegenContext{Format: "sqlite", Table: "t",
+			Cols: codegenModel(t, []map[string]any{{"name": "ada"}})}
+		f := Filter{Combinator: And, Negate: true, Conditions: []Condition{
+			{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "ada"}}}}
+		where, _, _ := sqlWhere(f, ctx)
+		// Engine keeps bob AND the NULL row (both are "not ada").
+		got := execRowIDs(t, db, where)
+		if fmt.Sprint(got) != fmt.Sprint([]int64{2, 3}) {
+			t.Fatalf("negate matched %v, want [2 3] incl. the NULL row\nSQL: %s", got, where)
+		}
+	})
+
+	t.Run("M3: ne and ordering carry a type-guard note", func(t *testing.T) {
+		ctx := sqliteCtx(t, []map[string]any{{"age": json.Number("1"), "name": "x"}})
+		gen, _, _ := sqlQuery(Filter{Combinator: And, Conditions: []Condition{
+			{Path: "name", Op: OpNe, Value: Value{Kind: ValString, Str: "x"}}}}, Transform{}, ctx)
+		if !strings.Contains(gen, "-- note: != and the ordering") {
+			t.Fatalf("ne has no type-guard note:\n%s", gen)
+		}
+		// eq must NOT carry it (eq agrees cross-type).
+		genEq, _, _ := sqlQuery(Filter{Combinator: And, Conditions: []Condition{
+			{Path: "name", Op: OpEq, Value: Value{Kind: ValString, Str: "x"}}}}, Transform{}, ctx)
+		if strings.Contains(genEq, "-- note: != and the ordering") {
+			t.Fatalf("eq must not carry the type-guard note:\n%s", genEq)
+		}
+	})
+
+	t.Run("M6: dropping every column selects nothing, not everything", func(t *testing.T) {
+		ctx := sqliteCtx(t, []map[string]any{{"a": "x"}})
+		gen, _, _ := sqlQuery(Filter{}, Transform{Drop: []string{"a"}}, ctx)
+		if strings.Contains(gen, "SELECT * ") {
+			t.Fatalf("dropping the only column fell through to SELECT *:\n%s", gen)
+		}
+		if !strings.Contains(gen, "SELECT NULL ") {
+			t.Fatalf("dropping every column should select NULL:\n%s", gen)
+		}
+	})
+
+	t.Run("M7: an array-path condition raises no false 'not a column' warning", func(t *testing.T) {
+		ctx := sqliteCtx(t, []map[string]any{{"tags": []any{"x"}}})
+		_, warnings, _ := sqlQuery(Filter{Combinator: And, Conditions: []Condition{
+			{Path: "tags[]", Op: OpEq, Value: Value{Kind: ValString, Str: "x"}}}}, Transform{}, ctx)
+		for _, w := range warnings {
+			if strings.Contains(w, "is not a column") {
+				t.Fatalf("false not-a-column warning for an array path: %q", w)
+			}
+		}
+	})
 }

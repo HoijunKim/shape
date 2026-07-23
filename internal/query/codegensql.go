@@ -40,7 +40,7 @@ func (ctx CodegenContext) sqlTable() string {
 //     COLLATE).
 func sqlCondition(c Condition, ctx CodegenContext) (string, []string, error) {
 	segs := parsePath(c.Path)
-	pathExpr, warnings := sqlPathExpr(c.Path, segs, ctx.Cols, ctx.sqlTargetsSQLite())
+	var warnings []string
 
 	if ctx.Tainted[c.Path] {
 		warnings = append(warnings, fmt.Sprintf(
@@ -48,7 +48,10 @@ func sqlCondition(c Condition, ctx CodegenContext) (string, []string, error) {
 	}
 
 	// An Elem path becomes an EXISTS over json_each, so the comparison is
-	// rendered against each element value rather than the column.
+	// rendered against each element value rather than the column. The path
+	// expression is resolved ONLY for the base container here -- resolving the
+	// full `tags[]` first (as this used to) produced a spurious "not a column"
+	// warning for a path that is a real container, just not a scalar column.
 	if hasElemSeg(segs) {
 		base, w := sqlPathExpr(elemBasePath(c.Path), elemBaseSegs(segs), ctx.Cols, ctx.sqlTargetsSQLite())
 		warnings = append(warnings, w...)
@@ -59,6 +62,9 @@ func sqlCondition(c Condition, ctx CodegenContext) (string, []string, error) {
 		warnings = append(warnings, w2...)
 		return fmt.Sprintf("EXISTS(SELECT 1 FROM json_each(%s) j WHERE %s)", base, inner), warnings, nil
 	}
+
+	pathExpr, w := sqlPathExpr(c.Path, segs, ctx.Cols, ctx.sqlTargetsSQLite())
+	warnings = append(warnings, w...)
 
 	expr, w, err := sqlComparison(c, pathExpr, ctx.sqlTargetsSQLite())
 	if err != nil {
@@ -123,14 +129,26 @@ func sqlComparison(c Condition, subject string, collate bool) (string, []string,
 			warnings = append(warnings, warnCaseInsensitive)
 			return fmt.Sprintf("lower(%s) %s lower(%s)", subject, op, lit), warnings, nil
 		}
-		return fmt.Sprintf("%s %s %s", binary, op, lit), nil, nil
+		if c.Op == OpNe {
+			// eq agrees with the engine cross-type (both false), but ne does
+			// not: the display SQL has no type guard, so "name" <> 5 returns
+			// text rows the engine's typedEqual rejects.
+			warnings = append(warnings, warnTypeGuard)
+		}
+		return fmt.Sprintf("%s %s %s", binary, op, lit), warnings, nil
 
 	case OpLt, OpLte, OpGt, OpGte:
+		// A bool operand never matches an ordering op in the engine
+		// (matchesRange has no bool branch); SQL would order it.
+		if c.Value.Kind == ValBool {
+			return "1=0", nil, nil
+		}
 		lit, err := sqlValueLiteral(c.Value)
 		if err != nil {
 			return "", nil, err
 		}
-		return fmt.Sprintf("%s %s %s", binary, sqlRangeOp(c.Op), lit), nil, nil
+		warnings = append(warnings, warnTypeGuard)
+		return fmt.Sprintf("%s %s %s", binary, sqlRangeOp(c.Op), lit), warnings, nil
 
 	case OpContains:
 		lit, err := sqlValueLiteral(c.Value)
@@ -160,11 +178,20 @@ func sqlComparison(c Condition, subject string, collate bool) (string, []string,
 		}
 		lits := make([]string, 0, len(c.Value.List))
 		for _, item := range c.Value.List {
+			// The engine's `in` skips a null candidate (typedEqual is false
+			// for null), so a literal NULL in the IN list -- which SQL would
+			// never match anyway -- is simply omitted.
+			if item.Kind == ValNull {
+				continue
+			}
 			l, err := sqlValueLiteral(item)
 			if err != nil {
 				return "", nil, err
 			}
 			lits = append(lits, l)
+		}
+		if len(lits) == 0 {
+			return "1=0", nil, nil
 		}
 		// COLLATE goes on the LEFT operand: a trailing COLLATE after the list
 		// binds to its last element and silently does nothing.
@@ -223,7 +250,11 @@ func sqlWhere(f Filter, ctx CodegenContext) (string, []string, error) {
 		body = "(" + strings.Join(parts, " "+sqlCombinator(f.Combinator)+" ") + ")"
 	}
 	if f.Negate {
-		body = "NOT (" + body + ")"
+		// NOT(NULL) is NULL in SQL, so a plain NOT(...) drops rows whose inner
+		// comparison was NULL; the engine inverts a two-valued false and keeps
+		// them. IFNULL(...,0) collapses the third value first, matching Go's
+		// !result.
+		body = "NOT IFNULL(" + body + ",0)"
 	}
 	return body, warnings, nil
 }
@@ -268,9 +299,14 @@ func sqlSelectList(t Transform, ctx CodegenContext) string {
 			expr, _ := sqlPathExpr(col.Path, parsePath(col.Path), ctx.Cols, ctx.sqlTargetsSQLite())
 			parts = append(parts, expr)
 		}
-		if len(parts) > 0 {
-			return strings.Join(parts, ", ")
+		// Even when Drop removes every column, the result is "select
+		// nothing", not "select everything" -- falling through to "*" would
+		// silently re-include the dropped columns. NULL is a valid
+		// zero-column stand-in.
+		if len(parts) == 0 {
+			return "NULL"
 		}
+		return strings.Join(parts, ", ")
 	}
 	return "*"
 }
@@ -303,6 +339,9 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 	}
 	if containsWarning(warnings, warnCaseInsensitive) {
 		lines = append(lines, "-- note: SQLite lower() folds ASCII only; shape folds full Unicode, so non-ASCII letters can differ")
+	}
+	if containsWarning(warnings, warnTypeGuard) {
+		lines = append(lines, "-- note: != and the ordering operators have no type guard here; SQL compares across types, so a column holding text can match a numeric operand (and vice versa) where shape would not")
 	}
 	return strings.Join(lines, "\n"), warnings, nil
 }

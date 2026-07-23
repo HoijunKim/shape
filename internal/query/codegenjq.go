@@ -86,7 +86,7 @@ func jqComparison(c Condition, path string, elem bool) (string, []string, error)
 		// [subject][0] is null for BOTH an empty resolve (a missing key, or a
 		// scalar/array ancestor that makes .a?.b? yield empty) AND a real JSON
 		// null, matching the engine's non-Elem rule that an empty value set IS
-		// null (filter.go). A bare  would instead yield empty
+		// null (filter.go). A bare (subject == null) would instead yield empty
 		// for a scalar ancestor, which jqFilter pins to false -- dropping a
 		// record the engine keeps.
 		nn := "[" + subject + "][0]"
@@ -136,6 +136,12 @@ func jqComparison(c Condition, path string, elem bool) (string, []string, error)
 		return fmt.Sprintf("(%s and %s != %s)", guard, subject, lit), nil, nil
 
 	case OpLt, OpLte, OpGt, OpGte:
+		// A bool operand never matches an ordering op in the engine
+		// (matchesRange has no bool branch, filter.go), but jq orders across
+		// types and would compare it -- so short-circuit to false.
+		if c.Value.Kind == ValBool {
+			return "false", nil, nil
+		}
 		guard, err := jqTypeGuard(typeOf, c.Value)
 		if err != nil {
 			return "", nil, err
@@ -165,11 +171,20 @@ func jqComparison(c Condition, path string, elem bool) (string, []string, error)
 		}
 		lits := make([]string, 0, len(c.Value.List))
 		for _, item := range c.Value.List {
+			// The engine's `in` skips a null candidate (typedEqual is false
+			// for a null operand, filter.go), so a literal null in the list
+			// must not turn `in` into a null test.
+			if item.Kind == ValNull {
+				continue
+			}
 			l, err := jqLiteral(item)
 			if err != nil {
 				return "", nil, err
 			}
 			lits = append(lits, l)
+		}
+		if len(lits) == 0 {
+			return "false", nil, nil
 		}
 		return fmt.Sprintf("(%s as $x|any(%s;.==$x))", subject, strings.Join(lits, ",")), nil, nil
 

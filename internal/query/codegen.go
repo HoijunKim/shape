@@ -23,6 +23,7 @@ const (
 	warnRegex           = "regex matching differs by target: shape uses Go RE2, jq uses Oniguruma, and SQLite has no REGEXP function unless one is registered"
 	warnCaseInsensitive = "case-insensitive matching folds ASCII only in both jq (ascii_downcase) and SQLite (lower()); shape folds full Unicode, so non-ASCII letters can differ"
 	warnEmptyIn         = "an empty in-list matches nothing (rendered as false / 1=0)"
+	warnTypeGuard       = "!= and the ordering operators (< <= > >=) here have no type guard: unlike shape, SQL compares across types, so a column holding text can match a numeric operand and vice versa"
 	warnIllustrativeSQL = "this source is not a database: the SQL is illustrative, over a flat table named data"
 )
 

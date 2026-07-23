@@ -423,3 +423,59 @@ func TestSQLBackend_NonRoundTrippingColumnKeepsTheGoAnswer(t *testing.T) {
 	}
 	assertRowSetEqual(t, got, want, `column "x."`)
 }
+
+// TestSQLBackend_PushedExportAndWindowAreRowidOrdered closes the I3/M9 test
+// gaps: the central proof runs on a SPARSE fixture, where denseRowIDs is false
+// and neither exportPushed nor the pushed Query window is reached, so their
+// ORDER BY _rowid_ was unpinned. This fixture is DENSE with a secondary index
+// whose scan order differs from rowid order, so dropping the ORDER BY (or
+// emitting a wrong ordinal) reorders the result and diverges from the Go path.
+func TestSQLBackend_PushedExportAndWindowAreRowidOrdered(t *testing.T) {
+	// v runs opposite to rowid, so an index scan on v would reverse the rows.
+	var inserts []string
+	for i := 1; i <= 10; i++ {
+		inserts = append(inserts, fmt.Sprintf(`INSERT INTO t VALUES (%d, %d)`, i, 100-i))
+	}
+	pushed, gopath := pushdownFixture(t,
+		`CREATE TABLE t (id INTEGER, v INTEGER);
+		 CREATE INDEX iv ON t(v)`, inserts...)
+	if !pushed.hasRowID || !pushed.denseRowIDs {
+		t.Fatalf("fixture precondition: the table must be dense WITH-ROWID so the pushed paths run")
+	}
+
+	f := oneCond(Condition{Path: "v", Op: OpLte, Value: num(100)}) // matches all, but via a pushed WHERE
+	cf, err := CompileFilter(f, pushed.Columns())
+	if err != nil {
+		t.Fatalf("CompileFilter: %v", err)
+	}
+	if _, _, exact := pushed.pushdownFor(cf); !exact {
+		t.Fatalf("precondition: the filter must be pushable")
+	}
+	plan, _ := CompilePlan(f, Transform{}, pushed.Columns())
+	goPlan, _ := CompilePlan(f, Transform{}, gopath.Columns())
+
+	// Windowed Query must return the rowid-ordered window, not the index order.
+	for _, w := range []Window{{Limit: 3}, {Offset: 2, Limit: 3}, {Limit: 10}} {
+		got, err := pushed.Query(context.Background(), plan, w, true)
+		if err != nil {
+			t.Fatalf("pushed Query: %v", err)
+		}
+		want, err := gopath.Query(context.Background(), goPlan, w, true)
+		if err != nil {
+			t.Fatalf("go Query: %v", err)
+		}
+		assertRowSetEqual(t, got, want, fmt.Sprintf("window %+v", w))
+	}
+
+	// Export must stream in rowid order and carry rowid-1 as the index.
+	gotEnc, wantEnc := &collectEncoder{}, &collectEncoder{}
+	if _, err := pushed.Export(context.Background(), plan, gotEnc); err != nil {
+		t.Fatalf("pushed Export: %v", err)
+	}
+	if _, err := gopath.Export(context.Background(), goPlan, wantEnc); err != nil {
+		t.Fatalf("go Export: %v", err)
+	}
+	if !reflect.DeepEqual(gotEnc.rows, wantEnc.rows) {
+		t.Fatalf("pushed Export differs from the Go path\npushed: %+v\ngo:     %+v", gotEnc.rows, wantEnc.rows)
+	}
+}

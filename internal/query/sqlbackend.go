@@ -407,8 +407,6 @@ func (s *sqlBackend) rowCountSQL(ctx context.Context) (int64, error) {
 
 // --- Backend interface ---------------------------------------------------
 
-// Columns returns the base ColumnModel built from PRAGMA table_info's
-// column order (sourceOrder) joined with the profiling pass's type info.
 // taintedColumns reports which columns hold values SQLite stores differently
 // from what shape shows -- see the noPush field.
 func (s *sqlBackend) taintedColumns() map[string]bool { return s.noPush }
@@ -532,6 +530,8 @@ func (s *sqlBackend) pushedWindow(ctx context.Context, where string, args []any,
 	return ids, recs, nil
 }
 
+// Columns returns the base ColumnModel built from PRAGMA table_info's
+// column order (sourceOrder) joined with the profiling pass's type info.
 func (s *sqlBackend) Columns() *ColumnModel { return s.cm }
 
 // Profile returns the sidebar structure map computed by newSQLBackend's
