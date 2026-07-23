@@ -12,6 +12,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -858,6 +859,60 @@ func (s *sqlBackend) exportPushed(ctx context.Context, p *CompiledPlan, enc RowE
 		return n, err
 	}
 	return n, nil
+}
+
+// GetCell returns the full value at segs in the record at absolute ordinal
+// index. It fetches exactly that one row with the same LIMIT/OFFSET-over-
+// selectSQL idiom queryWindowSQL uses (SELECT ... ORDER BY _rowid_ LIMIT 1
+// OFFSET index), so index addresses the same row the table rendered at that
+// Row.Index in EVERY Query path (queryWindowSQL's offset+i, queryFiltered's
+// scan idx, and -- on a dense-rowid table -- queryPushed's rowid-1). An index
+// past the last row is an error.
+func (s *sqlBackend) GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if index < 0 {
+		return nil, false, fmt.Errorf("query: sqlBackend.GetCell: negative index %d", index)
+	}
+	rec, ok, err := s.recordAt(ctx, index)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, fmt.Errorf("query: sqlBackend.GetCell: index %d past end of table", index)
+	}
+	return resolveFullCell(rec, segs)
+}
+
+// recordAt fetches the single record at absolute scan ordinal index -- the
+// index-th row in _rowid_ order. found is false when index is past the last
+// row (no error: EOF is the caller's out-of-range signal).
+func (s *sqlBackend) recordAt(ctx context.Context, index int64) (map[string]any, bool, error) {
+	rows, err := s.db.QueryContext(ctx, s.selectSQL()+" LIMIT 1 OFFSET ?", index)
+	if err != nil {
+		return nil, false, fmt.Errorf("query: sqlBackend: getcell query %s: %w", s.table, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, false, fmt.Errorf("query: sqlBackend: getcell %s: %w", s.table, err)
+		}
+		return nil, false, nil
+	}
+	vals := make([]any, len(s.cols))
+	ptrs := make([]any, len(s.cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return nil, false, fmt.Errorf("query: sqlBackend: getcell scan %s: %w", s.table, err)
+	}
+	rec := make(map[string]any, len(s.cols))
+	for i, c := range s.cols {
+		rec[c] = readers.ToProfileValue(vals[i])
+	}
+	return rec, true, nil
 }
 
 // Close closes the read-only connection. Safe to call once; further calls

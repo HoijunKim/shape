@@ -3,6 +3,7 @@ package query
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/bits"
 	"sync"
@@ -239,6 +240,19 @@ func (m *memBackend) Export(ctx context.Context, p *CompiledPlan, enc RowEncoder
 		n++
 	}
 	return n, nil
+}
+
+// GetCell returns the full value at segs in m.records[index]. memBackend
+// indexes its in-RAM slice in O(1); an index outside [0,len) is an error
+// (spec §8, decision 3).
+func (m *memBackend) GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if index < 0 || index >= int64(len(m.records)) {
+		return nil, false, fmt.Errorf("query: memBackend.GetCell: index %d out of range [0,%d)", index, len(m.records))
+	}
+	return resolveFullCell(m.records[index], segs)
 }
 
 // Close drops the cached bitsets. memBackend holds no other closable

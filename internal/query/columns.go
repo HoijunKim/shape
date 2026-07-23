@@ -333,6 +333,42 @@ func compactJSON(v any) string {
 	return string(b)
 }
 
+// fullCellJSON marshals a resolved value to its COMPLETE, untruncated compact
+// JSON -- the tree-view escape hatch from toCell's previewCap. Like compactJSON
+// it is non-finite-safe: a direct json.Marshal failure (a NaN/±Inf deep inside
+// a Parquet DOUBLE / SQLite REAL value) falls back to a sanitizeValue copy, so
+// a value carrying a non-finite float still serializes rather than erroring.
+// Unlike compactJSON it returns an error on a second failure rather than "" --
+// GetCell distinguishes "no value" via its found flag, never via an empty body.
+func fullCellJSON(v any) (json.RawMessage, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		b, err = json.Marshal(sanitizeValue(v))
+		if err != nil {
+			return nil, fmt.Errorf("query: marshal cell value: %w", err)
+		}
+	}
+	return json.RawMessage(b), nil
+}
+
+// resolveFullCell resolves segs against record and marshals the FIRST resolved
+// value in full (Project's first-value rule, transform.go). An empty resolve()
+// set (path absent) returns found=false with a "null" body; a present value --
+// including an explicit json null -- returns found=true (for null, also a
+// "null" body: the found flag is what tells the two apart). It is the per-
+// record core every Backend.GetCell shares once it has fetched record index.
+func resolveFullCell(record any, segs []Seg) (json.RawMessage, bool, error) {
+	values := resolve(record, segs)
+	if len(values) == 0 {
+		return json.RawMessage("null"), false, nil
+	}
+	raw, err := fullCellJSON(values[0])
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
 // truncate caps s at max runes (not bytes, so multi-byte UTF-8 is never
 // split mid-character), reporting whether truncation occurred.
 func truncate(s string, max int) (string, bool) {

@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/hoijun-kim/shape/internal/profile"
 )
@@ -135,6 +136,19 @@ type Backend interface {
 	// produces the complete result, never a capped/sampled view (spec
 	// §4/§8, the "export is never capped" escape hatch).
 	Export(ctx context.Context, p *CompiledPlan, enc RowEncoder) (rows int64, err error)
+
+	// GetCell returns the FULL, untruncated value at path segs in the record
+	// at absolute ordinal index -- the escape hatch from Query's previewCap
+	// (spec §8). index is a raw record ordinal (the same value Row.Index
+	// carries), NOT a filtered/windowed position, so a cell the table rendered
+	// hands its own Row.Index straight back regardless of what filter is
+	// active. The FIRST resolved value is marshalled in full (Project's
+	// first-value rule, transform.go); found is false when the path resolves
+	// to no value (absent) -- distinct from a value that IS json null, which
+	// returns found=true with a "null" body. An index past the source's end
+	// is an error. It applies no filter or transform and reads exactly the one
+	// record.
+	GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error)
 
 	// Close releases any resources (open file handles, caches) held by the
 	// backend. It is safe to call once a backend is no longer needed;
