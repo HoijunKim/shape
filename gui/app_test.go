@@ -653,3 +653,40 @@ func TestAppCodegenForwardsTheRequest(t *testing.T) {
 		t.Fatalf("engine received %+v, want the request forwarded unchanged", spy.gotReq)
 	}
 }
+
+// --- GetCell binding (E6 Task 2) --------------------------------------------
+
+// getCellSpyEngine records the request the binding forwards. Like
+// codegenSpyEngine it needs its own override so an un-overridden GetCell would
+// not reach the real engine and fail on an unknown handle.
+type getCellSpyEngine struct {
+	*query.Engine
+	gotReq query.CellRequest
+	res    query.CellResult
+	err    error
+}
+
+func (e *getCellSpyEngine) GetCell(ctx context.Context, req query.CellRequest) (query.CellResult, error) {
+	e.gotReq = req
+	return e.res, e.err
+}
+
+func TestAppGetCellForwardsTheRequest(t *testing.T) {
+	spy := &getCellSpyEngine{
+		Engine: query.NewEngine(),
+		res:    query.CellResult{Value: json.RawMessage(`{"k":1}`), Found: true},
+	}
+	a := &App{eng: spy}
+	req := query.CellRequest{Handle: "h1", Index: 42, Path: "user.name"}
+
+	got, err := a.GetCell(req)
+	if err != nil {
+		t.Fatalf("GetCell error = %v, want nil", err)
+	}
+	if !got.Found || string(got.Value) != `{"k":1}` {
+		t.Fatalf("GetCell result = %+v, want the engine's result verbatim", got)
+	}
+	if spy.gotReq.Handle != req.Handle || spy.gotReq.Index != req.Index || spy.gotReq.Path != req.Path {
+		t.Fatalf("engine received %+v, want the request forwarded unchanged (%+v)", spy.gotReq, req)
+	}
+}

@@ -15,6 +15,8 @@ export function DiffFiles(arg1:string,arg2:string):Promise<visual.DiffVisualMode
 
 export function ExportQuery(arg1:query.ExportRequest):Promise<query.ExportResult>;
 
+export function GetCell(arg1:query.CellRequest):Promise<query.CellResult>;
+
 export function OpenFileDialog():Promise<string>;
 
 export function OpenSource(arg1:query.OpenRequest):Promise<query.OpenResult>;

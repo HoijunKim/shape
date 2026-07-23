@@ -32,6 +32,36 @@ export namespace query {
 	        this.hasMore = source["hasMore"];
 	    }
 	}
+	export class CellRequest {
+	    handle: string;
+	    index: number;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CellRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.handle = source["handle"];
+	        this.index = source["index"];
+	        this.path = source["path"];
+	    }
+	}
+	export class CellResult {
+	    value: number[];
+	    found: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CellResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.found = source["found"];
+	    }
+	}
 	export class ColumnSpec {
 	    path: string;
 	    as?: string;
