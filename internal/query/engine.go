@@ -161,11 +161,14 @@ type OpenResult struct {
 	TotalPaths       int  `json:"totalPaths"`
 }
 
-// CountRequest is the CountMatches request DTO (spec §8).
+// CountRequest is the CountMatches request DTO (spec §8). Search is the global
+// search term (empty = none), AND-ed with Filter exactly as in QueryRows so a
+// searched count matches the searched view.
 type CountRequest struct {
 	RequestID string `json:"requestId,omitempty"`
 	Handle    string `json:"handle"`
 	Filter    Filter `json:"filter"`
+	Search    string `json:"search"`
 }
 
 // CountResult is the CountMatches response DTO (spec §8). Exact is false when
@@ -186,7 +189,7 @@ func (e *Engine) CountMatches(ctx context.Context, req CountRequest) (CountResul
 	if err != nil {
 		return CountResult{}, err
 	}
-	cf, err := CompileFilter(req.Filter, backend.Columns())
+	cf, err := CompileFilterWithSearch(req.Filter, req.Search, backend.Columns())
 	if err != nil {
 		return CountResult{}, fmt.Errorf("query: CountMatches: %w", err)
 	}
@@ -241,11 +244,14 @@ func (e *Engine) GetCell(ctx context.Context, req CellRequest) (CellResult, erro
 	return CellResult{Value: raw, Found: found}, nil
 }
 
-// QueryRequest is the QueryRows request DTO (spec §8).
+// QueryRequest is the QueryRows request DTO (spec §8). Search is the global
+// search term (empty = none), AND-ed with Filter and folded into the same
+// compiled predicate (decision 4).
 type QueryRequest struct {
 	RequestID string    `json:"requestId,omitempty"`
 	Handle    string    `json:"handle"`
 	Filter    Filter    `json:"filter"`
+	Search    string    `json:"search"`
 	Transform Transform `json:"transform"`
 	Offset    int64     `json:"offset"`
 	Limit     int       `json:"limit"`
@@ -429,7 +435,7 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	if err != nil {
 		return RowSet{}, err
 	}
-	plan, err := CompilePlan(req.Filter, req.Transform, backend.Columns())
+	plan, err := CompilePlanWithSearch(req.Filter, req.Search, req.Transform, backend.Columns())
 	if err != nil {
 		return RowSet{}, fmt.Errorf("query: QueryRows: %w", err)
 	}

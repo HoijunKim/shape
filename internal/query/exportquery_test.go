@@ -709,3 +709,39 @@ type emptyColumnsBackend struct {
 func (b *emptyColumnsBackend) Columns() *ColumnModel { return &ColumnModel{byPath: map[string]int{}} }
 
 func (b *emptyColumnsBackend) Close() error { return nil }
+
+// TestExportQuery_SearchWritesOnlyMatchingRows guards that ExportQuery threads
+// req.Search into the plan (E6 Task 3 Step 2). Mutation: compile via
+// CompilePlan (dropping Search) -> all three rows are written and this fails.
+func TestExportQuery_SearchWritesOnlyMatchingRows(t *testing.T) {
+	maps := []map[string]any{
+		{"name": "alice", "city": "london"},
+		{"name": "bob", "city": "paris"},
+		{"name": "carol", "city": "london"},
+	}
+	eng, handle, _ := openExportFixture(t, maps, 0)
+	out := filepath.Join(t.TempDir(), "out.ndjson")
+
+	res, err := eng.ExportQuery(context.Background(), ExportRequest{
+		Handle: handle, Search: "london", Format: string(ExportNDJSON), OutPath: out,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ExportQuery error = %v, want nil", err)
+	}
+	if res.RowsOut != 2 {
+		t.Fatalf("RowsOut = %d, want 2 (only the london rows); a dropped Search would write 3", res.RowsOut)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading the export: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("exported %d lines, want 2", len(lines))
+	}
+	for _, ln := range lines {
+		if !strings.Contains(ln, "london") {
+			t.Fatalf("exported a non-matching row: %s", ln)
+		}
+	}
+}

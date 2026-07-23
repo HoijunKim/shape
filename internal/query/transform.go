@@ -361,7 +361,15 @@ func (p *CompiledPlan) FilterKey() string {
 // returned as-is (wrapped with context); nothing about key computation
 // itself can fail here (CompileFilter already computed and validated it).
 func CompilePlan(f Filter, t Transform, cm *ColumnModel) (*CompiledPlan, error) {
-	cf, err := CompileFilter(f, cm)
+	return CompilePlanWithSearch(f, "", t, cm)
+}
+
+// CompilePlanWithSearch is CompilePlan with a global search folded into the
+// filter (CompileFilterWithSearch): the plan's Filter enforces (filter AND
+// search) and its FilterKey incorporates the search, so caches never alias two
+// searches. With search == "" it is byte-identical to CompilePlan.
+func CompilePlanWithSearch(f Filter, search string, t Transform, cm *ColumnModel) (*CompiledPlan, error) {
+	cf, err := CompileFilterWithSearch(f, search, cm)
 	if err != nil {
 		return nil, fmt.Errorf("query: compile plan: filter: %w", err)
 	}
