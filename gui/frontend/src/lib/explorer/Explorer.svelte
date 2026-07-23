@@ -192,16 +192,22 @@
       </div>
     </div>
     {#if $explorer.status === "ready"}
-      <!-- E4: a FILTER runs on the record, before projection, so its column
+      <!-- All three docked panels share ONE bounded, scrollable strip: at
+           45vh + 45vh + 40vh they would otherwise stack past the viewport and
+           push the status bar off-screen (branch-review M8). The strip caps at
+           half the height and scrolls; each panel keeps its own styling.
+           E4: a FILTER runs on the record, before projection, so its column
            list is the BASE set -- hiding a column in the transform panel must
            not remove it from the filter's vocabulary. -->
-      <FilterBar columns={$explorer.baseColumns} open={filterOpen} {seed} />
-      <TransformPanel
-        columns={$explorer.baseColumns}
-        open={columnsOpen}
-        on:errors={(e) => (transformErrors = e.detail)}
-      />
-      <CodegenPanel open={codeOpen} />
+      <div class="panels">
+        <FilterBar columns={$explorer.baseColumns} open={filterOpen} {seed} />
+        <TransformPanel
+          columns={$explorer.baseColumns}
+          open={columnsOpen}
+          on:errors={(e) => (transformErrors = e.detail)}
+        />
+        <CodegenPanel open={codeOpen} />
+      </div>
     {/if}
     <StatusBar
       tier={$explorer.tier}
@@ -311,6 +317,16 @@
     border-radius: var(--radius-sm);
     max-width: 60ch;
     text-align: center;
+  }
+
+  /* One scrollable strip for the docked panels, capped so the table and
+     the status bar always stay visible however many panels are open. */
+  .panels {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 50vh;
+    overflow-y: auto;
   }
 
   .explorer {
