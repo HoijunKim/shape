@@ -353,6 +353,12 @@ func (s *sqlBackend) rowCountSQL(ctx context.Context) (int64, error) {
 
 // Columns returns the base ColumnModel built from PRAGMA table_info's
 // column order (sourceOrder) joined with the profiling pass's type info.
+// taintedColumns reports which columns hold values SQLite stores differently
+// from what shape shows. Populated in E5 Task 6 by the raw-value probe; until
+// then it is empty, which is the safe default for CODEGEN (a missing warning)
+// but NOT for pushdown, which must refuse a column it cannot vouch for.
+func (s *sqlBackend) taintedColumns() map[string]bool { return nil }
+
 func (s *sqlBackend) Columns() *ColumnModel { return s.cm }
 
 // Profile returns the sidebar structure map computed by newSQLBackend's

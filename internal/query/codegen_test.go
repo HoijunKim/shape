@@ -1,8 +1,11 @@
 package query
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -230,5 +233,152 @@ func TestSQLLiteral(t *testing.T) {
 func TestSQLLiteral_RefusesNonFiniteNumber(t *testing.T) {
 	if _, err := sqlValueLiteral(Value{Kind: ValNumber, Num: math.Inf(1)}); err == nil {
 		t.Fatalf("sqlValueLiteral(+Inf) error = nil, want an error")
+	}
+}
+
+// --- Codegen entry point ------------------------------------------------------
+
+// countingCodegenBackend fails the test if Codegen ever touches data.
+type countingCodegenBackend struct {
+	Backend
+	cols   *ColumnModel
+	counts int64
+}
+
+func (b *countingCodegenBackend) Columns() *ColumnModel { return b.cols }
+func (b *countingCodegenBackend) Count(ctx context.Context, f *CompiledFilter) (int64, bool, error) {
+	b.counts++
+	return 0, true, nil
+}
+func (b *countingCodegenBackend) Close() error { return nil }
+
+// TestEngineCodegen_NeverScans pins the purity promise: the GUI calls this on
+// every filter keystroke, so a codegen request that read data would turn
+// typing into a full-file scan.
+//
+// Mutation that must break it: have Engine.Codegen call backend.Count -> the
+// counter is non-zero and this fails.
+func TestEngineCodegen_NeverScans(t *testing.T) {
+	eng := NewEngine()
+	be := &countingCodegenBackend{cols: codegenModel(t, []map[string]any{{"a": "x"}})}
+	handle := eng.register(be, sourceMeta{format: "ndjson"})
+
+	if _, err := eng.Codegen(CodegenRequest{Handle: handle,
+		Filter: Filter{Combinator: And, Conditions: []Condition{{Path: "a", Op: OpNotNull}}}}); err != nil {
+		t.Fatalf("Codegen error = %v, want nil", err)
+	}
+	if be.counts != 0 {
+		t.Fatalf("Codegen ran %d backend counts, want 0 -- codegen must be pure", be.counts)
+	}
+}
+
+func TestEngineCodegen_UnknownHandle(t *testing.T) {
+	if _, err := NewEngine().Codegen(CodegenRequest{Handle: "nope"}); err == nil {
+		t.Fatalf("Codegen(unknown handle) error = nil, want an error")
+	}
+}
+
+// TestEngineCodegen_ReportsTheSourcesOwnFormatAndTable covers what no
+// type-switch could: the format and table come from what OpenSource actually
+// resolved, not from what the caller passed.
+func TestEngineCodegen_ReportsTheSourcesOwnFormatAndTable(t *testing.T) {
+	t.Run("sqlite reports the AUTO-RESOLVED table", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "fixture.sqlite")
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE TABLE people (name TEXT); INSERT INTO people VALUES ('ada')`); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+
+		eng := NewEngine()
+		// Table deliberately EMPTY: sqliteChooseTable resolves it.
+		res, err := eng.OpenSource(context.Background(), OpenRequest{Path: path})
+		if err != nil {
+			t.Fatalf("OpenSource error = %v", err)
+		}
+		t.Cleanup(func() { _ = eng.CloseSource(res.Handle) })
+
+		gen, err := eng.Codegen(CodegenRequest{Handle: res.Handle})
+		if err != nil {
+			t.Fatalf("Codegen error = %v", err)
+		}
+		// Mutation that must break it: store req.Table (which is "") instead
+		// of the resolved name -> the SQL reads FROM "data".
+		if !strings.Contains(gen.SQL, `FROM "people"`) {
+			t.Fatalf("SQL does not name the resolved table:\n%s", gen.SQL)
+		}
+		if strings.Contains(gen.SQL, "illustrative") {
+			t.Fatalf("a real database must not be labelled illustrative:\n%s", gen.SQL)
+		}
+	})
+
+	t.Run("csv reports csv", func(t *testing.T) {
+		path := writeCSVFile(t, []string{"name", "age"}, []map[string]any{{"name": "ada", "age": "30"}})
+		eng := NewEngine()
+		res, err := eng.OpenSource(context.Background(), OpenRequest{Path: path})
+		if err != nil {
+			t.Fatalf("OpenSource error = %v", err)
+		}
+		t.Cleanup(func() { _ = eng.CloseSource(res.Handle) })
+
+		gen, err := eng.Codegen(CodegenRequest{Handle: res.Handle})
+		if err != nil {
+			t.Fatalf("Codegen error = %v", err)
+		}
+		// Mutation that must break it: hardcode Format "" -> the note reads
+		// "run: jq '<program>' file.json" and the SQL loses its csv label.
+		if !strings.Contains(gen.JQ, "convert csv first") {
+			t.Fatalf("jq note does not mention csv:\n%s", gen.JQ)
+		}
+		if !strings.Contains(gen.SQL, "this source is csv") {
+			t.Fatalf("SQL is not labelled csv:\n%s", gen.SQL)
+		}
+	})
+
+	// A .ndjson file is readers.FormatJSON, so relying on readers.Format alone
+	// would tell the user to prepend ".[] |" to a line-delimited file.
+	t.Run("an ndjson file is not called a json array", func(t *testing.T) {
+		path := writeNDJSONFile(t, []map[string]any{{"a": "x"}, {"a": "y"}})
+		eng := NewEngine()
+		res, err := eng.OpenSource(context.Background(), OpenRequest{Path: path})
+		if err != nil {
+			t.Fatalf("OpenSource error = %v", err)
+		}
+		t.Cleanup(func() { _ = eng.CloseSource(res.Handle) })
+
+		gen, err := eng.Codegen(CodegenRequest{Handle: res.Handle})
+		if err != nil {
+			t.Fatalf("Codegen error = %v", err)
+		}
+		if strings.Contains(gen.JQ, ".[] |") {
+			t.Fatalf("an NDJSON source must not be given the JSON-array prefix:\n%s", gen.JQ)
+		}
+		if !strings.Contains(gen.JQ, "one JSON object per line") {
+			t.Fatalf("jq note does not describe NDJSON:\n%s", gen.JQ)
+		}
+	})
+}
+
+func TestCodegen_DeduplicatesWarnings(t *testing.T) {
+	ctx := CodegenContext{Format: "ndjson", Cols: codegenModel(t, []map[string]any{{"a": "x", "b": "y"}})}
+	f := Filter{Combinator: And, Conditions: []Condition{
+		{Path: "a", Op: OpRegex, Value: Value{Kind: ValString, Str: "^x"}},
+		{Path: "b", Op: OpRegex, Value: Value{Kind: ValString, Str: "^y"}},
+	}}
+	gen, err := Codegen(f, Transform{}, ctx)
+	if err != nil {
+		t.Fatalf("Codegen error = %v", err)
+	}
+	n := 0
+	for _, w := range gen.Warnings {
+		if w == warnRegex {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("regex warning appears %d times across two regex conditions, want 1: %v", n, gen.Warnings)
 	}
 }

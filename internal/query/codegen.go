@@ -208,3 +208,78 @@ func sqlValueLiteral(v Value) (string, error) {
 		return "", fmt.Errorf("query: codegen: unknown value kind %q", v.Kind)
 	}
 }
+
+// Generated is the codegen result: the two programs plus any caveats a user
+// must see before trusting them elsewhere (spec §7).
+type Generated struct {
+	JQ       string   `json:"jq"`
+	SQL      string   `json:"sql"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// CodegenRequest is the Codegen request DTO (spec §8).
+type CodegenRequest struct {
+	Handle    string    `json:"handle"`
+	Filter    Filter    `json:"filter"`
+	Transform Transform `json:"transform"`
+}
+
+// Codegen renders f+t as the equivalent jq program and SQL query.
+//
+// It is PURE: no engine state, no I/O, no scanning. That is what makes it
+// golden-testable in isolation, and it is also a promise to the caller -- the
+// GUI refreshes this on every filter keystroke, so it must never touch data.
+func Codegen(f Filter, t Transform, ctx CodegenContext) (Generated, error) {
+	jq, jqWarnings, err := jqProgram(f, t, ctx)
+	if err != nil {
+		return Generated{}, err
+	}
+	sqlText, sqlWarnings, err := sqlQuery(f, t, ctx)
+	if err != nil {
+		return Generated{}, err
+	}
+	return Generated{
+		JQ:       jq,
+		SQL:      sqlText,
+		Warnings: dedupeWarnings(append(jqWarnings, sqlWarnings...)),
+	}, nil
+}
+
+// dedupeWarnings keeps the first occurrence of each distinct warning, in
+// order: the same caveat reached once per condition would otherwise be
+// repeated as many times as the filter has conditions.
+func dedupeWarnings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, w := range in {
+		if _, dup := seen[w]; dup {
+			continue
+		}
+		seen[w] = struct{}{}
+		out = append(out, w)
+	}
+	return out
+}
+
+// Codegen renders the jq/SQL equivalent of a request's filter+transform for an
+// open handle (spec §8). It looks the handle up only to fill in the source's
+// format, table and column model -- it never queries the backend.
+func (e *Engine) Codegen(req CodegenRequest) (Generated, error) {
+	backend, err := e.lookup(req.Handle)
+	if err != nil {
+		return Generated{}, err
+	}
+	meta := e.sourceMetaOf(req.Handle)
+	ctx := CodegenContext{
+		Format: meta.format,
+		Table:  meta.table,
+		Cols:   backend.Columns(),
+	}
+	if sb, ok := backend.(*sqlBackend); ok {
+		ctx.Tainted = sb.taintedColumns()
+	}
+	return Codegen(req.Filter, req.Transform, ctx)
+}
