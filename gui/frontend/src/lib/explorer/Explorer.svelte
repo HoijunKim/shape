@@ -12,6 +12,7 @@
   import FilterBar from "./FilterBar.svelte";
   import TransformPanel from "./TransformPanel.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import CodegenPanel from "./CodegenPanel.svelte";
 
   // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
   // siblings under App.svelte (Explorer never mounts Header), so App owns
@@ -24,6 +25,7 @@
   // is why both are bindable props rather than plain locals.
   export let columnsOpen = false;
   export let exportOpen = false;
+  export let codeOpen = false;
 
   // E4: the columns panel owns the draft, the export dialog needs to know when
   // that draft is invalid, and the two are siblings -- so Explorer routes it,
@@ -199,6 +201,7 @@
         open={columnsOpen}
         on:errors={(e) => (transformErrors = e.detail)}
       />
+      <CodegenPanel open={codeOpen} />
     {/if}
     <StatusBar
       tier={$explorer.tier}

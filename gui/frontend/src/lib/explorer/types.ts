@@ -22,6 +22,8 @@ export type Transform = query.Transform;
 export type ColumnSpec = query.ColumnSpec;
 export type ExportRequest = query.ExportRequest;
 export type ExportResult = query.ExportResult;
+export type Generated = query.Generated;
+export type CodegenRequest = query.CodegenRequest;
 
 export const CellKind = query.CellKind;
 export type CellKind = query.CellKind;
