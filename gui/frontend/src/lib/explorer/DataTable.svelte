@@ -487,7 +487,7 @@
 
   .expand-btn:hover {
     color: var(--accent);
-    background: var(--surface-3);
+    background: color-mix(in srgb, var(--text-muted) 12%, var(--surface-2));
   }
 
   .expand-btn:focus-visible {
