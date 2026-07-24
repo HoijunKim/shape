@@ -150,6 +150,17 @@ type Backend interface {
 	// record.
 	GetCell(ctx context.Context, index int64, segs []Seg) (json.RawMessage, bool, error)
 
+	// StreamRecords calls fn once per source record, in absolute-index order,
+	// with the RAW decoded record (the reader's nested map[string]any, numbers
+	// as json.Number) -- NOT projected or filtered (unlike Query/Export). It is
+	// the read side of the E7 save path (SaveEdits writes every record back with
+	// the edit overlay applied at its source path). fn returning an error stops
+	// the stream and is returned. The record must not be retained/mutated past
+	// the call by fn on the streaming tiers (it is decoded fresh per record);
+	// SaveEdits copies only the spine it edits (setAtPath), so the backend's own
+	// records are never mutated.
+	StreamRecords(ctx context.Context, fn func(index int64, rec any) error) error
+
 	// Close releases any resources (open file handles, caches) held by the
 	// backend. It is safe to call once a backend is no longer needed;
 	// further calls to the other methods after Close are not guaranteed to
