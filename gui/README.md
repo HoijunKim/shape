@@ -183,11 +183,3 @@ GUI build needs cgo + native webkit; the CLI stays cgo-free on every OS.
   affordance to jump there directly either. Fixing this needs segmented or
   virtual (re-based) scrolling in `DataTable`, deferred as real follow-up
   work rather than patched around here.
-- **The filtered empty state's "Clear filter" button doesn't clear the
-  filter bar itself.** Clicking it (shown when a filter matches zero rows)
-  resets the underlying query back to match-all, so the data genuinely goes
-  unfiltered -- but the filter bar owns its own condition rows as local
-  component state and isn't wired to reset alongside it, so the bar can keep
-  showing the old (already-cleared) conditions. Using the filter bar's own
-  "Clear" button does not have this problem. A documented E3 limitation, left
-  for a later task to reconcile.

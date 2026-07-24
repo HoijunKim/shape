@@ -27,6 +27,14 @@
   // elsewhere in this codebase use the same bump-a-counter pattern instead of
   // re-signalling via a value that might repeat).
   export let seed: { path: string; type: string; nonce: number } | null = null;
+  // E6 review: the empty-state "Clear filter" button (Explorer.clearFilter)
+  // resets the STORE's filter to match-all but cannot reach into this bar's
+  // own local `draft`, so the bar kept showing the (already-cleared)
+  // conditions. Explorer bumps this nonce when it clears the filter from
+  // outside; on a bump we reset the draft to empty. Same nonce/guard idiom as
+  // `seed` above (a counter, not a boolean, since two clears in a row must
+  // each register). 0 = no external clear yet.
+  export let clearNonce = 0;
 
   let draft: FilterDraft = emptyDraft();
   let nextId = 1;
@@ -103,6 +111,19 @@
   $: if (seed && seed.nonce !== prevSeedNonce) {
     prevSeedNonce = seed.nonce;
     seedCondition(seed.path, seed.type);
+  }
+
+  // Reset the draft when the filter is cleared from OUTSIDE the bar. Initialized
+  // to the incoming value (like prevSeedNonce) so a remount never spuriously
+  // clears. It does NOT rebuild()/re-apply: Explorer.clearFilter already set the
+  // store to match-all, so re-sending it would be a redundant round-trip -- and
+  // we cancel any armed edit so a mid-typed condition cannot re-apply the filter
+  // the user just cleared.
+  let prevClearNonce = clearNonce;
+  $: if (clearNonce !== prevClearNonce) {
+    prevClearNonce = clearNonce;
+    debouncedApply.cancel();
+    draft = emptyDraft();
   }
 
   function seedCondition(path: string, type: string): void {
