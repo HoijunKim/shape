@@ -16,38 +16,44 @@
 
 # shape
 
-See the real shape of your structured data files.
+**Drag in any data file — JSON, NDJSON, CSV, TSV, Parquet, SQLite — and explore
+the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 
-`shape` profiles JSON, NDJSON, CSV, TSV, Parquet, and SQLite files, infers a
-JSON Schema (Draft 2020-12) from them, and diffs two snapshots to flag
-breaking changes before they reach downstream consumers. It reads in a single
-streaming pass with bounded memory - past 16384 distinct values per field it
-automatically switches to an approximate mode (HyperLogLog cardinality +
-Space-Saving top-k), so profiling a multi-gigabyte file does not require
-loading it into memory. A cgo-free CLI, a `hoijun-kim/shape@v1` GitHub Action
-for CI, and a Wails desktop GUI share the same core.
+[![ci](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml/badge.svg)](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/hoijun-kim/shape?sort=semver)](https://github.com/hoijun-kim/shape/releases)
+[![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+
+Most tools for poking at a data file assume you already know jq or SQL. `shape`
+is for everyone who bounces off them. Open a file and you get a fast, virtualized
+table of the actual rows beside a structure map of every field — then a
+click-to-build visual filter, a global search, in-place cell editing, and a
+one-click export, with the **equivalent jq and SQL shown for whatever you built**
+so you can take the query with you.
+
+It reads in a single streaming pass with bounded memory, so a multi-gigabyte file
+opens without loading into RAM (past 16,384 distinct values per field it switches
+to an approximate mode — HyperLogLog cardinality + Space-Saving top-k). The same
+cgo-free core also ships as a command-line profiler (schema inference + breaking-
+change diffs) and a `hoijun-kim/shape@v1` GitHub Action for CI.
+
+→ [What the desktop app does](#desktop-gui) · [Install](#install)
 
 ## Install
 
-**Go:**
+**Desktop app (the explorer).** Download the build for your platform from the
+[Releases page](https://github.com/hoijun-kim/shape/releases) and run it —
+`shape-gui_<version>_windows_amd64.zip`, `..._darwin_universal.zip`, or
+`..._linux_amd64.tar.gz`. The binaries are unsigned, so the first launch needs
+"Open anyway" (macOS Gatekeeper) or "More info → Run anyway" (Windows SmartScreen).
+
+**CLI (`shape`).** The command-line profiler ships separately:
 
 ```
-go install github.com/hoijun-kim/shape@latest
+go install github.com/hoijun-kim/shape@latest        # any platform with Go
+brew install --cask hoijun-kim/tap/shape             # macOS / Linux
 ```
 
-**Homebrew (macOS/Linux):**
-
-```
-brew install --cask hoijun-kim/tap/shape
-```
-
-**npm:**
-
-```
-npm install -g @hoijun-kim/shape
-```
-
-**Direct download:** grab the archive for your platform from the
+or grab a `shape_<version>_<os>_<arch>` archive from the same
 [Releases page](https://github.com/hoijun-kim/shape/releases).
 
 ## Usage
