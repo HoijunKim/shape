@@ -286,4 +286,20 @@ describe("FilterBar", () => {
     await tick();
     expect(target.querySelectorAll(".condition-row").length).toBe(0);
   });
+
+  // E6 review: the empty-state "Clear filter" button bumps clearNonce; the bar
+  // must drop its own (now-stale) condition rows, since it owns its draft
+  // independently of $explorer. Mutation: don't reset draft on a clearNonce
+  // change -> the row survives the external clear and this fails.
+  it("resets its condition rows when the filter is cleared externally (clearNonce bump)", async () => {
+    const t = mount([ageColumn]);
+    await tick();
+    (t.querySelector("button.add-condition") as HTMLButtonElement).click();
+    await tick();
+    expect(t.querySelectorAll(".condition-row").length).toBe(1); // sanity: a row exists
+
+    (cmp as unknown as { $set: (p: Record<string, unknown>) => void }).$set({ clearNonce: 1 });
+    await tick();
+    expect(t.querySelectorAll(".condition-row").length).toBe(0);
+  });
 });

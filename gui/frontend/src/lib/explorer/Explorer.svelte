@@ -121,13 +121,14 @@
   // E3 Task 8: the empty state's "Clear filter" affordance -- distinct from
   // StatusBar's Cancel (which only stops an in-flight CountMatches via
   // explorer.cancelCount()). This resets the filter to match-all so the
-  // unfiltered rows return. KNOWN GAP: FilterBar owns its own draft state
-  // independently (Task 7) and does not subscribe to $explorer.filterActive,
-  // so clearing from here does not reset FilterBar's rows/conditions back to
-  // empty -- the bar can keep showing stale conditions while the data is
-  // genuinely unfiltered underneath. Left for a later task to reconcile.
+  // unfiltered rows return, AND bumps filterClearNonce so FilterBar (which owns
+  // its own draft, independent of $explorer) resets its condition rows too --
+  // otherwise the bar keeps showing the just-cleared conditions over genuinely
+  // unfiltered data (the E3 known gap, now closed).
+  let filterClearNonce = 0;
   function clearFilter(): void {
     explorer.setFilter({ combinator: "and" } as any);
+    filterClearNonce += 1;
   }
 
   $: fileName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "";
@@ -262,7 +263,7 @@
            list is the BASE set -- hiding a column in the transform panel must
            not remove it from the filter's vocabulary. -->
       <div class="panels">
-        <FilterBar columns={$explorer.baseColumns} open={filterOpen} {seed} />
+        <FilterBar columns={$explorer.baseColumns} open={filterOpen} {seed} clearNonce={filterClearNonce} />
         <TransformPanel
           columns={$explorer.baseColumns}
           open={columnsOpen}
