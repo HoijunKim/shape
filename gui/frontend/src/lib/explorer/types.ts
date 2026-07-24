@@ -22,6 +22,9 @@ export type Transform = query.Transform;
 export type ColumnSpec = query.ColumnSpec;
 export type ExportRequest = query.ExportRequest;
 export type ExportResult = query.ExportResult;
+export type SaveRequest = query.SaveRequest;
+export type SaveResult = query.SaveResult;
+export type CellEdit = query.CellEdit;
 export type Generated = query.Generated;
 export type CodegenRequest = query.CodegenRequest;
 
