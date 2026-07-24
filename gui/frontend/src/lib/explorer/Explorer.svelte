@@ -15,6 +15,9 @@
   import CodegenPanel from "./CodegenPanel.svelte";
   import SearchBar from "./SearchBar.svelte";
   import ValueTreeOverlay from "./ValueTreeOverlay.svelte";
+  import EditBar from "./EditBar.svelte";
+  import EditedRows from "./EditedRows.svelte";
+  import SaveDialog from "./SaveDialog.svelte";
 
   // E3 Task 7: a BINDABLE prop, not a local `let` -- Header/Explorer are
   // siblings under App.svelte (Explorer never mounts Header), so App owns
@@ -131,6 +134,14 @@
     filterClearNonce += 1;
   }
 
+  // E7: the edit toolbar's "Edited only" toggle and the save dialog's open
+  // state. editedOnly is guarded at the render site by editedCount > 0, so
+  // reverting the last edit (here or in the diff view) falls back to the table
+  // rather than stranding the user on an empty "No edits yet" pane with no
+  // toolbar left to toggle back.
+  let editedOnly = false;
+  let saveOpen = false;
+
   $: fileName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "";
 </script>
 
@@ -178,6 +189,10 @@
              behind the filter panel's `{#if open}`), so a search is reachable
              the moment a file is open. -->
         <SearchBar />
+        <!-- E7: the edit toolbar sits between the search box and the grid. It
+             renders itself only when the overlay is non-empty; the `save` event
+             opens the copy dialog (parent-owned, like Export). -->
+        <EditBar bind:editedOnly on:save={() => (saveOpen = true)} />
         <!-- A5: a MID-SCROLL page-fetch failure must be non-destructive -- it
              must not discard an already-rendered grid or the user's scroll
              position (unlike `status === "error"` above, which owns the
@@ -193,7 +208,12 @@
             <button class="dismiss" on:click={() => explorer.dismissPageError()} aria-label="Dismiss">✕</button>
           </div>
         {/if}
-        {#if $explorer.columns.length === 0}
+        {#if editedOnly && $explorer.editedCount > 0}
+          <!-- E7: the edited-only diff view replaces the grid. Guarded by
+               editedCount so reverting the last edit auto-returns to the
+               table (the toolbar toggle is gone at that point). -->
+          <EditedRows />
+        {:else if $explorer.columns.length === 0}
           <div class="empty-state">
             <p>No columns detected</p>
             {#if $explorer.skipped > 0}
@@ -297,6 +317,7 @@
       disabledReason={transformErrors[0] ?? ""}
       on:close={() => (exportOpen = false)}
     />
+    <SaveDialog open={saveOpen} on:close={() => (saveOpen = false)} />
     <ValueTreeOverlay
       open={cellOpen}
       loading={cellLoading}
