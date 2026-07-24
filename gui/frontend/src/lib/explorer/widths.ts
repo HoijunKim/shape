@@ -145,9 +145,18 @@ export function rowWindowFor(
   const vis = visibleRowCount(clientHeight, headerH, rowH);
   const denom = contentHeight - clientHeight;
   const frac = denom > 0 ? clamp(scrollTop / denom, 0, 1) : 0; // guard denom<=0 (NaN/Inf)
+  // firstVisible is the TOP visible row (rendered at band-offset 0). No above-
+  // overscan (in scaled mode a 1px scroll jumps many rows, so an above buffer
+  // buys nothing and would push the tail below the fold), and no below-overscan
+  // either: the scaled rows window is natively sticky with `overflow:visible`
+  // (so the sticky row gutter keeps pinning to the real scroll container), so a
+  // rendered row past the band would inflate scrollHeight. Rendering exactly the
+  // band rows (+ one partial, clipped by the viewport) keeps that overflow to
+  // <= one row. `overscan` is unused in the scaled branch by design.
+  void overscan;
   const firstVisible = Math.round(frac * Math.max(0, safeTotal - vis));
-  const firstRow = clamp(firstVisible - overscan, 0, maxRow);
-  const lastRow = clamp(firstVisible + vis + overscan, 0, maxRow);
+  const firstRow = clamp(firstVisible, 0, maxRow);
+  const lastRow = clamp(firstVisible + vis, 0, maxRow);
   return { firstRow, lastRow };
 }
 

@@ -17,9 +17,10 @@
 // store never invokes the real Wails bridge (ensurePages() short-circuits
 // on `status !== "ready"`); only DataTable's own reactive wiring is under
 // test.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { tick } from "svelte";
 import DataTable from "./DataTable.svelte";
+import { explorer } from "./store";
 import type { Column } from "./types";
 
 const ROW_H = 28;
@@ -174,5 +175,94 @@ describe("DataTable: resetToken bump scrolls back to the top (T9)", () => {
     await tick();
 
     expect(viewportEl.scrollTop).toBe(12000); // unchanged: no spurious reset
+  });
+});
+
+// V1: virtualization past the height cap. A tiny injected maxContentPx crosses
+// the cap with a few-hundred-row fixture (a real 33M-px fixture is impossible
+// in jsdom). Assertions bind to data-row-index (the absolute index) and the
+// computed viewport-y, NOT top/ROW_H (which decodes the window offset in scaled
+// mode) or mere DOM presence (a row can be present yet clipped below the fold).
+describe("DataTable scaled virtualization (V1)", () => {
+  const HEADER_H = 32;
+  let target: HTMLElement;
+  let cmp: { $set: (p: Record<string, unknown>) => void; $destroy: () => void } | null = null;
+
+  afterEach(() => {
+    cmp?.$destroy();
+    cmp = null;
+    target?.remove();
+  });
+
+  it("caps contentHeight and seats the true tail row on-screen at maxScroll", async () => {
+    const columns = [makeColumn("a")];
+    const total = 300;
+    const CAP = 5000; // 32 + 300*28 = 8432 > 5000 -> scaled
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    const ensureSpy = vi.spyOn(explorer, "ensurePages").mockResolvedValue(undefined as any);
+
+    cmp = new DataTable({ target, props: { columns, total, focusPath: "", maxContentPx: CAP } }) as any;
+    await tick();
+
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    Object.defineProperty(viewportEl, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 300, configurable: true });
+
+    // (i) the spacer is capped, not 32 + total*ROW_H.
+    // Mutation: contentHeight = HEADER_H + total*ROW_H (no cap) -> this fails.
+    const content = target.querySelector(".content") as HTMLElement;
+    expect(content.style.height).toBe(`${CAP}px`);
+
+    // Scroll to the very bottom.
+    const maxScroll = CAP - 800;
+    viewportEl.scrollTop = maxScroll;
+    viewportEl.dispatchEvent(new Event("scroll"));
+    await new Promise((r) => requestAnimationFrame(r));
+    await tick();
+
+    // (ii) the true tail row (index total-1) renders AND is on-screen.
+    // Mutation: header-blind visible count, or a floor(scrollTop/ROW_H) mapping,
+    // -> the tail row is below the fold (viewport-y > clientHeight) or absent.
+    const tail = target.querySelector(`[data-row-index="${total - 1}"]`) as HTMLElement;
+    expect(tail, "the tail row must render at maxScroll").toBeTruthy();
+    const viewportY = HEADER_H + parseFloat(tail.style.top);
+    expect(viewportY).toBeLessThanOrEqual(800);
+    expect(viewportY).toBeGreaterThanOrEqual(0);
+
+    // (iii) the fetch window straddles the tail (decision 2: pages by abs index).
+    const lastCall = ensureSpy.mock.calls.at(-1) as [number, number] | undefined;
+    expect(lastCall).toBeTruthy();
+    expect(lastCall![1]).toBe(total - 1);
+    ensureSpy.mockRestore();
+  });
+
+  it("positions scaled rows window-relative: the top rendered row sits at top 0", async () => {
+    // In scaled mode a row is placed at (i - effectiveFirstRow)*ROW_H, so the
+    // window's first row is at 0 and the tail at the band bottom -- NOT at
+    // absolute i*ROW_H (which past the cap would be off the clamped spacer).
+    // Mutation: rowTopFor ignores `scaled` and uses i*ROW_H -> the first row's
+    // top is firstRow*ROW_H (thousands), not 0.
+    const columns = [makeColumn("a")];
+    const total = 300, CAP = 5000;
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    vi.spyOn(explorer, "ensurePages").mockResolvedValue(undefined as any);
+
+    cmp = new DataTable({ target, props: { columns, total, focusPath: "", maxContentPx: CAP } }) as any;
+    await tick();
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    Object.defineProperty(viewportEl, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 300, configurable: true });
+    viewportEl.scrollTop = CAP - 800; // maxScroll
+    viewportEl.dispatchEvent(new Event("scroll"));
+    await new Promise((r) => requestAnimationFrame(r));
+    await tick();
+
+    const tops = Array.from(target.querySelectorAll(".row"))
+      .map((el) => parseFloat((el as HTMLElement).style.top))
+      .sort((a, b) => a - b);
+    expect(tops[0]).toBe(0); // window-relative, not firstRow*ROW_H
+    for (const t of tops) expect(t).toBeGreaterThanOrEqual(0);
   });
 });

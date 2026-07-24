@@ -320,7 +320,9 @@ describe("rowWindowFor", () => {
     // tiny and lastRow never reaches total-1 (the tail is unreachable).
     expect(bottom.lastRow).toBe(total - 1);
     const vis = visibleRowCount(clientHeight, HEADER_H, ROW_H);
-    expect(bottom.firstRow).toBe(total - vis - OVERSCAN);
+    // The top visible row is total-vis (no above-overscan in scaled mode), so
+    // rows [total-vis .. total-1] fill the band with total-1 at its bottom.
+    expect(bottom.firstRow).toBe(total - vis);
   });
 
   it("scaled: guards denom===0 (0/0 -> NaN) and denom<0, never past total-1", () => {
