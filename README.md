@@ -133,6 +133,12 @@ Build it with `wails build` (see `gui/README.md` for the required build order).
 
 JSON, NDJSON, CSV, TSV, Parquet, SQLite.
 
+## Author
+
+Made by **Hoijun Kim** ([hoijun-kim](https://github.com/hoijun-kim)).
+
 ## License
 
-MIT - see [LICENSE](LICENSE).
+**PolyForm Noncommercial License 1.0.0** — free for any noncommercial purpose
+(personal, research, education, nonprofits); commercial use is not permitted.
+See [LICENSE](LICENSE). For a commercial license, contact the author.
