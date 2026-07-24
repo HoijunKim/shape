@@ -142,6 +142,13 @@
   let editedOnly = false;
   let saveOpen = false;
 
+  // Drop out of the edited-only view the moment the overlay empties -- whether
+  // by Revert all, reverting the last cell in the diff view, or opening a new
+  // file (open() resets editedCount but cannot touch this component-local). The
+  // render guard already hides the empty diff view, but without this the flag
+  // stays true and silently re-arms the view on the NEXT edit the user makes.
+  $: if ($explorer.editedCount === 0) editedOnly = false;
+
   $: fileName = $explorer.path ? $explorer.path.replace(/^.*[\\/]/, "") : "";
 </script>
 

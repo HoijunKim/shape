@@ -127,4 +127,20 @@ describe("DataTable inline editing (E7)", () => {
     await tick();
     expect(t.querySelector("input.cell-editor")).toBeNull();
   });
+
+  it("a second double-click on the open cell does not clobber uncommitted typing", async () => {
+    const t = await mount([col("name")]);
+    dataCell(t).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    const input = t.querySelector("input.cell-editor") as HTMLInputElement;
+    input.value = "hello world";
+    input.dispatchEvent(new Event("input"));
+    await tick();
+    // Double-click inside the editor bubbles to the cell's on:dblclick.
+    // Mutation: drop the startEdit re-entry guard -> editText resets to the
+    // cell's original "a", discarding the in-progress "hello world".
+    dataCell(t).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    expect((t.querySelector("input.cell-editor") as HTMLInputElement).value).toBe("hello world");
+  });
 });

@@ -408,6 +408,12 @@
   const JSON_NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
 
   function startEdit(index: number, path: string, cell: Cell): void {
+    // Re-entry guard: a double-click INSIDE the open editor (to select a word)
+    // bubbles to the cell's on:dblclick. Without this, it would re-run startEdit
+    // and reset editText, silently discarding the user's uncommitted typing --
+    // so a second double-click on the cell already being edited is a no-op and
+    // the browser's native word-selection runs instead.
+    if (editing && editing.index === index && editing.path === path) return;
     if (!isEditable(columns[columns.findIndex((c) => c.path === path)], cell)) return;
     const kind = editKindOf(cell);
     if (kind === "bool") {

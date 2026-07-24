@@ -298,6 +298,45 @@ describe("Explorer", () => {
   // sampled=true/totalExact=false; memory: sampled=false/totalExact=true) --
   // the two booleans were never exercised as independent. These fixtures
   // deliberately decouple them.
+  it("resets the edited-only view when the overlay empties, so it never silently re-arms on the next edit", async () => {
+    const columns = [makeColumn("name")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", columns, [makeField("name")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("/a.ndjson");
+    await flush();
+    await tick();
+
+    const strVal = { kind: "string", literal: "z", display: "z" };
+    const orig = { kind: "string", literal: "a", display: "a" };
+    const snap = { index: 0, cells: [] } as any;
+
+    // Edit a cell, then switch into the edited-only diff view via the toolbar.
+    explorer.setEdit(0, "name", strVal, orig, snap);
+    await tick();
+    const toggle = target.querySelector(".edit-bar .toggle") as HTMLButtonElement;
+    expect(toggle, "the toolbar appears once there is an edit").toBeTruthy();
+    toggle.click();
+    await tick();
+    expect(target.querySelector(".edited-rows"), "diff view is showing").toBeTruthy();
+
+    // Drain the overlay WITHOUT the toolbar's Revert-all (which resets the flag
+    // itself) -- this is the "revert the last cell in the diff view" / "open a
+    // new file" path that only the store touches.
+    explorer.revertAllEdits();
+    await tick();
+
+    // Re-edit: the view must NOT come back on its own.
+    explorer.setEdit(0, "name", strVal, orig, snap);
+    await tick();
+    // Mutation that must break this: drop the `$: if (editedCount === 0)
+    // editedOnly = false` reset -> editedOnly stays true and the next edit
+    // dumps the user back into a diff view they never re-selected.
+    expect(target.querySelector(".edited-rows")).toBeNull();
+    expect(target.querySelector(".viewport"), "the table is shown instead").toBeTruthy();
+  });
+
   describe("StatusBar wiring (A3)", () => {
     it("wires totalExact straight through, independent of sampled", async () => {
       const columns = [makeColumn("id")];
