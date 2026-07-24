@@ -19,8 +19,8 @@ const containerRow = {
 
 vi.mock("./store", () => ({
   explorer: {
-    subscribe: (run: (v: { version: number }) => void) => {
-      run({ version: 1 });
+    subscribe: (run: (v: { version: number; edits: Record<number, unknown> }) => void) => {
+      run({ version: 1, edits: {} }); // E7: DataTable reads $explorer.edits
       return () => {};
     },
     rowAt: (i: number) => ({ row: i === 0 ? containerRow : null }),

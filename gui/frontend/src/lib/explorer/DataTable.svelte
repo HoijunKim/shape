@@ -4,7 +4,7 @@
   // gutter. No library -- see brief for why (zero runtime deps).
   import { createEventDispatcher, onMount } from "svelte";
   import { explorer } from "./store";
-  import type { Column, Row } from "./types";
+  import type { Cell, Column, Row } from "./types";
   import { CellKind } from "./types";
   import {
     columnWidths, prefixSums, columnAt, alignForKind, clamp,
@@ -351,6 +351,104 @@
   function onGotoKey(e: KeyboardEvent): void {
     if (e.key === "Enter") { e.preventDefault(); goToRow(); }
   }
+
+  // --- E7: inline scalar editing ------------------------------------------
+  // A column is editable only when its source path resolves unambiguously: a
+  // single, non-Elem leaf with a unique, non-empty display path (review F2 --
+  // an Elem/"[]" or duplicate-path column would map an edit onto the wrong or
+  // multiple cells).
+  $: editablePaths = (() => {
+    const counts = new Map<string, number>();
+    for (const col of columns) counts.set(col.path, (counts.get(col.path) ?? 0) + 1);
+    const set = new Set<string>();
+    for (const col of columns) {
+      if ((counts.get(col.path) ?? 0) === 1 && col.path && col.path !== "$" && !col.path.includes("[")) {
+        set.add(col.path);
+      }
+    }
+    return set;
+  })();
+
+  // The edit kind for a cell, or "" if not inline-editable. null/container/
+  // missing are not inline-editable in v1 (a follow-up).
+  function editKindOf(cell: Cell): string {
+    switch (cell.kind) {
+      case CellKind.STRING: return "string";
+      case CellKind.INT: return "int";
+      case CellKind.FLOAT: return "float";
+      case CellKind.BOOL: return "bool";
+      default: return "";
+    }
+  }
+
+  function isEditable(col: Column, cell: Cell | undefined): boolean {
+    return !!cell && editablePaths.has(col.path) && editKindOf(cell) !== "";
+  }
+
+  // The ORIGINAL value of a backend cell (kind + exact literal + display).
+  function originalValue(cell: Cell): { kind: string; literal: string; display: string } {
+    const kind = editKindOf(cell);
+    if (kind === "bool") {
+      const l = cell.bool === true ? "true" : "false";
+      return { kind, literal: l, display: l };
+    }
+    const s = cell.str ?? "";
+    return { kind, literal: s, display: s };
+  }
+
+  // The on-screen Row for an index, captured as the edit snapshot.
+  function rowSnapshot(index: number): Row {
+    return (explorer.rowAt(index).row ?? { index, cells: [] }) as Row;
+  }
+
+  let editing: { index: number; path: string; kind: string } | null = null;
+  let editText = "";
+  let editInvalid = false;
+
+  const JSON_NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
+
+  function startEdit(index: number, path: string, cell: Cell): void {
+    if (!isEditable(columns[columns.findIndex((c) => c.path === path)], cell)) return;
+    const kind = editKindOf(cell);
+    if (kind === "bool") {
+      // A bool double-click toggles it directly -- no text editor.
+      const cur = $explorer.edits?.[index]?.[path];
+      const curBool = cur ? cur.value.literal === "true" : cell.bool === true;
+      const lit = curBool ? "false" : "true";
+      explorer.setEdit(index, path, { kind, literal: lit, display: lit }, originalValue(cell), rowSnapshot(index));
+      return;
+    }
+    const e = $explorer.edits?.[index]?.[path];
+    editText = e ? e.value.display : originalValue(cell).display;
+    editInvalid = false;
+    editing = { index, path, kind };
+  }
+
+  function commitEdit(cell: Cell): void {
+    if (!editing) return;
+    const { index, path, kind } = editing;
+    let literal = editText;
+    if (kind === "int" || kind === "float") {
+      if (!JSON_NUMBER.test(editText.trim())) { editInvalid = true; return; } // reject; keep editing
+      literal = editText.trim();
+    }
+    explorer.setEdit(index, path, { kind, literal, display: literal }, originalValue(cell), rowSnapshot(index));
+    editing = null;
+    editInvalid = false;
+  }
+
+  function cancelEdit(): void { editing = null; editInvalid = false; }
+
+  function onEditorKey(e: KeyboardEvent, cell: Cell): void {
+    if (e.key === "Enter") { e.preventDefault(); commitEdit(cell); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+  }
+
+  // Focus + select the editor as it mounts.
+  function autofocus(node: HTMLInputElement): void {
+    node.focus();
+    node.select();
+  }
 </script>
 
 <div
@@ -408,20 +506,43 @@
           data-row-index={i}
           style="top:{rowTopFor(i, effectiveFirstRow, ROW_H, scaled)}px; height:{ROW_H}px; width:{contentWidth}px;"
         >
-          <div class="gutter-cell" role="rowheader" style="width:{GUTTER_W}px;">
+          <div class="gutter-cell" class:row-edited={row && !!$explorer.edits?.[row.index]} role="rowheader" style="width:{GUTTER_W}px;">
             {#if row}
+              {#if $explorer.edits?.[row.index]}<span class="edit-dot" title="Row has edits" aria-hidden="true"></span>{/if}
               {row.index}
             {:else}
               <span class="skeleton-bar gutter-skel"></span>
             {/if}
           </div>
           {#each visibleCols as { c, col } (col.path)}
+            {@const edited = row ? $explorer.edits?.[row.index]?.[col.path] : undefined}
+            <!-- svelte-ignore a11y-no-static-element-interactions a11y-interactive-supports-focus -->
             <div
               class="data-cell"
+              class:edited
+              class:editable={row && row.cells[c] && isEditable(col, row.cells[c])}
               role="gridcell"
               style="left:{GUTTER_W + prefix[c]}px; width:{widths[c]}px; height:{ROW_H}px;"
+              on:dblclick={() => row && row.cells[c] && startEdit(row.index, col.path, row.cells[c])}
             >
-              {#if row && row.cells[c]}
+              {#if row && row.cells[c] && editing && editing.index === row.index && editing.path === col.path}
+                <!-- E7: the inline editor for a scalar cell (numbers as a text
+                     field so a big-int literal is never routed through a JS
+                     number). Enter commits, Esc cancels, blur commits. -->
+                <input
+                  class="cell-editor"
+                  class:invalid={editInvalid}
+                  aria-label="Edit {col.path}"
+                  bind:value={editText}
+                  on:keydown={(e) => onEditorKey(e, row.cells[c])}
+                  on:blur={() => commitEdit(row.cells[c])}
+                  use:autofocus
+                />
+              {:else if row && edited}
+                <!-- E7: an edited cell shows the overlay value, highlighted,
+                     with the original in its title. -->
+                <span class="edited-value" title="was: {edited.original.display}">{edited.value.display}</span>
+              {:else if row && row.cells[c]}
                 <CellView cell={row.cells[c]} align={alignForKind(row.cells[c].kind)} />
                 {#if isContainerCell(row.cells[c].kind)}
                   <button
@@ -636,6 +757,55 @@
   .expand-btn:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+
+  /* E7: editing affordances + highlighting. */
+  .data-cell.editable {
+    cursor: text;
+  }
+
+  .data-cell.edited {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  .edited-value {
+    min-width: 0;
+    padding: 0 var(--space-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .cell-editor {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border: none;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 0 var(--space-2);
+  }
+
+  .cell-editor.invalid {
+    outline-color: var(--status-critical);
+    background: var(--status-critical-bg);
+  }
+
+  .edit-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 4px;
+    flex-shrink: 0;
   }
 
   .skeleton-bar {
