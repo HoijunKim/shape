@@ -169,17 +169,28 @@ day-to-day:
 Wails v2, Node 18+, and (on Windows) the WebView2 runtime. On macOS/Linux the
 GUI build needs cgo + native webkit; the CLI stays cgo-free on every OS.
 
+## Huge-file scrolling
+
+Blink (the WebView2/Chromium engine) caps any element's height at ~33.5M
+physical pixels, so a table that sized its scroll spacer at `HEADER_H +
+total * ROW_H` would, past ~600–800k rows (the cap divided by the display's
+DPR and the 28px row height), have the browser silently clamp the scrollable
+area and leave most of the file unreachable. `DataTable.svelte` avoids that:
+below the cap it scrolls 1:1 as usual; past it the scroll spacer is capped
+and the rows switch to a **scaled** mapping — the scrollbar still spans the
+whole file and the true last row seats on-screen at the bottom of a drag,
+and the rows layer is natively `position: sticky` so it does not shear while
+scrolling. A **Go-to-row** box (the top-left corner cell) jumps to any exact
+row. The cap is recomputed when the window moves between monitors of
+different scale.
+
+Two honest caveats past the cap: dragging the scrollbar is *coarse* (each
+pixel covers many rows, so land near your target and use Go-to-row for the
+exact one), and a very fast flick shows a brief content-lag as the visible
+rows catch up (the rows layer itself stays put — it does not shear).
+
 ## Known limitations
 
-- **Very large files hit a virtualization ceiling around ~800k rows.**
-  `DataTable.svelte` sizes its scrollable content with a plain CSS
-  `height: HEADER_H + total * ROW_H` on the scroll container. Blink (the
-  WebView2/Chromium engine this app renders in) caps any element's height at
-  ~33.5M physical pixels; divided by the display's DPR and `ROW_H` (28px),
-  that ceiling lands around 800,000 rows in practice. Past it, the browser
-  silently clamps the scrollable area, so on a multi-million-row file
-  (confirmed live on a 4M-row source) roughly the last 80% of rows are
-  unreachable by any scroll gesture -- and there is currently no go-to-row
-  affordance to jump there directly either. Fixing this needs segmented or
-  virtual (re-based) scrolling in `DataTable`, deferred as real follow-up
-  work rather than patched around here.
+- **No keyboard PageUp/PageDown/Home/End yet** in the table — scroll,
+  drag, and Go-to-row cover navigation; keyboard paging is a small
+  follow-up.

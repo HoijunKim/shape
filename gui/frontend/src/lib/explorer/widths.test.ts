@@ -241,3 +241,135 @@ describe("alignForKind", () => {
     expect(alignForKind(CellKind.ARRAY)).toBe("left");
   });
 });
+
+// --- V1: virtualization past the height cap ---------------------------------
+
+import {
+  capForDpr, contentHeightFor, isScaled, visibleRowCount, rowWindowFor,
+  scrollTopForRow, rowTopFor, BLINK_MAX_PX, CAP_MARGIN_PX, CAP_FLOOR_PX,
+} from "./widths";
+
+describe("capForDpr", () => {
+  it("shrinks as dpr grows and stays margin-guarded", () => {
+    expect(capForDpr(1)).toBe(BLINK_MAX_PX - CAP_MARGIN_PX);
+    expect(capForDpr(2)).toBe(Math.floor(BLINK_MAX_PX / 2) - CAP_MARGIN_PX);
+    expect(capForDpr(2)).toBeLessThan(capForDpr(1));
+    // Mutation: drop the `- CAP_MARGIN_PX` -> a dpr=1 element sized exactly at
+    // 2^25 is not kept clear of the ceiling.
+    expect(capForDpr(1)).toBeLessThan(BLINK_MAX_PX);
+  });
+
+  it("never collapses below the floor for a huge dpr", () => {
+    expect(capForDpr(1000)).toBe(CAP_FLOOR_PX);
+  });
+});
+
+describe("contentHeightFor / isScaled", () => {
+  const ROW_H = 28, HEADER_H = 32, CAP = 100_000;
+  it("is exact under the cap and capped over it", () => {
+    expect(contentHeightFor(100, ROW_H, HEADER_H, CAP)).toBe(HEADER_H + 100 * ROW_H);
+    expect(contentHeightFor(1_000_000, ROW_H, HEADER_H, CAP)).toBe(CAP);
+  });
+  it("flips isScaled exactly at the boundary", () => {
+    // rows that fit exactly: HEADER_H + n*ROW_H <= CAP
+    const n = Math.floor((CAP - HEADER_H) / ROW_H);
+    expect(isScaled(n, ROW_H, HEADER_H, CAP)).toBe(false);
+    expect(isScaled(n + 1, ROW_H, HEADER_H, CAP)).toBe(true);
+  });
+});
+
+describe("visibleRowCount", () => {
+  it("subtracts the header (not ceil of the whole viewport)", () => {
+    // Mutation: use ceil(clientHeight/ROW_H) -> 29 here; the header-blind count
+    // is what hid the tail (review V16).
+    expect(visibleRowCount(800, 32, 28)).toBe(Math.floor((800 - 32) / 28)); // 27
+    expect(visibleRowCount(800, 32, 28)).not.toBe(Math.ceil(800 / 28)); // != 29
+  });
+  it("never drops below 1, even when the viewport is shorter than the header", () => {
+    expect(visibleRowCount(20, 32, 28)).toBe(1);
+  });
+});
+
+describe("rowWindowFor", () => {
+  const ROW_H = 28, HEADER_H = 32, OVERSCAN = 8;
+
+  it("delegates to rowWindow byte-identically under the cap", () => {
+    const total = 1000;
+    const contentHeight = HEADER_H + total * ROW_H; // not scaled
+    for (const scrollTop of [0, 137, 5000, 27000, 1e9]) {
+      const got = rowWindowFor(scrollTop, 500, total, ROW_H, HEADER_H, OVERSCAN, contentHeight);
+      const want = rowWindow(scrollTop, 500, total, ROW_H, OVERSCAN);
+      // Mutation: an off-by-one in the unscaled delegation (floor->ceil) breaks this.
+      expect(got).toEqual(want);
+    }
+  });
+
+  it("scaled: scrollTop=0 -> firstRow 0; scrollTop=maxScroll -> tail seated at total-1", () => {
+    const total = 40_000_000;
+    const clientHeight = 800;
+    const cap = capForDpr(1);
+    const contentHeight = contentHeightFor(total, ROW_H, HEADER_H, cap);
+    expect(isScaled(total, ROW_H, HEADER_H, cap)).toBe(true);
+
+    const top = rowWindowFor(0, clientHeight, total, ROW_H, HEADER_H, OVERSCAN, contentHeight);
+    expect(top.firstRow).toBe(0);
+
+    const maxScroll = contentHeight - clientHeight;
+    const bottom = rowWindowFor(maxScroll, clientHeight, total, ROW_H, HEADER_H, OVERSCAN, contentHeight);
+    // Mutation: use floor(scrollTop/ROW_H) in the scaled branch -> firstRow is
+    // tiny and lastRow never reaches total-1 (the tail is unreachable).
+    expect(bottom.lastRow).toBe(total - 1);
+    const vis = visibleRowCount(clientHeight, HEADER_H, ROW_H);
+    // The top visible row is total-vis (no above-overscan in scaled mode), so
+    // rows [total-vis .. total-1] fill the band with total-1 at its bottom.
+    expect(bottom.firstRow).toBe(total - vis);
+  });
+
+  it("scaled: guards denom===0 (0/0 -> NaN) and denom<0, never past total-1", () => {
+    const total = 500;
+    // denom === 0 AND scrollTop === 0 is the exact 0/0 -> NaN case the guard
+    // exists for (a mere negative denom is already neutralised by clamp).
+    const zero = rowWindowFor(0, 5000, total, ROW_H, HEADER_H, OVERSCAN, 5000);
+    // Mutation: remove the `denom > 0 ?` guard -> frac = 0/0 = NaN -> NaN bounds.
+    expect(Number.isFinite(zero.firstRow)).toBe(true);
+    expect(Number.isFinite(zero.lastRow)).toBe(true);
+    expect(zero.firstRow).toBe(0);
+
+    // A viewport taller than the capped content (denom < 0) also stays sane.
+    const neg = rowWindowFor(100, 6000, total, ROW_H, HEADER_H, OVERSCAN, 5000);
+    expect(neg.firstRow).toBe(0);
+    expect(neg.lastRow).toBeLessThanOrEqual(total - 1);
+  });
+});
+
+describe("scrollTopForRow", () => {
+  const ROW_H = 28, HEADER_H = 32, OVERSCAN = 8;
+
+  it("round-trips a mid row through rowWindowFor in scaled mode", () => {
+    const total = 40_000_000;
+    const clientHeight = 800;
+    const cap = capForDpr(1);
+    const contentHeight = contentHeightFor(total, ROW_H, HEADER_H, cap);
+    for (const row of [0, 10_000_000, 25_000_000, total - 1]) {
+      const st = scrollTopForRow(row, clientHeight, total, ROW_H, HEADER_H, contentHeight);
+      const w = rowWindowFor(st, clientHeight, total, ROW_H, HEADER_H, OVERSCAN, contentHeight);
+      // Mutation: use row*ROW_H unconditionally -> on a scaled fixture the row
+      // is nowhere near the returned window.
+      expect(row).toBeGreaterThanOrEqual(w.firstRow);
+      expect(row).toBeLessThanOrEqual(w.lastRow);
+    }
+  });
+
+  it("unscaled scrollTopForRow is row*rowH, clamped", () => {
+    const total = 1000;
+    const contentHeight = HEADER_H + total * ROW_H;
+    expect(scrollTopForRow(50, 500, total, ROW_H, HEADER_H, contentHeight)).toBe(50 * ROW_H);
+  });
+});
+
+describe("rowTopFor", () => {
+  it("is absolute i*rowH unscaled, window-relative (i-firstRow)*rowH scaled", () => {
+    expect(rowTopFor(100, 90, 28, false)).toBe(100 * 28);
+    expect(rowTopFor(100, 90, 28, true)).toBe(10 * 28);
+  });
+});
