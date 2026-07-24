@@ -141,6 +141,35 @@ the app's only view once a file is open:
   by the cell's absolute row index, so it is the same value regardless of which
   filter or search is active.)
 
+- **Edit a cell + save a copy.** Double-click a scalar cell to edit its value in
+  place. The editor validates as you go -- a number field rejects non-numeric
+  text before it can be committed -- and a boolean toggles directly. A number
+  keeps its EXACT source literal: the edited value is carried as a string all the
+  way to disk, never through a JavaScript number, so a 19-digit id or a
+  high-precision decimal survives a round-trip that `Number()` would corrupt.
+  Edited cells are highlighted and their row is flagged in the gutter; an **Edit
+  toolbar** appears above the table showing how many cells are edited, with
+  **Revert all** and an **Edited only** toggle that swaps the grid for a diff
+  list -- one entry per edited cell, `was → now`, each individually revertable.
+  That list reads the edit overlay directly (keyed by absolute row index + source
+  path), so it works no matter where the edited rows sit in a multi-million-row
+  file, and the overlay survives filtering, searching, reshaping and scrolling.
+
+  Editing is offered only for **unambiguous scalar columns** -- a leaf that
+  appears exactly once and is not an array element -- so an edit always has one
+  unambiguous place to land in the record.
+
+  **Save a copy** (the toolbar's Save button) writes the whole file back out with
+  the overlay applied, to a *new* JSON or NDJSON file. This is deliberately NOT
+  the export path: it writes the ORIGINAL nested records verbatim with each edit
+  placed at its SOURCE path (so `{"user":{"name":…}}` stays nested, not
+  flattened), it writes EVERY row (never the filtered/reshaped view), and it
+  preserves number literals. It cannot target the file you have open, so the
+  original is never at risk. The dialog reports the row count and how many edits
+  were applied, and warns if any could not be placed. *Out of scope for now, by
+  design:* overwriting the original in place, saving to CSV/Parquet, and
+  preserving object key order (a rewrite may reorder keys within an object).
+
 ## Build order (important)
 
 `frontend/wailsjs/` (the generated Wails TypeScript bindings, from the bound

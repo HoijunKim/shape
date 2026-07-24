@@ -1,7 +1,26 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
-import type { Column, CountResult, ExportResult, FieldDTO, Filter, Generated, OpenResult, RowSet, Transform } from "./types";
+import type { Column, CountResult, ExportResult, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, Transform } from "./types";
+
+// E7: one edited cell's value carried as kind + literal (a number keeps its
+// exact source text -- a JS number would round a >2^53 integer, so it is never
+// routed through Number()) plus a display string.
+export interface EditValue {
+  kind: string;    // string | int | float | bool | null (the cell's CellKind)
+  literal: string; // the value's text: a number literal, the string, "true"/"false", "" for null
+  display: string; // what the cell renders
+}
+
+// E7: one entry in the edit overlay: the new value, the ORIGINAL (recorded the
+// first time a cell is edited, for revert-to-original + the title), and a
+// snapshot of the on-screen Row (so the edited-only view can render it without
+// the absolute-index virtualization band).
+export interface EditEntry {
+  value: EditValue;
+  original: EditValue;
+  snapshot: Row;
+}
 import { PageCache, pageRowsFor, pagesForRange, reconcileEof, rowLocation } from "./paging";
 
 export type Status = "idle" | "opening" | "ready" | "error";
@@ -85,6 +104,17 @@ export interface ExplorerState {
   // renders this as a dismissible/retryable `role="alert"` bar ABOVE the
   // still-mounted DataTable, never in place of it.
   pageError: string;
+  // E7: the edit overlay -- edits[index][sourcePath] = EditEntry. Keyed by the
+  // ABSOLUTE Row.Index + source path, so it survives filter/search/transform/
+  // scroll and is cleared only by revertAll or open()/close(). editedCount is
+  // the total edited-cell count (recomputed on every change).
+  edits: Record<number, Record<string, EditEntry>>;
+  editedCount: number;
+  // E7 save lifecycle (mirrors the export one).
+  saving: boolean;
+  saveRows: number;
+  saveError: string;
+  saveResult: SaveResult | null;
 }
 
 const empty: ExplorerState = {
@@ -96,6 +126,8 @@ const empty: ExplorerState = {
   transformActive: false,
   exporting: false, exportRows: 0, exportError: "", exportResult: null,
   codegen: null, codegenError: "",
+  edits: {}, editedCount: 0,
+  saving: false, saveRows: 0, saveError: "", saveResult: null,
 };
 
 function createExplorer() {
@@ -133,6 +165,8 @@ function createExplorer() {
   let countGen = 0;
   // E4: the requestId of the export currently in flight, or null.
   let exportReqId: string | null = null;
+  // E7: the requestId of the in-flight SaveEdits, or null.
+  let saveReqId: string | null = null;
   // A5: the most recent range passed to ensurePages(), so retryPageError()
   // can re-request the SAME range a failed fetch belonged to without
   // Explorer.svelte (which has no idea what row range DataTable last
@@ -173,6 +207,7 @@ function createExplorer() {
     countReqId = null;
     countGen++;
     exportReqId = null;
+    saveReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
     set({ ...empty, status: "opening", path });
@@ -359,6 +394,7 @@ function createExplorer() {
     countReqId = null;
     countGen++;
     exportReqId = null;
+    saveReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
     set({ ...empty });
@@ -606,6 +642,117 @@ function createExplorer() {
     update((s) => ({ ...s, exportResult: null, exportError: "", exportRows: 0 }));
   }
 
+  // --- E7: the edit overlay ------------------------------------------------
+
+  function sameValue(a: EditValue, b: EditValue): boolean {
+    return a.kind === b.kind && a.literal === b.literal;
+  }
+
+  function countEdits(edits: Record<number, Record<string, EditEntry>>): number {
+    let n = 0;
+    for (const idx of Object.keys(edits)) n += Object.keys(edits[Number(idx)]).length;
+    return n;
+  }
+
+  /** E7: records/updates one cell edit. `original` is the cell's ORIGINAL value
+   *  (recorded the FIRST time this cell is edited and kept thereafter, so
+   *  editing a cell twice never mistakes the intermediate value for the
+   *  original); `snapshot` is the on-screen Row (for the edited-only view).
+   *  Editing a cell back to its original REMOVES the entry -- that is not an
+   *  edit. Keyed by absolute index + source path, so it survives filter/search/
+   *  transform/scroll. */
+  function setEdit(index: number, path: string, value: EditValue, original: EditValue, snapshot: Row): void {
+    update((s) => {
+      const edits = { ...s.edits };
+      const row = { ...(edits[index] ?? {}) };
+      const existing = row[path];
+      const orig = existing ? existing.original : original;
+      if (sameValue(value, orig)) {
+        delete row[path];
+      } else {
+        row[path] = { value, original: orig, snapshot };
+      }
+      if (Object.keys(row).length === 0) delete edits[index];
+      else edits[index] = row;
+      return { ...s, edits, editedCount: countEdits(edits) };
+    });
+  }
+
+  /** E7: the overlay entry for a cell, or undefined. Used by the table/tree to
+   *  render the edited value + highlight. */
+  function editFor(index: number, path: string): EditEntry | undefined {
+    return get({ subscribe }).edits[index]?.[path];
+  }
+
+  /** E7: drops one cell's edit (revert to original). */
+  function revertCell(index: number, path: string): void {
+    update((s) => {
+      const edits = { ...s.edits };
+      const row = { ...(edits[index] ?? {}) };
+      delete row[path];
+      if (Object.keys(row).length === 0) delete edits[index];
+      else edits[index] = row;
+      return { ...s, edits, editedCount: countEdits(edits) };
+    });
+  }
+
+  /** E7: clears every edit. */
+  function revertAllEdits(): void {
+    update((s) => ({ ...s, edits: {}, editedCount: 0 }));
+  }
+
+  /** E7: the sorted absolute indices that carry an edit -- the edited-only view
+   *  renders these rows from their snapshots. */
+  function editedIndices(): number[] {
+    return Object.keys(get({ subscribe }).edits).map(Number).sort((a, b) => a - b);
+  }
+
+  /** E7: writes a COPY of the source with the overlay applied (Engine.SaveEdits),
+   *  as JSON/NDJSON, to outPath. It does NOT thread the filter/search/transform
+   *  (save writes the complete file, not a view). Mirrors runExport's request-
+   *  id/progress/supersede discipline. The overlay is NOT cleared on success --
+   *  the open file is unchanged (this was a copy), so the edits still apply. */
+  async function saveEdits(format: string, outPath: string): Promise<void> {
+    const s0 = get({ subscribe });
+    if (!s0.handle) return;
+    const editsList: { index: number; path: string; kind: string; literal: string }[] = [];
+    for (const [idx, row] of Object.entries(s0.edits)) {
+      for (const [path, entry] of Object.entries(row)) {
+        editsList.push({ index: Number(idx), path, kind: entry.value.kind, literal: entry.value.literal });
+      }
+    }
+    const reqId = `save${++seq}`;
+    saveReqId = reqId;
+    update((s) => ({ ...s, saving: true, saveRows: 0, saveError: "", saveResult: null }));
+
+    const off = EventsOn("shape:progress", (p: any) => {
+      if (!p || p.requestId !== saveReqId) return;
+      update((s) => (s.saving ? { ...s, saveRows: Number(p.scanned) || 0 } : s));
+    });
+
+    try {
+      const res: SaveResult = await SaveEdits({
+        requestId: reqId, handle: s0.handle, format, outPath, edits: editsList,
+      } as any);
+      if (saveReqId !== reqId) return;
+      update((s) => ({ ...s, saving: false, saveResult: res, saveRows: res.rowsOut }));
+    } catch (e) {
+      if (saveReqId !== reqId) return;
+      update((s) => ({ ...s, saving: false, saveError: String(e) }));
+    } finally {
+      off();
+      if (saveReqId === reqId) {
+        saveReqId = null;
+        update((s) => (s.saving ? { ...s, saving: false } : s));
+      }
+    }
+  }
+
+  /** E7: clears a finished save's terminal state (the dialog's dismiss). */
+  function dismissSave(): void {
+    update((s) => ({ ...s, saveResult: null, saveError: "", saveRows: 0 }));
+  }
+
   /** E6: fetches the FULL, untruncated value of one cell (Backend.GetCell) --
    *  the tree-view overlay's data source. index is a Row.Index the table
    *  rendered, path a column path. A thin async wrapper: it owns no store state
@@ -624,6 +771,7 @@ function createExplorer() {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
     setFilter, setSearch, cancelCount, setTransform, runExport, cancelExport, dismissExport,
     refreshCodegen, getCell,
+    setEdit, editFor, revertCell, revertAllEdits, editedIndices, saveEdits, dismissSave,
   };
 }
 

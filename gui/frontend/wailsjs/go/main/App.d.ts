@@ -25,6 +25,8 @@ export function ProfileFile(arg1:string):Promise<visual.VisualModel>;
 
 export function QueryRows(arg1:query.QueryRequest):Promise<query.RowSet>;
 
+export function SaveEdits(arg1:query.SaveRequest):Promise<query.SaveResult>;
+
 export function SaveFileDialog(arg1:string,arg2:string):Promise<string>;
 
 export function SaveText(arg1:string,arg2:string):Promise<string>;

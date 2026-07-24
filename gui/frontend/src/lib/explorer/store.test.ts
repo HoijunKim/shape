@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, Filter } from "./types";
 
@@ -23,6 +23,7 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   // E6: store.ts calls GetCell for the value-tree overlay; a bare vi.fn()
   // resolves undefined and the caller's property read throws.
   GetCell: vi.fn(() => Promise.resolve({ value: null, found: false })),
+  SaveEdits: vi.fn(() => Promise.resolve({ outPath: "", rowsOut: 0, editsApplied: 0, editsUnapplied: 0, bytesOut: 0, elapsedMs: 0 })),
 }));
 
 // E4: store.ts subscribes to shape:progress per export. The real module reaches
@@ -80,6 +81,7 @@ beforeEach(async () => {
   // make it resolve undefined), just clear its call history between tests.
   vi.mocked(Codegen).mockClear();
   vi.mocked(GetCell).mockReset().mockResolvedValue({ value: null, found: false } as any);
+  vi.mocked(SaveEdits).mockReset().mockResolvedValue({ outPath: "/o", rowsOut: 3, editsApplied: 1, editsUnapplied: 0, bytesOut: 9, elapsedMs: 0 } as any);
   progressHandlers = [];
   vi.mocked(EventsOn).mockReset().mockImplementation((_evt: string, cb: any) => {
     progressHandlers.push(cb);
@@ -995,5 +997,75 @@ describe("setSearch and getCell (E6 Task 5)", () => {
     const res = await explorer.getCell(42, "user.name");
     expect(vi.mocked(GetCell).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", index: 42, path: "user.name" });
     expect(res).toEqual({ value: { k: 1 }, found: true });
+  });
+});
+
+describe("edit overlay + saveEdits (E7 Task 2)", () => {
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+  const V = (kind: string, literal: string, display = literal) => ({ kind, literal, display });
+  const snap = (index: number): any => ({ index, cells: [] });
+
+  async function openMem(): Promise<void> {
+    vi.mocked(OpenSource).mockResolvedValueOnce(openResult("h-edit"));
+    vi.mocked(QueryRows).mockResolvedValueOnce(emptyRowSet());
+    await explorer.open("file.ndjson");
+  }
+
+  it("setEdit adds an entry, bumps editedCount, and records the snapshot", async () => {
+    await openMem();
+    explorer.setEdit(5, "user.name", V("string", "z"), V("string", "a"), snap(5));
+    expect(get(explorer).editedCount).toBe(1);
+    const e = explorer.editFor(5, "user.name")!;
+    expect(e.value.literal).toBe("z");
+    expect(e.original.literal).toBe("a");
+    expect(e.snapshot.index).toBe(5);
+  });
+
+  it("editing a cell back to its original removes the entry", async () => {
+    await openMem();
+    explorer.setEdit(5, "user.name", V("string", "z"), V("string", "a"), snap(5));
+    expect(get(explorer).editedCount).toBe(1);
+    // Mutation: keep the entry on edit-to-original -> editedCount stays 1.
+    explorer.setEdit(5, "user.name", V("string", "a"), V("string", "a"), snap(5));
+    expect(get(explorer).editedCount).toBe(0);
+    expect(explorer.editFor(5, "user.name")).toBeUndefined();
+  });
+
+  it("the overlay survives a setFilter (keyed by absolute index)", async () => {
+    await openMem();
+    explorer.setEdit(5, "user.name", V("string", "z"), V("string", "a"), snap(5));
+    vi.mocked(QueryRows).mockResolvedValue(emptyRowSet());
+    explorer.setFilter({ combinator: "and", conditions: [{ path: "x", op: "eq", value: { kind: "string", str: "q" } }] } as any);
+    await flush();
+    expect(get(explorer).editedCount).toBe(1);
+    expect(explorer.editFor(5, "user.name")).toBeTruthy();
+  });
+
+  it("revertAll clears the overlay", async () => {
+    await openMem();
+    explorer.setEdit(1, "a", V("string", "x"), V("string", "y"), snap(1));
+    explorer.setEdit(2, "b", V("string", "x"), V("string", "y"), snap(2));
+    expect(get(explorer).editedCount).toBe(2);
+    explorer.revertAllEdits();
+    expect(get(explorer).editedCount).toBe(0);
+    expect(explorer.editedIndices()).toEqual([]);
+  });
+
+  it("saveEdits sends the overlay as kind+literal and does NOT thread the filter/search", async () => {
+    await openMem();
+    // A >2^53 literal must be carried verbatim (never Number()).
+    const big = "9007199254740993";
+    explorer.setEdit(7, "user.age", V("int", big), V("int", "30"), snap(7));
+    vi.mocked(SaveEdits).mockResolvedValueOnce({ outPath: "/o.ndjson", rowsOut: 3, editsApplied: 1, editsUnapplied: 0, bytesOut: 9, elapsedMs: 0 } as any);
+    await explorer.saveEdits("ndjson", "/o.ndjson");
+    const req = vi.mocked(SaveEdits).mock.calls.at(-1)![0] as any;
+    expect(req.format).toBe("ndjson");
+    expect(req.outPath).toBe("/o.ndjson");
+    // Mutation: route the literal through Number() -> the big int is rounded and this fails.
+    expect(req.edits).toEqual([{ index: 7, path: "user.age", kind: "int", literal: big }]);
+    // save writes the whole file, not a view -> no filter/search in the request.
+    expect(req.filter).toBeUndefined();
+    expect(req.search).toBeUndefined();
+    expect(get(explorer).saveResult?.rowsOut).toBe(3);
   });
 });

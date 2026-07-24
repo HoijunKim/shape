@@ -530,6 +530,14 @@ func (p *parquetBackend) GetCell(ctx context.Context, index int64, segs []Seg) (
 	return resolveFullCell(recs[0], segs)
 }
 
+// StreamRecords streams every row (a flat map[string]any from the parquet
+// schema) in row order, via the shared scan loop from row 0.
+func (p *parquetBackend) StreamRecords(ctx context.Context, fn func(index int64, rec any) error) error {
+	return p.scan(ctx, 0, func(idx int64, rec any) (bool, error) {
+		return false, fn(idx, rec)
+	})
+}
+
 // Close closes the underlying *os.File. Every *parquet.GenericReader this
 // backend creates is scoped to (and closed within) a single scan/readWindow
 // call, so there is nothing else to release here.

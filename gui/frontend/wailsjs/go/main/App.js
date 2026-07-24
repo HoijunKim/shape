@@ -46,6 +46,10 @@ export function QueryRows(arg1) {
   return window['go']['main']['App']['QueryRows'](arg1);
 }
 
+export function SaveEdits(arg1) {
+  return window['go']['main']['App']['SaveEdits'](arg1);
+}
+
 export function SaveFileDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveFileDialog'](arg1, arg2);
 }

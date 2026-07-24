@@ -29,6 +29,7 @@ type sourceEngine interface {
 	ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error)
 	Codegen(req query.CodegenRequest) (query.Generated, error)
 	GetCell(ctx context.Context, req query.CellRequest) (query.CellResult, error)
+	SaveEdits(ctx context.Context, req query.SaveRequest, progress func(rows int64)) (query.SaveResult, error)
 	Cancel(requestID string) error
 	CloseSource(handle string) error
 }
@@ -334,6 +335,30 @@ func (a *App) Codegen(req query.CodegenRequest) (query.Generated, error) {
 // teardown like every other data-touching binding.
 func (a *App) GetCell(req query.CellRequest) (query.CellResult, error) {
 	return a.eng.GetCell(a.reqCtx(), req)
+}
+
+// SaveEdits writes a copy of the source with the cell-edit overlay applied
+// (spec E7). Like ExportQuery it turns the engine's Go progress callback into a
+// throttled shape:progress event so a fast save does not flood the bridge.
+func (a *App) SaveEdits(req query.SaveRequest) (query.SaveResult, error) {
+	var mu sync.Mutex
+	var last time.Time
+	progress := func(rows int64) {
+		mu.Lock()
+		now := time.Now()
+		if !last.IsZero() && now.Sub(last) < exportProgressInterval {
+			mu.Unlock()
+			return
+		}
+		last = now
+		mu.Unlock()
+		a.emitEvent("shape:progress", map[string]any{
+			"requestId": req.RequestID,
+			"scanned":   rows,
+			"total":     int64(-1),
+		})
+	}
+	return a.eng.SaveEdits(a.reqCtx(), req, progress)
 }
 
 // Cancel interrupts an in-flight request by id (spec §8). An unknown id is a

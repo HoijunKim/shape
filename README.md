@@ -115,6 +115,19 @@ jq or SQL required.
 - **Expand** — click a truncated object/array cell to open its full value as a
   collapsible tree, with a Copy button for the exact JSON.
 - **Reshape** — choose, reorder and rename the columns you want.
+- **Edit** — double-click a scalar cell to change its value in place. Edited
+  cells are highlighted (and the row flagged in the gutter); an "Edited only"
+  toggle lists just the changes as *was → now*, each revertable. Number literals
+  keep their exact text, so a 19-digit id never loses a digit. Editing is limited
+  to unambiguous scalar columns (a single, non-array leaf), and it never touches
+  the file on disk — see **Save a copy** below.
+- **Save a copy** — write the whole file back out with your edits applied, as
+  JSON or NDJSON, to a *new* file. The original is left untouched, the nested
+  structure is preserved (edits land at the source path, not a flattened one),
+  and every row is written — not the filtered/reshaped view. The dialog reports
+  how many edits applied and warns if any could not be. (Overwrite-in-place and
+  CSV/Parquet saving are deliberately out of scope for now; object key order may
+  change on rewrite.)
 - **Export** — write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
   Parquet. The export is always the complete result, never the windowed view,
   and it lands atomically: a cancelled or failed export leaves no partial file.

@@ -915,6 +915,14 @@ func (s *sqlBackend) recordAt(ctx context.Context, index int64) (map[string]any,
 	return rec, true, nil
 }
 
+// StreamRecords streams every row as a flat map[string]any (SQLite rows are
+// tabular), in _rowid_ order, via the shared scan loop.
+func (s *sqlBackend) StreamRecords(ctx context.Context, fn func(index int64, rec any) error) error {
+	return s.scan(ctx, func(idx int64, rec any) (bool, error) {
+		return false, fn(idx, rec)
+	})
+}
+
 // Close closes the read-only connection. Safe to call once; further calls
 // to the other Backend methods afterward are not guaranteed to work (same
 // contract as Backend.Close's doc comment, backend.go).

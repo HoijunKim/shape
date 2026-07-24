@@ -255,6 +255,23 @@ func (m *memBackend) GetCell(ctx context.Context, index int64, segs []Seg) (json
 	return resolveFullCell(m.records[index], segs)
 }
 
+// StreamRecords streams every in-RAM record in index order (the raw nested
+// record, never mutated -- callers copy the spine they edit). ctx is checked
+// on the same stride as the other scans.
+func (m *memBackend) StreamRecords(ctx context.Context, fn func(index int64, rec any) error) error {
+	for i, rec := range m.records {
+		if i%cancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err := fn(int64(i), rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Close drops the cached bitsets. memBackend holds no other closable
 // resource (records are already fully decoded in RAM, no open file handle),
 // so this never errors.

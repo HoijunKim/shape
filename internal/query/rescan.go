@@ -347,6 +347,15 @@ func (r *rescanBackend) GetCell(ctx context.Context, index int64, segs []Seg) (j
 	return raw, found, nil
 }
 
+// StreamRecords re-opens the source and streams every raw record in file
+// order (a nested map[string]any for a JSON/NDJSON source), via the shared
+// scan loop. Never filters or projects.
+func (r *rescanBackend) StreamRecords(ctx context.Context, fn func(index int64, rec any) error) error {
+	return r.scan(ctx, func(idx int64, rec any) (bool, error) {
+		return false, fn(idx, rec)
+	})
+}
+
 // Close is a no-op: rescanBackend holds no persistent resource between
 // calls (every scan opens and closes its own file handle in openStream/scan).
 func (r *rescanBackend) Close() error { return nil }
