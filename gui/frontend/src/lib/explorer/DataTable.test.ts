@@ -266,3 +266,67 @@ describe("DataTable scaled virtualization (V1)", () => {
     for (const t of tops) expect(t).toBeGreaterThanOrEqual(0);
   });
 });
+
+// V1: go-to-row -- exact navigation (the only way to hit a precise row past the
+// cap where drag is coarse; a convenience under it).
+describe("DataTable go-to-row (V1)", () => {
+  let target: HTMLElement;
+  let cmp: { $set: (p: Record<string, unknown>) => void; $destroy: () => void } | null = null;
+
+  afterEach(() => {
+    cmp?.$destroy();
+    cmp = null;
+    target?.remove();
+  });
+
+  function mountReady(total: number, maxContentPx?: number): HTMLInputElement {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    vi.spyOn(explorer, "ensurePages").mockResolvedValue(undefined as any);
+    cmp = new DataTable({ target, props: { columns: [makeColumn("a")], total, focusPath: "", maxContentPx } }) as any;
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    Object.defineProperty(viewportEl, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(viewportEl, "clientWidth", { value: 300, configurable: true });
+    return target.querySelector("input.goto-row") as HTMLInputElement;
+  }
+
+  function goto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  }
+
+  it("scrolls an unscaled table so the requested row is in the rendered window", async () => {
+    const input = mountReady(1000); // 32 + 1000*28 = 28032 < default cap -> unscaled
+    await tick();
+    goto(input, "500"); // 1-based
+    await tick();
+    expect(target.querySelector('[data-row-index="499"]')).toBeTruthy(); // 0-based
+  });
+
+  it("lands the exact row in a SCALED table (the scaled inverse, not row*ROW_H)", async () => {
+    const input = mountReady(300, 5000); // scaled
+    await tick();
+    goto(input, "150"); // 1-based -> 0-based 149
+    await tick();
+    // Mutation: scrollTopForRow uses row*ROW_H (unscaled inverse) for the scaled
+    // case -> scrollTop maps to a far-off firstVisible and 149 is not rendered.
+    const el = target.querySelector('[data-row-index="149"]') as HTMLElement;
+    expect(el, "the target row must be in the scaled window").toBeTruthy();
+    expect(32 + parseFloat(el.style.top)).toBeLessThanOrEqual(800); // on-screen
+  });
+
+  it("clamps an out-of-range row to the last row", async () => {
+    const input = mountReady(1000);
+    await tick();
+    goto(input, "999999");
+    await tick();
+    expect(target.querySelector('[data-row-index="999"]')).toBeTruthy(); // total-1
+  });
+
+  it("is disabled when there are no rows", async () => {
+    const input = mountReady(0);
+    await tick();
+    expect(input.disabled).toBe(true);
+  });
+});

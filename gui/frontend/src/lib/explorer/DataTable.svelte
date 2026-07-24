@@ -8,7 +8,7 @@
   import { CellKind } from "./types";
   import {
     columnWidths, prefixSums, columnAt, alignForKind, clamp,
-    capForDpr, contentHeightFor, isScaled, rowWindowFor, rowTopFor,
+    capForDpr, contentHeightFor, isScaled, rowWindowFor, rowTopFor, scrollTopForRow,
   } from "./widths";
   import CellView from "./CellView.svelte";
 
@@ -325,6 +325,28 @@
       scrollToColumn(focusPath);
     }
   }
+
+  // V1: go-to-row -- the exact-navigation path when scaled drag is coarse (and a
+  // convenience when it is not). The input is 1-based; it clamps to [1,total]
+  // and scrolls so that row is at the top of the band, then recomputeRange reads
+  // the browser-clamped scrollTop back. Exact against the CURRENT total (which,
+  // on the rescan tier, is an estimate reconcileEof refines as pages land -- the
+  // same live total drag-scroll follows).
+  let gotoValue = "";
+  function goToRow(): void {
+    if (!viewportEl || safeTotal <= 0) return;
+    const parsed = Math.floor(Number(gotoValue));
+    if (!Number.isFinite(parsed)) return;
+    const row = clamp(parsed, 1, safeTotal) - 1; // 1-based -> 0-based, clamped
+    // Read clientHeight LIVE (not the state var, which lags until the next
+    // recompute) so the scroll target matches what recomputeRange will map back.
+    const ch = viewportEl.clientHeight;
+    viewportEl.scrollTop = scrollTopForRow(row, ch, safeTotal, ROW_H, HEADER_H, contentHeight);
+    recomputeRange();
+  }
+  function onGotoKey(e: KeyboardEvent): void {
+    if (e.key === "Enter") { e.preventDefault(); goToRow(); }
+  }
 </script>
 
 <div
@@ -337,7 +359,20 @@
 >
   <div class="content" style="width:{contentWidth}px; height:{contentHeight}px;">
     <div class="header" style="height:{HEADER_H}px;">
-      <div class="corner" style="width:{GUTTER_W}px; height:{HEADER_H}px;"></div>
+      <div class="corner" style="width:{GUTTER_W}px; height:{HEADER_H}px;">
+        <input
+          class="goto-row"
+          type="number"
+          min="1"
+          max={safeTotal}
+          placeholder="#"
+          aria-label="Go to row"
+          disabled={safeTotal <= 0}
+          bind:value={gotoValue}
+          on:keydown={onGotoKey}
+          on:blur={goToRow}
+        />
+      </div>
       {#each visibleCols as { c, col } (col.path)}
         <button
           type="button"
@@ -431,6 +466,35 @@
     z-index: 3;
     background: var(--surface-1);
     border-bottom: 1px solid var(--border);
+  }
+
+  .goto-row {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-align: center;
+    padding: 0 2px;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  .goto-row::-webkit-outer-spin-button,
+  .goto-row::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .goto-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .goto-row:disabled {
+    color: var(--text-muted);
   }
 
   .corner {
