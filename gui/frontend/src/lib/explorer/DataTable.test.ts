@@ -329,4 +329,23 @@ describe("DataTable go-to-row (V1)", () => {
     await tick();
     expect(input.disabled).toBe(true);
   });
+
+  it("Enter on an empty box does not navigate (no yank to row 0)", async () => {
+    const input = mountReady(1000);
+    await tick();
+    const viewportEl = target.querySelector(".viewport") as HTMLElement;
+    viewportEl.scrollTop = 14000;
+    viewportEl.dispatchEvent(new Event("scroll"));
+    await new Promise((r) => requestAnimationFrame(r));
+    await tick();
+    expect(viewportEl.scrollTop).toBe(14000); // sanity: scrolled deep
+
+    // Empty box + Enter must be a no-op. Mutation: drop the empty guard ->
+    // Number("")/Number(null) === 0 -> the view is yanked to the top (0).
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await tick();
+    expect(viewportEl.scrollTop).toBe(14000);
+  });
 });

@@ -332,9 +332,13 @@
   // the browser-clamped scrollTop back. Exact against the CURRENT total (which,
   // on the rescan tier, is an estimate reconcileEof refines as pages land -- the
   // same live total drag-scroll follows).
-  let gotoValue = "";
+  let gotoValue: string | number = "";
   function goToRow(): void {
     if (!viewportEl || safeTotal <= 0) return;
+    // An empty box is a no-op, NOT row 0: a number input binds "" to null and
+    // Number(null)===0 would pass a NaN guard and yank the user to the top. Only
+    // an actually-entered number navigates.
+    if (gotoValue == null || String(gotoValue).trim() === "") return;
     const parsed = Math.floor(Number(gotoValue));
     if (!Number.isFinite(parsed)) return;
     const row = clamp(parsed, 1, safeTotal) - 1; // 1-based -> 0-based, clamped
@@ -370,7 +374,6 @@
           disabled={safeTotal <= 0}
           bind:value={gotoValue}
           on:keydown={onGotoKey}
-          on:blur={goToRow}
         />
       </div>
       {#each visibleCols as { c, col } (col.path)}
