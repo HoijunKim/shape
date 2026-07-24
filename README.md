@@ -29,25 +29,20 @@ for CI, and a Wails desktop GUI share the same core.
 
 ## Install
 
-**Go:**
+**Desktop app (the explorer).** Download the build for your platform from the
+[Releases page](https://github.com/hoijun-kim/shape/releases) and run it —
+`shape-gui_<version>_windows_amd64.zip`, `..._darwin_universal.zip`, or
+`..._linux_amd64.tar.gz`. The binaries are unsigned, so the first launch needs
+"Open anyway" (macOS Gatekeeper) or "More info → Run anyway" (Windows SmartScreen).
+
+**CLI (`shape`).** The command-line profiler ships separately:
 
 ```
-go install github.com/hoijun-kim/shape@latest
+go install github.com/hoijun-kim/shape@latest        # any platform with Go
+brew install --cask hoijun-kim/tap/shape             # macOS / Linux
 ```
 
-**Homebrew (macOS/Linux):**
-
-```
-brew install --cask hoijun-kim/tap/shape
-```
-
-**npm:**
-
-```
-npm install -g @hoijun-kim/shape
-```
-
-**Direct download:** grab the archive for your platform from the
+or grab a `shape_<version>_<os>_<arch>` archive from the same
 [Releases page](https://github.com/hoijun-kim/shape/releases).
 
 ## Usage
