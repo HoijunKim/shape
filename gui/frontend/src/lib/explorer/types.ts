@@ -5,6 +5,11 @@
 // declare a string-literal union here -- comparing the enum against a bare
 // "missing" is TS2367 and npm run check will reject it.
 import { query } from "../../../wailsjs/go/models"; // value import, not `import type`
+// E8: `visual` is used ONLY as a type here (FieldCard), so it MUST be
+// `import type` -- `importsNotUsedAsValues: "error"` (from @tsconfig/svelte)
+// rejects a value import that is never used as a value (TS1371). FieldDetail.
+// svelte already imports it this way.
+import type { visual } from "../../../wailsjs/go/models";
 
 export type Cell = query.Cell;
 export type Row = query.Row;
@@ -25,6 +30,8 @@ export type ExportResult = query.ExportResult;
 export type SaveRequest = query.SaveRequest;
 export type SaveResult = query.SaveResult;
 export type CellEdit = query.CellEdit;
+export type ColumnStatsResult = query.ColumnStatsResult;
+export type FieldCard = visual.FieldCard;
 export type Generated = query.Generated;
 export type CodegenRequest = query.CodegenRequest;
 

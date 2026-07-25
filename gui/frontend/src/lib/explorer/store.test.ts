@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, Filter } from "./types";
 
@@ -24,6 +24,8 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   // resolves undefined and the caller's property read throws.
   GetCell: vi.fn(() => Promise.resolve({ value: null, found: false })),
   SaveEdits: vi.fn(() => Promise.resolve({ outPath: "", rowsOut: 0, editsApplied: 0, editsUnapplied: 0, bytesOut: 0, elapsedMs: 0 })),
+  // E8: store.ts calls ColumnStats for the sidebar stats panel.
+  ColumnStats: vi.fn(() => Promise.resolve({ card: { path: "" }, found: false })),
 }));
 
 // E4: store.ts subscribes to shape:progress per export. The real module reaches
@@ -81,6 +83,7 @@ beforeEach(async () => {
   // make it resolve undefined), just clear its call history between tests.
   vi.mocked(Codegen).mockClear();
   vi.mocked(GetCell).mockReset().mockResolvedValue({ value: null, found: false } as any);
+  vi.mocked(ColumnStats).mockReset().mockResolvedValue({ card: { path: "" }, found: false } as any);
   vi.mocked(SaveEdits).mockReset().mockResolvedValue({ outPath: "/o", rowsOut: 3, editsApplied: 1, editsUnapplied: 0, bytesOut: 9, elapsedMs: 0 } as any);
   progressHandlers = [];
   vi.mocked(EventsOn).mockReset().mockImplementation((_evt: string, cb: any) => {
@@ -997,6 +1000,16 @@ describe("setSearch and getCell (E6 Task 5)", () => {
     const res = await explorer.getCell(42, "user.name");
     expect(vi.mocked(GetCell).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", index: 42, path: "user.name" });
     expect(res).toEqual({ value: { k: 1 }, found: true });
+  });
+
+  it("getColumnStats forwards handle+path and returns the binding result", async () => {
+    await openMemory();
+    vi.mocked(ColumnStats).mockResolvedValueOnce({ card: { path: "user.age" }, found: true } as any);
+    const out = await explorer.getColumnStats("user.age");
+    // Assert the HANDLE too (a dropped/hardcoded handle must fail this).
+    expect(vi.mocked(ColumnStats).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", path: "user.age" });
+    // Mutation: return a constant instead of the binding result -> this fails.
+    expect(out).toEqual({ card: { path: "user.age" }, found: true });
   });
 });
 

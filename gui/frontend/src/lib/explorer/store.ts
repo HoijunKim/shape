@@ -1,7 +1,7 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
-import type { Column, CountResult, ExportResult, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, Transform } from "./types";
+import type { Column, CountResult, ExportResult, FieldCard, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, Transform } from "./types";
 
 // E7: one edited cell's value carried as kind + literal (a number keeps its
 // exact source text -- a JS number would round a >2^53 integer, so it is never
@@ -767,10 +767,21 @@ function createExplorer() {
     return { value: (res as any).value as unknown, found: (res as any).found as boolean };
   }
 
+  /** E8: fetches one column's rich profile (visual FieldCard) for the sidebar's
+   *  expandable stats view. Thin async wrapper, owning no store state (the panel
+   *  owns its own loading/error), rejecting on failure. `found` is false when the
+   *  path is not a source field (e.g. a projected column). Sibling of getCell. */
+  async function getColumnStats(path: string): Promise<{ card: FieldCard; found: boolean }> {
+    const s = get({ subscribe });
+    if (!s.handle) throw new Error("no source open");
+    const res = await ColumnStats({ handle: s.handle, path } as any);
+    return { card: (res as any).card as FieldCard, found: (res as any).found as boolean };
+  }
+
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
     setFilter, setSearch, cancelCount, setTransform, runExport, cancelExport, dismissExport,
-    refreshCodegen, getCell,
+    refreshCodegen, getCell, getColumnStats,
     setEdit, editFor, revertCell, revertAllEdits, editedIndices, saveEdits, dismissSave,
   };
 }
