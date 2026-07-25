@@ -34,6 +34,19 @@ func TestColumnStats_NumericFieldHasHistogram(t *testing.T) {
 	if res.Card.Histogram == nil {
 		t.Fatalf("Card.Histogram = nil, want a histogram for a numeric field with >12 distinct values")
 	}
+
+	// Pin the PATH match against a `return Fields[0]` mutation: the profiler
+	// emits fields path-sorted, so "n" is Fields[0] and asserting Card.Path=="n"
+	// alone is self-defeating (the mutation returns "n" anyway). Query "s",
+	// which sorts AFTER "n", so a mutation returning the first field's card
+	// yields "n" != "s" and fails here.
+	sres, err := eng.ColumnStats(context.Background(), ColumnStatsRequest{Handle: handle, Path: "s"})
+	if err != nil {
+		t.Fatalf("ColumnStats(s) error = %v, want nil", err)
+	}
+	if !sres.Found || sres.Card.Path != "s" {
+		t.Fatalf("ColumnStats(s) = {Found:%v, Path:%q}, want {true, \"s\"} (a `return Fields[0]` mutation returns \"n\" here)", sres.Found, sres.Card.Path)
+	}
 }
 
 func TestColumnStats_UnknownPathIsNotFound(t *testing.T) {
