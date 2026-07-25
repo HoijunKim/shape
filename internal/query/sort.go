@@ -17,6 +17,16 @@ type SortSpec struct {
 type CompiledSort struct {
 	segs []Seg
 	desc bool
+	path string // the raw source path, for per-backend permutation cache keys
+}
+
+// cacheKey identifies this sort (path + direction) for a backend's per-(filter,
+// sort) permutation cache. Combine with the filter key at the call site.
+func (cs *CompiledSort) cacheKey() string {
+	if cs.desc {
+		return cs.path + "\x00desc"
+	}
+	return cs.path + "\x00asc"
 }
 
 // CompileSort resolves the sort path once (like CompiledFilter). Returns nil for
@@ -29,7 +39,7 @@ func CompileSort(spec SortSpec, cm *ColumnModel) (*CompiledSort, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CompiledSort{segs: segs, desc: spec.Desc}, nil
+	return &CompiledSort{segs: segs, desc: spec.Desc, path: spec.Path}, nil
 }
 
 // resolveValue is the first-value scalar for a []Seg against a record: the

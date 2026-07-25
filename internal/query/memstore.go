@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/bits"
+	"sort"
 	"sync"
 	"time"
 
@@ -84,6 +85,13 @@ type memBackend struct {
 	// maxMatchCacheEntries, evicting least-recently-used.
 	matchCache map[string]*list.Element // key -> element holding *matchEntry
 	matchLRU   *list.List               // front = most recently used
+
+	// sortPerm caches the last-computed sorted permutation of matching absolute
+	// indices, keyed by (filterKey + sort.cacheKey()) in sortKey. Single-entry:
+	// scrolling a sorted view reuses it; changing the filter or sort rebuilds it.
+	// Guarded by mu. (E9)
+	sortKey  string
+	sortPerm []int
 }
 
 // matchEntry is the value stored in memBackend.matchLRU: a cached bitset
@@ -153,6 +161,34 @@ func (m *memBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 		offset = 0
 	}
 
+	if p.Sort != nil {
+		// E9: serve the sorted [offset,offset+limit) window. Row.Index STAYS the
+		// absolute ordinal (Project(rec, int64(j))), never the display rank.
+		idx := m.sortedIndex(p, bs)
+		lo := offset
+		if lo > int64(len(idx)) {
+			lo = int64(len(idx))
+		}
+		hi := offset + int64(limit)
+		if hi > int64(len(idx)) {
+			hi = int64(len(idx))
+		}
+		rows := make([]Row, 0, hi-lo)
+		for _, j := range idx[lo:hi] {
+			rows = append(rows, p.Transform.Project(m.records[j], int64(j)))
+		}
+		return RowSet{
+			Columns:    p.Transform.Columns(),
+			Rows:       rows,
+			Offset:     w.Offset,
+			Scanned:    int64(len(idx)),
+			Truncated:  hi < int64(len(idx)),
+			ElapsedMs:  time.Since(start).Milliseconds(),
+			Total:      int64(len(idx)),
+			TotalExact: true,
+		}, nil
+	}
+
 	rows := make([]Row, 0, limit)
 	var scanned int64
 	var skipped int64
@@ -183,6 +219,30 @@ func (m *memBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 	rs.Total = bs.Count()
 	rs.TotalExact = true
 	return rs, nil
+}
+
+// sortedIndex returns the matching absolute indices sorted by p.Sort, caching
+// the permutation per (filterKey, sort). E9. The comparator holds the records
+// (memBackend has them), so Less (not LessKeys) is correct here.
+func (m *memBackend) sortedIndex(p *CompiledPlan, bs *bitset) []int {
+	key := p.filterKey + "\x00" + p.Sort.cacheKey()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sortKey == key && m.sortPerm != nil {
+		return m.sortPerm
+	}
+	idx := make([]int, 0)
+	for i := range m.records {
+		if bs.Get(i) {
+			idx = append(idx, i)
+		}
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		return p.Sort.Less(m.records[idx[a]], int64(idx[a]), m.records[idx[b]], int64(idx[b]))
+	})
+	m.sortKey = key
+	m.sortPerm = idx
+	return idx
 }
 
 // Count returns the exact number of records matching f, using (and caching)
