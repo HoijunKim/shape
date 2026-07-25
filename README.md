@@ -120,6 +120,10 @@ jq or SQL required.
   combined with the filter and reflected in the count, the export and the code.
 - **Expand** — click a truncated object/array cell to open its full value as a
   collapsible tree, with a Copy button for the exact JSON.
+- **Column stats** — expand a field in the structure map to see its full profile
+  in place: a distribution histogram for numbers, a top-values chart for
+  categorical fields, type mix, presence/null meters, quantiles and health flags
+  — all from the single open-time profiling pass, fetched on demand, no rescan.
 - **Reshape** — choose, reorder and rename the columns you want.
 - **Edit** — double-click a scalar cell to change its value in place. Edited
   cells are highlighted (and the row flagged in the gutter); an "Edited only"
