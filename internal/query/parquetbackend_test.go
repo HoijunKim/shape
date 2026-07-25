@@ -933,3 +933,30 @@ func TestCrossBackend_ParquetNested_ArrayMembershipAndBool(t *testing.T) {
 		})
 	}
 }
+
+type parquetSortRow struct {
+	N int64 `parquet:"n"`
+}
+
+func TestParquetBackend_SortKeepsAbsoluteIndex(t *testing.T) {
+	// n = [3,1,2] at physical ordinals [0,1,2]. Ascending -> n=1,2,3 -> absolute
+	// ordinals 1,2,0. Row.Index MUST be the physical ordinal, NOT the display rank.
+	pb := newTestParquetBackend(t, []parquetSortRow{{N: 3}, {N: 1}, {N: 2}}, 0)
+	p := compilePlan(t, Filter{}, Transform{}, pb.Columns())
+	cs, err := CompileSort(SortSpec{Path: "n"}, pb.Columns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Sort = cs
+	rs, err := pb.Query(context.Background(), p, Window{Limit: 100}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rows) != 3 {
+		t.Fatalf("len(Rows) = %d, want 3", len(rs.Rows))
+	}
+	got := []int64{rs.Rows[0].Index, rs.Rows[1].Index, rs.Rows[2].Index}
+	if got[0] != 1 || got[1] != 2 || got[2] != 0 {
+		t.Fatalf("parquet sorted Row.Index = %v, want [1 2 0] (absolute ordinals in sorted order)", got)
+	}
+}

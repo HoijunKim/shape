@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/hoijun-kim/shape/internal/profile"
@@ -56,6 +58,13 @@ type parquetBackend struct {
 
 	cm   *ColumnModel
 	prof profile.ProfileResult
+
+	// E9: keys-only sorted-ordinal index, cached per (filterKey, sort). Holds
+	// only sort keys + int64 physical ordinals (never the rows), preserving the
+	// bounded-memory contract. Single-entry.
+	sortMu   sync.Mutex
+	sortKey  string
+	sortPerm []int64
 }
 
 // newParquetBackend opens path via parquet.OpenFile (mirroring
@@ -362,10 +371,110 @@ func (p *parquetBackend) Query(ctx context.Context, plan *CompiledPlan, w Window
 		offset = 0
 	}
 
+	if plan.Sort != nil {
+		return p.querySorted(ctx, plan, offset, limit, w, start)
+	}
+
 	if isMatchAllFilter(plan.Filter) {
 		return p.queryUnfiltered(ctx, plan, w, offset, limit, wantTotal, start)
 	}
 	return p.queryFiltered(ctx, plan, w, offset, limit, wantTotal, start)
+}
+
+// sortedOrdinals builds (and caches per filter+sort) the physical ordinals of
+// matching rows sorted by plan.Sort, holding only (key, ordinal) pairs -- never
+// the rows -- so it preserves the backend's bounded-memory contract.
+func (p *parquetBackend) sortedOrdinals(ctx context.Context, plan *CompiledPlan) ([]int64, error) {
+	key := plan.filterKey + "\x00" + plan.Sort.cacheKey()
+	p.sortMu.Lock()
+	if p.sortKey == key && p.sortPerm != nil {
+		perm := p.sortPerm
+		p.sortMu.Unlock()
+		return perm, nil
+	}
+	p.sortMu.Unlock()
+
+	type kv struct {
+		key any
+		ord int64
+	}
+	var pairs []kv
+	err := p.scan(ctx, 0, func(idx int64, rec any) (bool, error) {
+		if plan.Filter.Match(rec) {
+			pairs = append(pairs, kv{resolveValue(rec, plan.Sort.segs), idx})
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(pairs, func(a, b int) bool {
+		return plan.Sort.LessKeys(pairs[a].key, pairs[a].ord, pairs[b].key, pairs[b].ord)
+	})
+	perm := make([]int64, len(pairs))
+	for i := range pairs {
+		perm[i] = pairs[i].ord
+	}
+	p.sortMu.Lock()
+	p.sortKey = key
+	p.sortPerm = perm
+	p.sortMu.Unlock()
+	return perm, nil
+}
+
+// querySorted serves a sorted window: consult the keys-only ordinal index, then
+// one scan fetching the window's rows (cheaper than N scattered SeekToRow reader
+// re-opens for scattered sorted ordinals). Row.Index STAYS the absolute physical
+// ordinal.
+func (p *parquetBackend) querySorted(ctx context.Context, plan *CompiledPlan, offset int64, limit int, w Window, start time.Time) (RowSet, error) {
+	perm, err := p.sortedOrdinals(ctx, plan)
+	if err != nil {
+		return RowSet{}, err
+	}
+	lo := offset
+	if lo > int64(len(perm)) {
+		lo = int64(len(perm))
+	}
+	hi := offset + int64(limit)
+	if hi > int64(len(perm)) {
+		hi = int64(len(perm))
+	}
+	window := perm[lo:hi]
+
+	need := make(map[int64]bool, len(window))
+	for _, ord := range window {
+		need[ord] = true
+	}
+	got := make(map[int64]any, len(window))
+	found := 0
+	err = p.scan(ctx, 0, func(idx int64, rec any) (bool, error) {
+		if need[idx] {
+			got[idx] = rec
+			found++
+			if found == len(need) {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return RowSet{}, err
+	}
+
+	rows := make([]Row, 0, len(window))
+	for _, ord := range window {
+		rows = append(rows, plan.Transform.Project(got[ord], ord))
+	}
+	return RowSet{
+		Columns:    plan.Transform.Columns(),
+		Rows:       rows,
+		Offset:     w.Offset,
+		Scanned:    int64(len(perm)),
+		Truncated:  hi < int64(len(perm)),
+		ElapsedMs:  time.Since(start).Milliseconds(),
+		Total:      int64(len(perm)),
+		TotalExact: true,
+	}, nil
 }
 
 // queryUnfiltered is the empty-filter fast path: SeekToRow(offset) once, then
