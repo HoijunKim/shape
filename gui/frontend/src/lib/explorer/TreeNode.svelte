@@ -7,6 +7,7 @@
   import KindChip from "./KindChip.svelte";
   import Meter from "../charts/Meter.svelte";
   import Badge from "../charts/Badge.svelte";
+  import FieldStatsPanel from "./FieldStatsPanel.svelte";
   import { dominantKind, nullStatus, formatPercent, formatDistinct } from "./fieldDisplay";
 
   export let node: TreeNode;
@@ -55,6 +56,9 @@
   $: canReachByTab = isColumn || hasChildren;
 
   let expanded = false;
+  // E8: whether this field's inline stats panel is open. Independent of `expanded`
+  // (tree children) -- a leaf field has no children but can still show stats.
+  let statsExpanded = false;
   // Force this node open whenever it sits on the path down to the current
   // focus -- never force it CLOSED, so a user's manual expand/collapse of an
   // unrelated branch survives an unrelated focus change. Also re-checked on
@@ -122,7 +126,7 @@
     // Enter) suppressing the button's own click so seedFilter never fires.
     // Let the button handle its own keyboard activation (native <button>
     // fires click on Enter/Space -> onSeedClick).
-    if ((e.target as HTMLElement).closest(".seed")) return;
+    if ((e.target as HTMLElement).closest(".seed, .stats-toggle")) return;
     if (hasChildren && e.key === "ArrowRight") {
       e.preventDefault();
       if (!expanded) expanded = true;
@@ -180,6 +184,19 @@
     {#if node.field.drift}
       <Badge severity="warning" icon="⚠" label="drift" />
     {/if}
+    <button
+      type="button"
+      class="stats-toggle"
+      class:active={statsExpanded}
+      aria-label="Show statistics for {node.path}"
+      aria-pressed={statsExpanded}
+      title="Show statistics"
+      on:click|stopPropagation={() => (statsExpanded = !statsExpanded)}
+    >
+      <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">
+        <path d="M2 14h2V7H2v7zm4 0h2V2H6v12zm4 0h2V9h-2v5z" />
+      </svg>
+    </button>
   {/if}
 
   {#if isColumn}
@@ -196,6 +213,12 @@
     </button>
   {/if}
 </div>
+
+{#if node.field && statsExpanded}
+  <div class="stats-slot" style="padding-left: {depth * INDENT + 14}px;">
+    <FieldStatsPanel path={node.path} />
+  </div>
+{/if}
 
 {#if hasChildren && expanded}
   {#each node.children as child (child.path)}
@@ -330,6 +353,47 @@
   }
 
   .seed:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  /* Same quiet-until-hover treatment as .seed, with an .active state that stays
+     lit while the stats panel is open. */
+  .stats-toggle {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    opacity: 0.4;
+    cursor: pointer;
+  }
+
+  .stats-toggle svg {
+    fill: currentColor;
+  }
+
+  .row:hover .stats-toggle,
+  .stats-toggle:hover,
+  .stats-toggle.active,
+  .stats-toggle:focus-visible {
+    opacity: 1;
+  }
+
+  .stats-toggle:hover,
+  .stats-toggle.active {
+    color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  .stats-toggle:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
