@@ -29,6 +29,7 @@ type sourceEngine interface {
 	ExportQuery(ctx context.Context, req query.ExportRequest, progress func(rows int64)) (query.ExportResult, error)
 	Codegen(req query.CodegenRequest) (query.Generated, error)
 	GetCell(ctx context.Context, req query.CellRequest) (query.CellResult, error)
+	ColumnStats(ctx context.Context, req query.ColumnStatsRequest) (query.ColumnStatsResult, error)
 	SaveEdits(ctx context.Context, req query.SaveRequest, progress func(rows int64)) (query.SaveResult, error)
 	Cancel(requestID string) error
 	CloseSource(handle string) error
@@ -335,6 +336,13 @@ func (a *App) Codegen(req query.CodegenRequest) (query.Generated, error) {
 // teardown like every other data-touching binding.
 func (a *App) GetCell(req query.CellRequest) (query.CellResult, error) {
 	return a.eng.GetCell(a.reqCtx(), req)
+}
+
+// ColumnStats returns the rich profile (visual FieldCard) of one source field
+// for the sidebar's expandable stats view (E8). A reqCtx pass-through, like
+// GetCell.
+func (a *App) ColumnStats(req query.ColumnStatsRequest) (query.ColumnStatsResult, error) {
+	return a.eng.ColumnStats(a.reqCtx(), req)
 }
 
 // SaveEdits writes a copy of the source with the cell-edit overlay applied
