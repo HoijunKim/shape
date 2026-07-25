@@ -28,7 +28,7 @@
 - Create: `internal/query/sort_test.go`
 
 **Interfaces:**
-- Consumes: the profiler's scalar value set (`nil`, `bool`, `json.Number`, `string`) + the `Missing`/`IsMissing` sentinel (already in this package, from E4). `resolveSegs(path, cm)` (filter.go:241) to parse a sort path to `[]Seg`; the transform first-value resolve rule (transform.go:249-263).
+- Consumes: the profiler's scalar value set (`nil`, `bool`, `json.Number`, **`float64`**, `string`) + the `Missing`/`IsMissing` sentinel (transform.go:275/279). `resolveSegs(path, cm)` (filter.go:241) to parse a sort path to `[]Seg`; the real value resolver `resolve(record, segs) []any` (columns.go:114, returns an empty slice for an absent path); `Missing`. (float64 is real: readers.go:99,121 pass it through; Parquet DOUBLE / SQLite REAL store it.)
 - Produces: `type SortSpec struct { Path string; Desc bool }`, `type CompiledSort struct { segs []Seg; desc bool }`, `func CompileSort(spec SortSpec, cm *ColumnModel) (*CompiledSort, error)` (nil when `spec.Path == ""`), `func compareValues(a, b any) int`, and `func (cs *CompiledSort) Less(recA any, ordA int64, recB any, ordB int64) bool` (resolves each record's key, compares, ties break on ordinal ascending).
 
 - [ ] **Step 1: Write the failing comparator tests**
@@ -99,6 +99,23 @@ func TestCompareValues_IntVsFraction(t *testing.T) {
 		t.Fatalf("2.5 > 2.49")
 	}
 }
+
+func TestCompareValues_Float64AndJSONNumberUnify(t *testing.T) {
+	// The memory tier holds json.Number; Parquet DOUBLE / SQLite REAL hold
+	// float64. The SAME logical value must compare equal across tiers, and a
+	// float64 must order numerically against a json.Number (mutation: omit the
+	// float64 case -> a float64 ranks as "unexpected" (rank 5, after strings)
+	// and two floats compare mutually equal -> both assertions fail).
+	if compareValues(float64(2.5), n("2.5")) != 0 {
+		t.Fatalf("float64(2.5) must equal json.Number(\"2.5\") cross-tier")
+	}
+	if compareValues(float64(2.5), n("10")) >= 0 {
+		t.Fatalf("float64(2.5) < json.Number(10) numerically")
+	}
+	if compareValues(float64(1.0), float64(2.0)) >= 0 {
+		t.Fatalf("float64 values must order numerically among themselves")
+	}
+}
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -144,15 +161,34 @@ func CompileSort(spec SortSpec, cm *ColumnModel) (*CompiledSort, error) {
 	return &CompiledSort{segs: segs, desc: spec.Desc}, nil
 }
 
-// kindRank orders values across JSON scalar kinds: Missing < null < bool <
-// number < string. A total, deterministic order even for mixed-type columns.
-func kindRank(v any) int {
+// resolveValue is the first-value scalar for a []Seg against a record: the
+// caller-side rule Project/ProjectValues already apply (transform.go:255-260 /
+// :321-326) over the real resolver `resolve(record, segs) []any` (columns.go:114),
+// which returns an EMPTY slice (NOT Missing) for an absent path and applies the
+// first-array-element rule via Elem segments. This is NOT a duplicate resolver —
+// `resolve` is the primitive; this is the 3-line first-value+Missing adapter that
+// both the comparator and the keys-only tiers (T4/T6) share.
+func resolveValue(rec any, segs []Seg) any {
+	vs := resolve(rec, segs)
+	if len(vs) == 0 {
+		return Missing
+	}
+	return vs[0]
+}
+
+// valueKindRank orders values across scalar kinds: Missing < null < bool <
+// number < string. Total + deterministic even for mixed-type columns. NAME NOTE:
+// there is already a package-level `var kindRank` (columns.go:769, ranks
+// profile.JSONKind for dominantKind) — this MUST be a different identifier.
+// The number rank covers BOTH json.Number (memory tier) and float64 (Parquet
+// DOUBLE / SQLite REAL / readers.ToProfileValue passthrough, readers.go:99,121).
+func valueKindRank(v any) int {
 	switch v.(type) {
 	case nil:
 		return 1
 	case bool:
 		return 2
-	case json.Number:
+	case json.Number, float64:
 		return 3
 	case string:
 		return 4
@@ -164,64 +200,84 @@ func kindRank(v any) int {
 }
 
 // compareValues is the cross-tier total order over profiler scalar values.
-// Returns <0, 0, >0. Numbers compare by EXACT value (big.Rat), never float64.
+// Returns <0, 0, >0. Numbers (json.Number AND float64) compare by EXACT value,
+// so json.Number("2.5") == float64(2.5) cross-tier and 9007199254740993 !=
+// ...992 (which float64 would collapse — but we only reach float64 for values
+// SQLite/Parquet actually store as REAL/DOUBLE).
 func compareValues(a, b any) int {
-	ra, rb := kindRank(a), kindRank(b)
+	ra, rb := valueKindRank(a), valueKindRank(b)
 	if ra != rb {
 		return ra - rb
 	}
 	switch av := a.(type) {
 	case bool:
 		bv := b.(bool)
-		if av == bv {
+		switch {
+		case av == bv:
 			return 0
-		}
-		if !av {
+		case !av:
 			return -1
-		}
-		return 1
-	case json.Number:
-		return compareNumbers(av, b.(json.Number))
-	case string:
-		bv := b.(string)
-		if av < bv {
-			return -1
-		}
-		if av > bv {
+		default:
 			return 1
 		}
-		return 0
+	case json.Number, float64:
+		return compareNumeric(a, b) // both operands are rank-3 numbers here
+	case string:
+		bv := b.(string)
+		switch {
+		case av < bv:
+			return -1
+		case av > bv:
+			return 1
+		default:
+			return 0
+		}
 	}
 	return 0 // equal within nil/Missing/unexpected kind
 }
 
-// compareNumbers compares two json.Number literals by exact rational value, so
-// 9007199254740993 != 9007199254740992 (which float64 would collapse).
-func compareNumbers(a, b json.Number) int {
-	ra, oka := new(big.Rat).SetString(string(a))
-	rb, okb := new(big.Rat).SetString(string(b))
-	if !oka || !okb {
-		// Non-finite or unparseable (NaN/Inf never reach here — the profiler
-		// excludes them from numeric stats); fall back to string compare for a
-		// deterministic order.
-		if string(a) < string(b) {
-			return -1
+// numericRat converts a rank-3 numeric (json.Number or float64) to an exact
+// big.Rat, or (nil,false) for a non-finite float64 (NaN/±Inf: SetFloat64
+// returns nil) or an unparseable literal.
+func numericRat(v any) (*big.Rat, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		r, ok := new(big.Rat).SetString(string(x))
+		return r, ok
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, false
 		}
-		if string(a) > string(b) {
-			return 1
-		}
-		return 0
+		return new(big.Rat).SetFloat64(x), true
 	}
-	return ra.Cmp(rb)
+	return nil, false
 }
 
-// Less orders two records by the sort key, ties broken on the absolute ordinal
-// ASCENDING (so descending is not merely the reversed slice — ties and nulls
-// stay deterministic and cross-tier identical).
-func (cs *CompiledSort) Less(recA any, ordA int64, recB any, ordB int64) bool {
-	ka := resolveValue(recA, cs.segs)
-	kb := resolveValue(recB, cs.segs)
-	c := compareValues(ka, kb)
+// compareNumeric compares two rank-3 numbers by exact rational value; a
+// non-finite/unparseable operand sorts AFTER a finite one (deterministic), and
+// two such compare equal — matching how the profiler already treats non-finite
+// as excluded-but-present.
+func compareNumeric(a, b any) int {
+	ra, oka := numericRat(a)
+	rb, okb := numericRat(b)
+	switch {
+	case oka && okb:
+		return ra.Cmp(rb)
+	case oka:
+		return -1
+	case okb:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// LessKeys orders two PRE-RESOLVED keys, ties broken on the absolute ordinal
+// ASCENDING. The keys-only tiers (rescan T4, parquet T6) hold (key, ordinal)
+// pairs and MUST use this — CompiledSort.Less resolves records first, which
+// those tiers cannot do (they discarded the records).
+func (cs *CompiledSort) LessKeys(keyA any, ordA int64, keyB any, ordB int64) bool {
+	c := compareValues(keyA, keyB)
 	if cs.desc {
 		c = -c
 	}
@@ -230,18 +286,28 @@ func (cs *CompiledSort) Less(recA any, ordA int64, recB any, ordB int64) bool {
 	}
 	return ordA < ordB
 }
+
+// Less orders two RECORDS by resolving each to its sort key, then delegating to
+// LessKeys (so record-holding tiers and key-holding tiers share one ordering).
+func (cs *CompiledSort) Less(recA any, ordA int64, recB any, ordB int64) bool {
+	return cs.LessKeys(resolveValue(recA, cs.segs), ordA, resolveValue(recB, cs.segs), ordB)
+}
 ```
 
-Note: `resolveValue(rec, segs) any` is the first-value scalar resolver already used by the transform/filter path (transform.go:249-282 resolves a `[]Seg` against a record, applying the first-array-element rule and returning `Missing` for an absent path). If its exported name differs, use the existing helper — do NOT write a second resolver. Confirm the name by reading transform.go before implementing; the plan assumes `resolveValue`.
+Imports for sort.go: `encoding/json`, `math`, `math/big`.
+
+Prerequisite to confirm before coding (settled by the plan review): `resolve(record any, segs []Seg) []any` exists at columns.go:114; `Missing`/`IsMissing` are exported (transform.go:275/279); there is NO existing `resolveValue` (create it) and `kindRank` is taken (hence `valueKindRank`).
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `go test ./internal/query/ -run TestCompareValues -count=1`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Prove the mutation**
+- [ ] **Step 5: Prove the mutations (two)**
 
-In `compareNumbers`, replace the big.Rat compare with float64: `af, _ := a.Float64(); bf, _ := b.Float64(); return cmpF(af, bf)` (add a tiny float cmp). Run `go test ./internal/query/ -run TestCompareValues_BigIntExactNotFloat` → FAIL (the two 2^53-neighbours collapse to equal). Restore.
+Mutation A (exact numbers) — in `numericRat`, for the `json.Number` case return `new(big.Rat).SetFloat64(f)` where `f, _ := x.Float64()`. Run `go test ./internal/query/ -run TestCompareValues_BigIntExactNotFloat` → FAIL (the two 2^53-neighbours collapse to equal). Restore.
+
+Mutation B (float64 kind) — remove `float64` from `valueKindRank`'s rank-3 case (so it falls through to rank 5). Run `go test ./internal/query/ -run TestCompareValues_Float64AndJSONNumberUnify` → FAIL (float64 now ranks after strings and two floats compare equal). Restore.
 
 - [ ] **Step 6: gofmt + commit**
 
@@ -360,7 +426,7 @@ Run: `go test ./internal/query/ -run TestMemBackend_Sorts -count=1`
 
 - [ ] **Step 3: Implement**
 
-In `memBackend.Query`, when `p.Sort != nil`: build the matching absolute-index slice from the bitset, sort it with `sort.SliceStable(idx, func(a,b) bool { return p.Sort.Less(m.records[idx[a]], idx[a], m.records[idx[b]], idx[b]) })` (ordinals are the indices themselves), then window `idx[offset:offset+limit]` and emit `p.Transform.Project(m.records[j], int64(j))` for each `j`. Guard the whole sorted path behind `if p.Sort != nil`; the existing ascending loop stays the `p.Sort == nil` path verbatim. Add a `sortPermCache` keyed by `(filterKey, sortPath, desc)` — copy the double-checked LRU shape of `matchBitsetFor` (memstore.go:301-332) — storing the sorted `[]int` so re-windowing does not re-sort.
+In `memBackend.Query`, when `p.Sort != nil`: build the matching absolute-index slice from the bitset, sort it with `sort.SliceStable(idx, func(a,b) bool { return p.Sort.Less(m.records[idx[a]], int64(idx[a]), m.records[idx[b]], int64(idx[b])) })` (mem HOLDS the records, so `Less` — which resolves each record to its key — is the right call here; ordinals are the indices themselves). Then **clamp** the window: `lo := offset; if lo > int64(len(idx)) { lo = int64(len(idx)) }; hi := offset + int64(limit); if hi > int64(len(idx)) { hi = int64(len(idx)) }`, take `idx[lo:hi]`, and emit `p.Transform.Project(m.records[j], int64(j))` for each `j` (the absolute ordinal, NOT the display position). Guard the whole sorted path behind `if p.Sort != nil`; the existing ascending loop stays the `p.Sort == nil` path verbatim. Add a `sortPermCache` keyed by `(filterKey, sortPath, desc)` — copy the double-checked LRU shape of `matchBitsetFor` (memstore.go:301-332) — storing the sorted `[]int` so re-windowing does not re-sort.
 
 - [ ] **Step 4: Run — PASS.**
 
@@ -368,9 +434,9 @@ In `memBackend.Query`, when `p.Sort != nil`: build the matching absolute-index s
 
 Change the emit to `Project(m.records[j], int64(sortedPosition))` (stamp the display rank instead of the absolute ordinal). Run — the test fails (`Row.Index` becomes `[0 1 2]`). This is the load-bearing invariant. Restore.
 
-- [ ] **Step 6: Assert the no-op baseline + commit**
+- [ ] **Step 6: Assert the no-op baseline + the last-page clamp + commit**
 
-Add `TestMemBackend_NoSortIsSourceOrder` asserting `Sort{Path:""}` returns indices `[0,1,2]` (unchanged). Run the mem package. gofmt. Commit `feat(query): memBackend serves sorted windows with a permutation cache`.
+Add `TestMemBackend_NoSortIsSourceOrder` asserting `Sort{Path:""}` returns indices `[0,1,2]` (unchanged). Add `TestMemBackend_SortOffsetPastEndIsEmpty` querying `Offset: 1000, Limit: 10, Sort: {Path:"n"}` on the 3-row fixture and asserting an empty, non-panicking window (guards the clamp — without it, `idx[1000:1010]` panics). Run the mem package. gofmt. Commit `feat(query): memBackend serves sorted windows with a permutation cache`.
 
 ---
 
@@ -384,7 +450,22 @@ Add `TestMemBackend_NoSortIsSourceOrder` asserting `Sort{Path:""}` returns indic
 - Consumes: `p.Sort`; the forward `scan()` (rescan.go:146-174) and `resolveValue`.
 - Produces: rescan serving exact sorted windows via a cached `[]ordinal` permutation, memory bounded by keys (not records).
 
-- [ ] **Step 1: Write the failing cross-tier parity test**
+- [ ] **Step 1: Create the shared fixture helper, then write the failing cross-tier parity test**
+
+First add `manyNumberedRecords` to the test file (it does NOT exist; the real `manyRecords` has no numeric column and is pre-sorted). It must carry a numeric `n` (json.Number on re-read) whose sorted order DIFFERS from source order (so parity + the Row.Index mutation are non-vacuous) AND a float `f` column (so the float64 comparator path — plan-review Critical #1 — is exercised on the Parquet/SQLite tiers in T10). Deterministic shuffle (no `Math.random`; use a fixed seed). ~20000 records exceed BudgetMB=1 → rescan tier (engine_test.go:122-127 confirms this threshold):
+
+```go
+func manyNumberedRecords(nrec int) []map[string]any {
+	recs := make([]map[string]any, nrec)
+	r := rand.New(rand.NewSource(1)) // deterministic
+	perm := r.Perm(nrec)
+	for i := 0; i < nrec; i++ {
+		recs[i] = map[string]any{"n": perm[i], "f": float64(perm[i]) + 0.5}
+	}
+	return recs
+}
+```
+(Import `math/rand`. `perm[i]` shuffles the sort key so index order != sorted order.)
 
 ```go
 func TestRescanBackend_SortMatchesMemoryTier(t *testing.T) {
@@ -413,7 +494,7 @@ func TestRescanBackend_SortMatchesMemoryTier(t *testing.T) {
 
 - [ ] **Step 3: Implement the keys-only index**
 
-When `p.Sort != nil`: build (once, cached per `(filterKey, sortPath, desc)`) a `[]int64` of absolute ordinals sorted by key: one forward `scan()` collecting `(resolveValue(rec, sort.segs), idx)` for every MATCHING record into a `[]struct{key any; ord int64}`, `sort.SliceStable` by `p.Sort.Less` (key + ordinal tiebreak), keep only the `[]int64` ordinals. Serve the window: take `perm[offset:offset+limit]`, put those ordinals in a set, and one forward `scan()` collecting the records at those ordinals, then emit them **in perm order** as `Project(rec, ord)`. Cache the `[]int64` on the backend (guard the total set size; no silent cap — if one is ever needed, surface it). `wantTotal` → `len(perm)` exactly. The early-stop (rescan.go:233-235) applies only to the `p.Sort == nil` path.
+When `p.Sort != nil`: build (once, cached per `(filterKey, sortPath, desc)`) a `[]int64` of absolute ordinals sorted by key: one forward `scan()` collecting `(resolveValue(rec, p.Sort.segs), idx)` for every MATCHING record into a `[]struct{key any; ord int64}`, `sort.SliceStable` by **`p.Sort.LessKeys(pairs[a].key, pairs[a].ord, pairs[b].key, pairs[b].ord)`** (the keys-only comparator — these pairs hold pre-resolved keys, so `Less`, which re-resolves records, is NOT usable here), keep only the `[]int64` ordinals. Serve the window: **clamp** `lo := min(offset, int64(len(perm)))`, `hi := min(offset+int64(limit), int64(len(perm)))` (a last/over-range page must yield an empty window, never panic), take `perm[lo:hi]`, put those ordinals in a set, and one forward `scan()` collecting the records at those ordinals, then emit them **in perm order** as `Project(rec, ord)`. Cache the `[]int64` on the backend (guard the total set size; no silent cap — if one is ever needed, surface it). `wantTotal` → `len(perm)` exactly. The early-stop (rescan.go:233-235) applies only to the `p.Sort == nil` path. (`p.Sort.segs` is unexported but same-package, so the backend reads it directly.)
 
 - [ ] **Step 4: Run — PASS** (the parity test now matches mem).
 
@@ -441,7 +522,7 @@ Emit `Project(rec, int64(displayPos))` instead of the true ordinal → the cross
 
 - [ ] **Step 3: Implement**
 
-Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDER BY` fragment `"quoted_col" COLLATE BINARY [DESC], _rowid_` iff the column is single-storage-class, untainted (no DATE/DATETIME/TIMESTAMP decltype, no BLOB/time.Time), and non-Elem/non-dotted (same gates as the filter pushdown). In sqlBackend.Query: when `p.Sort != nil` and `sortPushable` → swap the `ORDER BY _rowid_` in the window SQL for the fragment (keeping `_rowid_` as the final tiebreaker). Else → fetch the matched rows via the existing cursor path and apply the Go comparator (reuse the memBackend permutation approach over the returned rows; the SQL result set is bounded by the window only if pushed, so the fallback must materialize the matched set — acceptable, same as the non-pushable filter). Cache the fallback permutation per `(filterKey, sortPath, desc)`.
+Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDER BY` fragment `"quoted_col" COLLATE BINARY [DESC], _rowid_` iff the column is single-storage-class, untainted (no DATE/DATETIME/TIMESTAMP decltype, no BLOB/time.Time), and non-Elem/non-dotted (same gates as the filter pushdown), **AND `s.hasRowID && s.denseRowIDs`** — because a pushed ORDER BY must still stamp the ABSOLUTE ordinal into Row.Index, and the only way to recover it from a reordered result is `_rowid_ - 1` (dense rowids), exactly the gate `queryPushed` already uses (E5). **CRITICAL (plan-review #4/#17): never let the pushed-sort window stamp `offset+i`** — `queryWindowSQL`/`queryUnfiltered` set `Row.Index = offset+i` (sqlbackend.go queryUnfiltered:597-605), which under a reorder is the sorted RANK, silently breaking getCell/edit/stats. So when pushing sort, use a query shaped like `pushedWindow` that SELECTs `_rowid_` alongside the columns and emits `Project(rec, rowid-1)` (NOT offset+i), for BOTH the filtered and the unfiltered-with-sort case (add a WHERE-less rowid-selecting windowed query for the latter). When `!sortPushable` (tainted / mixed class / no dense rowid) → Go-fallback: fetch the matched rows via the existing `_rowid_`-ordered cursor scan (which yields `idx == absolute ordinal`), collect `(idx, rec)`, sort by `p.Sort.Less`, **clamp** the window, emit `Project(rec, idx)` — idx stays the absolute ordinal. Cache the fallback permutation per `(filterKey, sortPath, desc)`. Add an assertion that the sorted rows' `Row.Index` values are absolute ordinals (a permutation), NOT `0..limit` — the same invariant mutation as T3.
 
 - [ ] **Step 4: Run — PASS.**
 
@@ -465,7 +546,7 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 
 - [ ] **Step 2: Run — FAIL** (parquet ignores `p.Sort`).
 
-- [ ] **Step 3: Implement** — when `p.Sort != nil`: one O(N) scan collecting `(resolveValue(rec, segs), physicalOrdinal)` for matching rows (piggyback the filtered scan :424 when filtered; else a dedicated key scan replacing the SeekToRow fast path), `sort.SliceStable` by `p.Sort.Less`, keep the `[]ordinal` permutation (cached per key), then serve the window by `SeekToRow(ordinal)` per row, emitting `Project(rec, ordinal)` (absolute ordinal, not display pos). 
+- [ ] **Step 3: Implement** — when `p.Sort != nil`: one O(N) scan collecting `(resolveValue(rec, p.Sort.segs), physicalOrdinal)` for matching rows (piggyback the filtered scan :424 when filtered; else a dedicated key scan replacing the SeekToRow fast path), `sort.SliceStable` by **`p.Sort.LessKeys`** (parquet holds the pre-resolved keys, not the records — `Less` would re-resolve and is wrong here), keep the `[]ordinal` permutation (cached per key), **clamp** the window `[lo,hi)`, then serve it by `SeekToRow(ordinal)` per row, emitting `Project(rec, ordinal)` (the absolute physical ordinal, NOT display pos). 
 
 - [ ] **Step 4: Run — PASS.**
 
@@ -484,11 +565,12 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 
 **Interfaces:**
 - Consumes: the generated `query.SortSpec` (Task 2 bindings); `requery`.
-- Produces: `explorer.setSort(spec: SortSpec)`, `$explorer` exposing the active sort for the header indicator; the sort threaded into every `QueryRows`.
+- Produces: `explorer.setSort(spec: SortSpec)`; a `sort: SortSpec` field on `ExplorerState` so the header ▲/▼ indicator (T8) can read the active sort; the sort threaded into every `QueryRows` payload.
+- NOTE: `SortSpec` is a member of the already **value-imported** `query` namespace in `types.ts:7` (used for `CellKind`), so re-export it as `export type SortSpec = query.SortSpec;` — NOT via the `visual` type-only import (that was the E8 FieldCard case).
 
-- [ ] **Step 1: Write the failing test** — `setSort({path:"n",desc:true})` (a) sends `sort` in the next `QueryRows` payload, (b) supersedes + resets like `setSearch` (total → -1, cache cleared, resetToken bumped). Mutation: skip the `total=-1` reset in the sort path → a stale count survives. Also: `getCell`/the edit overlay still key on `row.index` after a sort (identity unchanged — assert an edit set before a sort is still addressable by the same index).
+- [ ] **Step 1: Write the failing test** — `setSort({path:"n",desc:true})`: (a) sends `sort` in the next `QueryRows` payload; (b) clears the page cache and bumps `resetToken` (scroll-to-top), mirroring `setSearch`'s `requery({})`. **A pure sort does NOT reset `total` to -1 or recount** — `requery` only sets `total=-1`+recount when a filter/search is active (`anyActive`), and a sort changes neither (plan-review #20/#22: the original `total=-1` mutation was vacuous). Mutation A: **skip `cache.clear()` in the sort path** → a stale pre-sort page is served for row 0 (assert the served rows change after a sort). Also assert **identity is preserved**: an edit set (via `setEdit`) before a sort is still addressable by the same `row.index` after (getCell/overlay unchanged).
 
-- [ ] **Step 2–5:** run FAIL → implement `currentSort` + `setSort` (mirror `setSearch` exactly, including the `onDestroy`-safe supersede) + payload threading + `types.ts` re-export → run PASS → prove the reset mutation. 
+- [ ] **Step 2–5:** run FAIL → implement `currentSort: SortSpec` (module var next to `currentSearch`) + `setSort(spec)` = set `currentSort` + `requery({ sort: spec })` (so `$explorer.sort` updates for the indicator) + thread `currentSort` into the `QueryRows` payload + the `ExplorerState.sort` field + the `types.ts` re-export → run PASS → prove Mutation A (skip `cache.clear`). 
 
 - [ ] **Step 6: check + commit** `feat(gui): store.setSort threads sort through the query like search`.
 
@@ -522,7 +604,11 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 - Consumes: `SortSpec`; the existing codegen path encoders (E5).
 - Produces: the Code panel reflects the active sort in both jq and SQL.
 
-- [ ] **Steps:** TDD each: SQL gains `ORDER BY` under a sort and omits it without one (mutation: always emit → an unsorted query shows a spurious ORDER BY); jq gains `sort_by`/`reverse` (real-jq equivalence: the jq output order equals the engine's sorted order on a fixture where they agree). Thread `Sort` through `CodegenRequest` + the store's `refreshCodegen` (so a `setSort` refreshes the panel). Commit `feat(query): codegen reflects the active sort (ORDER BY / sort_by)`.
+- [ ] **Steps:** TDD each.
+  - **SQL**: append `ORDER BY <col> [DESC]` under a sort, omit it without one (mutation: always emit → an unsorted query shows a spurious ORDER BY).
+  - **jq (plan-review #15 — the streaming form ERRORS)**: `sort_by` needs an ARRAY, but the generated jq is a per-record streaming pipeline (`.[] | select(...) | {proj}`), so appending `| sort_by(.path)` runs `sort_by` against a single object and jq dies at runtime. Emit the **aggregating** form: wrap the record stream in `[ ... ]`, then `| sort_by(.<path>)`, then `| reverse` for descending, then `| .[]` to re-stream. Verify the emitted program actually RUNS under real jq 1.7.1 (not just "parses").
+  - **Divergence disclosure (plan-review #19/#21)**: jq's `sort_by`/`reverse` does NOT match `compareValues` on (a) descending ties (`reverse` flips equal-key order), (b) missing-vs-null (a missing key sorts as null in jq), (c) big-integer precision. Emit a sort-specific caveat alongside the existing `warnCaseInsensitive`/type-guard notes, and DROP the spec's false "sort adds no new class of divergence" line (correct spec §7 too). Restrict the real-jq equivalence test to a fixture where the tiers provably agree: single-type, all-distinct keys, no missing/null in the sort column, ascending (or descending without ties).
+  - Thread `Sort` through `CodegenRequest`/`Context` + the store's `refreshCodegen` (so a `setSort` refreshes the panel). Commit `feat(query): codegen reflects the active sort (ORDER BY / sort_by)`.
 
 ---
 
@@ -531,7 +617,7 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 **Files:**
 - Create: `internal/query/sort_parity_test.go`
 
-- [ ] **Step 1: Write the parity sweep** — ONE shuffled fixture, opened on all four tiers (memory, rescan via BudgetMB=1, SQLite, Parquet), asserting the sorted window `[offset,limit)` (both asc and desc, on a numeric AND a string column) is byte-identical (same `Row.Index` sequence) across all four. This is the single strongest E9 guarantee. Mutation: any one backend's comparator/ordinal handling diverging fails here.
+- [ ] **Step 1: Write the parity sweep** — ONE shuffled fixture (`manyNumberedRecords`, which carries a shuffled int `n`, a **float `f`**, and add a string `s` column), opened on all four tiers (memory, rescan via BudgetMB=1, SQLite, Parquet — choosing column types so values round-trip identically: int→INTEGER/INT64→json.Number, float→REAL/DOUBLE→**float64**, string→TEXT). Assert the sorted window `[offset,limit)` (both asc and desc) is byte-identical (same `Row.Index` sequence) across all four, **on the int column, the float column (exercises the float64 comparator path — plan-review Critical #1 — where mem holds json.Number but Parquet/SQLite hold float64), and the string column**. This is the single strongest E9 guarantee. Mutation: any one backend's comparator/ordinal handling diverging fails here; in particular the float column fails if `float64` was omitted from the comparator.
 
 - [ ] **Step 2: Run — PASS** (all prior tasks make it green; if not, the diverging tier is a real bug to fix before proceeding).
 
@@ -553,7 +639,7 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 
 **Spec coverage:** comparator/CompiledSort (T1); SortSpec threading + Row.Index invariant (T2, asserted in T3/T4/T6 mutations); mem (T3); rescan keys-only index (T4); sql pushdown+fallback (T5); parquet keys+seek (T6); store setSort seam + identity preservation (T7); header ▲/▼ + no-focus (T8); codegen ORDER BY/sort_by (T9); cross-tier parity (T10, the top obligation); docs incl. gutter/go-to-row/export-order (T11). Export-source-order (non-goal) is respected by never threading sort into the export path. ✓
 
-**Placeholder scan:** every task has concrete code or an exact file:line pattern to mirror; the one open name (`resolveValue`) is flagged in T1 with an instruction to confirm against transform.go before implementing. No TODO/TBD. ✓
+**Placeholder scan:** every task has concrete code or an exact file:line pattern to mirror. Post-review hardening: `resolveValue` is now DEFINED in T1 (a 3-line adapter over the real `resolve()[]any`), not assumed; `valueKindRank` renamed off the `kindRank` collision; `float64` folded into the numeric comparator; `LessKeys` added for the keys-only tiers; `manyNumberedRecords`/`openMemFixtureForSort` defined; window slices clamped; SQL pushed-sort gated on dense rowids (stamps `rowid-1`, never the rank); jq codegen aggregates (`[…]|sort_by|reverse?|.[]`) with a divergence caveat. No TODO/TBD. ✓
 
 **Type consistency:** `SortSpec{Path,Desc}` / `CompiledSort` / `compareValues` / `CompiledSort.Less(rec,ord,rec,ord)` used identically T1→T2→T3→T4→T5→T6; `CompiledPlan.Sort *CompiledSort` (T2) read by every backend; `explorer.setSort(SortSpec)` (T7) consumed by the header (T8); `Row.Index == absolute ordinal` asserted by a mutation in T3/T4/T6 and end-to-end in T7. ✓
 

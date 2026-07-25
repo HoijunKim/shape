@@ -39,7 +39,7 @@ type SortSpec struct {
 
 ### The comparator (the parity heart — the largest correctness surface)
 
-A single `compareValues(a, b any) int` defining a **total order** over the profiler's scalar value set (`nil`, `bool`, `json.Number`, `string`, plus the `Missing` sentinel), used by every Go-side sort so all tiers agree. Rules:
+A single `compareValues(a, b any) int` defining a **total order** over the profiler's scalar value set (`nil`, `bool`, `json.Number`, **`float64`**, `string`, plus the `Missing` sentinel), used by every Go-side sort so all tiers agree. **`float64` is not optional**: `readers.ToProfileValue` passes it through and Parquet DOUBLE / SQLite REAL columns are stored as `float64`, while the memory tier holds the same number as `json.Number` — so cross-tier parity REQUIRES treating `json.Number` and `float64` as one numeric kind, compared by exact value (both normalized to `big.Rat`). Rules:
 
 1. **Kind order** (for mixed-type columns): `Missing` < `null` < `bool` < `number` < `string`. (A fixed, documented order; the column is usually single-type, but mixed columns must still be total and deterministic.)
 2. **Numbers**: compare `json.Number` by **exact numeric value**, never via `float64` (columns.go:216-222 flags the precision loss). Parse each to a sign + integer/fraction decomposition (or `big.Rat`) and compare exactly, so a 64-bit id and a high-precision decimal order correctly.
@@ -69,7 +69,7 @@ This comparator is unit-tested exhaustively against golden orderings AND asserte
 
 ### Codegen (E5)
 
-The Code panel reflects the sort so the copied query still means the same thing: SQL gains `ORDER BY <col> [DESC]` (with the same identifier quoting E5 uses), jq gains `| sort_by(.<path>)` (and `| reverse` for descending). Single column. The generated caveats already disclose collation/precision divergences; sort adds no new class of divergence beyond what the filter codegen already discloses.
+The Code panel reflects the sort so the copied query still means the same thing: SQL gains `ORDER BY <col> [DESC]` (with the same identifier quoting E5 uses). jq needs the **aggregating** form — `sort_by` requires an array, so the per-record streaming pipeline is wrapped `[ … ] | sort_by(.<path>) | reverse? | .[]` (appending `| sort_by` to the record stream errors at runtime). Single column. Sort DOES introduce new disclosed divergences (a sort-specific caveat is emitted, like the existing case-insensitive/type-guard notes): jq's `sort_by`/`reverse` orders **descending ties** and **missing-vs-null** differently from `compareValues`, and loses **big-integer** precision. The real-jq equivalence test is restricted to a fixture where the tiers provably agree (single-type, all-distinct, present keys).
 
 ## Edge cases & error handling
 
