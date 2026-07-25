@@ -297,15 +297,40 @@
     return out;
   })();
 
-  // A header click is a focus, not a sort (there is no sorting in E2). The
-  // click already scrolled the user to this column, so suppress the
-  // "scroll the focused column into view" reactive block below for the
-  // resulting prop echo -- only an externally-driven focus change (e.g. a
-  // future sidebar selection) should force a scroll.
+  // A header body click is a focus (scroll-to-column). The click already
+  // scrolled the user to this column, so suppress the "scroll the focused
+  // column into view" reactive block below for the resulting prop echo -- only
+  // an externally-driven focus change (e.g. a sidebar selection) should force a
+  // scroll. E9: a click on the sort caret cycles the sort instead (delegated by
+  // target, the TreeNode pattern), so the two affordances never collide.
   let suppressNextScroll = false;
-  function onHeaderClick(path: string): void {
+  function onHeaderClick(e: MouseEvent, path: string): void {
+    if ((e.target as HTMLElement).closest(".sort-caret")) {
+      cycleSort(path);
+      return;
+    }
     suppressNextScroll = true;
     dispatch("focus", { path });
+  }
+
+  // E9: cycle a column's sort none -> asc -> desc -> none (a different column
+  // starts at asc). Reads the active sort off the store.
+  function cycleSort(path: string): void {
+    const s = $explorer.sort;
+    if (!s || s.path !== path) {
+      explorer.setSort({ path, desc: false } as any);
+    } else if (!s.desc) {
+      explorer.setSort({ path, desc: true } as any);
+    } else {
+      explorer.setSort({ path: "", desc: false } as any);
+    }
+  }
+
+  // The ▲/▼ indicator glyph for a column, or "" when it is not the sort column.
+  function sortGlyph(path: string): string {
+    const s = $explorer.sort;
+    if (!s || s.path !== path) return "";
+    return s.desc ? "▼" : "▲";
   }
 
   function scrollToColumn(path: string): void {
@@ -485,11 +510,20 @@
           type="button"
           class="header-cell"
           class:focused={col.path === focusPath}
+          class:sorted={$explorer.sort?.path === col.path}
           style="left:{GUTTER_W + prefix[c]}px; width:{widths[c]}px; height:{HEADER_H}px;"
           title={col.path}
-          on:click={() => onHeaderClick(col.path)}
+          on:click={(e) => onHeaderClick(e, col.path)}
         >
-          {col.name}
+          <span class="header-name">{col.name}</span>
+          <span
+            class="sort-caret"
+            class:active={$explorer.sort?.path === col.path}
+            role="button"
+            tabindex="-1"
+            aria-label="Sort by {col.name}"
+            title="Sort by {col.name}"
+          >{sortGlyph(col.path) || "↕"}</span>
         </button>
       {/each}
     </div>
@@ -666,6 +700,37 @@
   .header-cell.focused {
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+  }
+
+  .header-cell.sorted {
+    color: var(--accent);
+  }
+
+  .header-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* E9: the sort caret is quiet (a faint ↕) until the header is hovered or the
+     column is the active sort, when it lights up as ▲/▼. */
+  .sort-caret {
+    flex: 0 0 auto;
+    margin-left: var(--space-1);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--text-muted);
+    opacity: 0;
+  }
+
+  .header-cell:hover .sort-caret,
+  .sort-caret.active {
+    opacity: 1;
+  }
+
+  .sort-caret.active {
+    color: var(--accent);
   }
 
   .rows {
