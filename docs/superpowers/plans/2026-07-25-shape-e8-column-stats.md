@@ -285,32 +285,31 @@ git commit -m "feat(gui): App.ColumnStats binding for the sidebar stats view"
 
 - [ ] **Step 1: Add the type re-export**
 
-In `types.ts`, add the `visual` value import is not needed — add alongside the existing `query` re-exports:
+In `types.ts`, add a **type-only** import for the `visual` namespace (it is used only in a type position, so a value `import { visual }` fails `svelte-check` with TS1371 — `importsNotUsedAsValues: "error"` is set by the base `@tsconfig/svelte` config; `FieldDetail.svelte:2` already uses `import type { visual }` for the identical usage):
 ```ts
-import { visual } from "../../../wailsjs/go/models"; // value import for the type below
+import type { visual } from "../../../wailsjs/go/models";
 export type FieldCard = visual.FieldCard;
 ```
-(If `types.ts` only imports `query`, add the `visual` import line; keep it a normal import so the namespace type resolves.)
+(Do NOT use a plain `import { visual }` here — unlike the existing `import { query }`, which is a value import only because `types.ts` uses `query.CellKind` at runtime; `visual` has no runtime use.)
 
 - [ ] **Step 2: Write the failing test**
 
-In `store.test.ts`, add `ColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true }))` to the App mock factory (and reset it in `beforeEach` like the others). Then:
+In `store.test.ts`, add `ColumnStats` to the static App import at the top of the file (line 4, next to `GetCell`/`SaveEdits`), add `ColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true }))` to the App mock factory, and reset it in `beforeEach` like the others (`vi.mocked(ColumnStats).mockReset()...`). Place the test in the same `describe` block as the E6 `getCell` forward test (it uses that block's `openMemory()` helper, which sets `OpenSource` → handle `"h-search"`; a bare `explorer.open()` would otherwise leave `handle=""` because `beforeEach` resets `OpenSource`, and `getColumnStats` would throw `"no source open"`). Mirror the `getCell` forward test (store.test.ts:~994) exactly, INCLUDING the handle assertion:
 
 ```ts
-it("getColumnStats forwards the open handle + path and surfaces {card, found}", async () => {
-  await explorer.open("/data.ndjson");
-  const { ColumnStats } = await import("../../../wailsjs/go/main/App");
+it("getColumnStats forwards handle+path and returns the binding result", async () => {
+  await openMemory();
   vi.mocked(ColumnStats).mockResolvedValueOnce({ card: { path: "user.age" }, found: true } as any);
 
   const out = await explorer.getColumnStats("user.age");
 
-  expect(vi.mocked(ColumnStats).mock.calls.at(-1)![0]).toMatchObject({ path: "user.age" });
-  // Mutation: return a constant instead of the binding result -> found/card wrong.
+  // Assert the HANDLE too (a dropped/hardcoded handle must fail this) — the
+  // getCell sibling asserts handle+index+path the same way.
+  expect(vi.mocked(ColumnStats).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", path: "user.age" });
+  // Mutation (Step 6): return a constant instead of the binding result -> this fails.
   expect(out).toEqual({ card: { path: "user.age" }, found: true });
 });
 ```
-
-(Match the mock/open harness already used by the E6 `getCell` test in this file.)
 
 - [ ] **Step 3: Run the test to verify it fails**
 
@@ -406,26 +405,18 @@ describe("FieldStatsPanel (E8)", () => {
     expect(t.querySelector(".card-stub")?.getAttribute("data-path")).toBe("n");
   });
 
-  it("shows a not-found message when the path is not a source field", async () => {
+  it("shows a not-found message when the path is not a source field, and does NOT render the card", async () => {
     h.getColumnStats.mockResolvedValue({ card: { path: "" }, found: false });
     const t = mount("proj");
     await flush(); await tick();
     expect(t.querySelector(".stats-empty")).toBeTruthy();
-    expect(t.querySelector(".card-stub")).toBeNull();
-  });
-
-  it("ignores a response that resolves after the component is destroyed", async () => {
-    let resolve!: (v: any) => void;
-    h.getColumnStats.mockReturnValue(new Promise((r) => (resolve = r)));
-    const t = mount("n");
-    cmp.$destroy(); cmp = null;
-    // Mutation: drop the `alive` guard -> this setState-after-destroy throws.
-    resolve({ card: { path: "n" }, found: true });
-    await flush();
+    // Mutation (Step 5): render the card ignoring `found` -> a .card-stub appears here.
     expect(t.querySelector(".card-stub")).toBeNull();
   });
 });
 ```
+
+> **Design note (folded in from the plan review):** an earlier draft carried a `curPath`/`alive` concurrency guard and a "ignores a response after destroy" test. The review proved both are inert here: TreeNode mounts one panel per field with a FIXED `path` and destroys it on collapse, so `path` never changes while mounted (no cross-column race like E6's single shared overlay), and a response that lands after `$destroy()` is already a silent no-op in Svelte 3 (the destroyed component's fragment is null — no DOM patch, no throw, no warning). The guard therefore protected nothing and its test was vacuous (it passed with the guard removed). The panel below fetches once in `onMount` — no guard.
 
 Also create the stub `gui/frontend/src/lib/explorer/__fixtures__/CardStub.svelte`:
 ```svelte
@@ -444,10 +435,11 @@ Expected: FAIL — component file does not exist.
 <script lang="ts">
   // E8: the inline stats panel for one sidebar field. Owns its own fetch +
   // loading/error/not-found state (TreeNode only decides WHETHER to mount it).
-  // A per-panel `alive` flag + a `curPath` guard mean a slow response that
-  // arrives after the panel is collapsed (destroyed) or after `path` changed
-  // is ignored -- the cellReq pattern, scoped to this panel.
-  import { onDestroy } from "svelte";
+  // TreeNode mounts one panel per field with a FIXED `path` and destroys it on
+  // collapse, so `path` never changes while mounted -- there is no cross-column
+  // race to guard (unlike E6's single shared overlay), and a response that lands
+  // after $destroy() is a silent no-op in Svelte 3. So: fetch once on mount.
+  import { onMount } from "svelte";
   import { explorer } from "./store";
   import FieldDetail from "../FieldDetail.svelte";
   import type { FieldCard } from "./types";
@@ -458,31 +450,18 @@ Expected: FAIL — component file does not exist.
   let error = "";
   let found = true;
   let card: FieldCard | null = null;
-  let alive = true;
-  let curPath = "";
 
-  onDestroy(() => { alive = false; });
-
-  $: void load(path);
-
-  async function load(p: string): Promise<void> {
-    if (p === curPath) return;
-    curPath = p;
-    loading = true;
-    error = "";
-    card = null;
+  onMount(async () => {
     try {
-      const res = await explorer.getColumnStats(p);
-      if (!alive || p !== curPath) return;
+      const res = await explorer.getColumnStats(path);
       card = res.card;
       found = res.found;
       loading = false;
     } catch (e) {
-      if (!alive || p !== curPath) return;
       error = String(e);
       loading = false;
     }
-  }
+  });
 </script>
 
 <div class="field-stats" role="region" aria-label="Statistics for {path}">
@@ -518,7 +497,7 @@ Expected: PASS (3 tests).
 
 - [ ] **Step 5: Prove the mutation**
 
-Remove the `if (!alive || p !== curPath) return;` line in the `try` block. Run Step 4 — expect the destroy-guard test to fail (a `.card-stub` appears / a Svelte set-after-destroy warning). Restore.
+In the template, change the not-found guard `{:else if !found || !card}` to `{:else if !card}` (render the card even when `found` is false). Run Step 4 — expect the not-found test to FAIL (a `.card-stub` renders where `.stats-empty` was expected). Restore.
 
 - [ ] **Step 6: Theme audit of the revived components**
 
@@ -549,27 +528,35 @@ git commit -m "feat(gui): FieldStatsPanel fetches and renders a field's stats ca
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `StructureMap.test.ts` (reuse its existing mount harness + field fixtures; it already renders real `TreeNode`s). Mock `./store`'s `getColumnStats` so the panel resolves:
+Two mocks must be added at the TOP of `StructureMap.test.ts` (it has none today, and mounts the real `StructureMap→TreeNode→FieldStatsPanel` chain):
+1. `vi.mock("./store", () => ({ explorer: { getColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true })) } }));` — the panel's only store dependency. (Neither `StructureMap.svelte` nor `TreeNode.svelte` imports `./store`, so this stubs only the panel.)
+2. `vi.mock("../FieldDetail.svelte", async () => ({ default: (await import("./__fixtures__/CardStub.svelte")).default }));` — **required**: without it the real `FieldDetail` renders the minimal `{ path: "n" }` card and `FieldDetail.svelte:69` (`card.observations.toLocaleString()`) throws a `TypeError` (unhandled rejection → the run fails and can poison sibling test files). Task 4's `CardStub` (`data-path={card.path}`) is reused.
+
+Mount `StructureMap` with a profiled field `"n"` (this file's `f()` helper attaches a `FieldDTO`, e.g. `f("n", { types: [{ kind: "int", share: 1 }] })`) and include `"n"` in `columnPaths` so the row is not dimmed. Then:
 
 ```ts
-it("toggling a field's stats affordance mounts the inline stats panel for that path", async () => {
-  // (mount StructureMap with a field "n" that carries a FieldDTO, per this
-  // file's existing fixture helpers; ensure the ./store mock exposes
-  // getColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true })).)
+it("toggling a field's stats affordance mounts the inline stats panel and fetches that path", async () => {
+  const store = await import("./store");
   const row = target.querySelector('.row[data-path="n"]') as HTMLElement;
   const toggle = row.querySelector(".stats-toggle") as HTMLButtonElement;
   expect(toggle, "a profiled field row shows a stats toggle").toBeTruthy();
 
+  // Gate mutation ({#if node.field} without statsExpanded): a panel appears here,
+  // before any click.
+  expect(target.querySelector(".field-stats"), "no panel before the toggle").toBeNull();
+
   toggle.click();
   await tick();
+  await Promise.resolve(); // let the panel's onMount fetch settle
+  await tick();
 
-  // Mutation: the toggle click also bubbles to focus / does not gate the panel
-  // on statsExpanded -> either no panel appears, or a focus event fires.
-  expect(target.querySelector(".field-stats")).toBeTruthy();
+  expect(target.querySelector(".field-stats"), "panel mounts on toggle").toBeTruthy();
+  // Path-forwarding mutation (path={node.path} -> a wrong literal): the panel
+  // must fetch THIS row's path, and the stub must render that path.
+  expect(vi.mocked(store.explorer.getColumnStats).mock.calls.at(-1)![0]).toBe("n");
+  expect(target.querySelector(".field-stats .card-stub")?.getAttribute("data-path")).toBe("n");
 });
 ```
-
-(If `StructureMap.test.ts` does not already mock `./store`, add a minimal `vi.mock("./store", …)` exposing `getColumnStats`; otherwise extend the existing factory. Follow the store-mock shape the other explorer component tests in this repo use.)
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -647,9 +634,11 @@ Add CSS mirroring `.seed` (quiet-until-hover), plus an `.active` state:
 Run: `cd gui/frontend && npx vitest run src/lib/explorer/StructureMap.test.ts -t "stats"`
 Expected: PASS.
 
-- [ ] **Step 5: Prove the mutation**
+- [ ] **Step 5: Prove the mutations (two)**
 
-In the panel render guard, drop `statsExpanded`: `{#if node.field}` (always render). Run the full `StructureMap.test.ts` — a pre-existing test that asserts no `.field-stats` before interaction (or the new test's pre-click state) should fail; if none exists, add one assertion to the new test that `.field-stats` is null BEFORE the click, then this mutation fails it. Restore.
+Mutation A (gate) — change the panel render guard from `{#if node.field && statsExpanded}` to `{#if node.field}` (always render). Run the test — the pre-click `expect(...".field-stats").toBeNull()` fails. Restore.
+
+Mutation B (path forwarding) — change `<FieldStatsPanel path={node.path} />` to `path="__wrong__"`. Run the test — the `getColumnStats` call-arg assertion (`toBe("n")`) and the stub `data-path` assertion fail. Restore.
 
 - [ ] **Step 6: full suite + check + commit**
 
