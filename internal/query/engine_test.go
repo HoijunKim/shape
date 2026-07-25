@@ -1579,3 +1579,39 @@ func TestEngine_GetCell_UnknownHandleErrors(t *testing.T) {
 		t.Fatalf("GetCell(unknown handle) err = nil, want error")
 	}
 }
+
+// openMemFixtureForSort opens a tiny NDJSON with a numeric column "n" whose
+// values (3,1,2) are NOT in sorted order, on the memory tier. Shared by the
+// E9 sort tests.
+func openMemFixtureForSort(t *testing.T) (*Engine, string) {
+	t.Helper()
+	path := writeNDJSONFile(t, []map[string]any{{"n": 3}, {"n": 1}, {"n": 2}})
+	eng := NewEngine()
+	res, err := eng.OpenSource(context.Background(), OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+	t.Cleanup(func() { _ = eng.CloseSource(res.Handle) })
+	return eng, res.Handle
+}
+
+func TestQueryRows_SortPlumbingIsInert_UntilBackendsRead(t *testing.T) {
+	eng, handle := openMemFixtureForSort(t)
+	plain, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sorted, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Limit: 100, Sort: SortSpec{Path: "n", Desc: true}})
+	if err != nil {
+		t.Fatalf("a sorted QueryRequest must compile + run: %v", err)
+	}
+	// This task does NOT wire the backend, so order is unchanged. (Task 3 makes
+	// memBackend actually sort; that task's test asserts the reorder.)
+	if len(sorted.Rows) != len(plain.Rows) {
+		t.Fatalf("plumbing changed the row COUNT: %d vs %d", len(sorted.Rows), len(plain.Rows))
+	}
+	// A malformed sort path must surface as an error, not a silent no-sort.
+	if _, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Limit: 100, Sort: SortSpec{Path: "does.not[.parse"}}); err == nil {
+		t.Fatalf("a malformed sort path must error")
+	}
+}

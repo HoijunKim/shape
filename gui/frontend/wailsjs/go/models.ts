@@ -662,6 +662,20 @@ export namespace query {
 		}
 	}
 	
+	export class SortSpec {
+	    path: string;
+	    desc: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SortSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.desc = source["desc"];
+	    }
+	}
 	export class QueryRequest {
 	    requestId?: string;
 	    handle: string;
@@ -671,6 +685,7 @@ export namespace query {
 	    offset: number;
 	    limit: number;
 	    wantTotal: boolean;
+	    sort: SortSpec;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryRequest(source);
@@ -686,6 +701,7 @@ export namespace query {
 	        this.offset = source["offset"];
 	        this.limit = source["limit"];
 	        this.wantTotal = source["wantTotal"];
+	        this.sort = this.convertValues(source["sort"], SortSpec);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -848,6 +864,7 @@ export namespace query {
 	        this.warnings = source["warnings"];
 	    }
 	}
+	
 	
 	
 	
