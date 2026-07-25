@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/hoijun-kim/shape/internal/pipeline"
@@ -49,6 +51,13 @@ type rescanBackend struct {
 	avgBytes    float64 // average decoded-record bytes sampled during the ingest pass (0 if unknown)
 	fileSize    int64   // on-disk file size in bytes (0 if unknown)
 	rowEstimate int64   // fileSize/avgBytes, precomputed once (spec §4's unfiltered-total formula)
+
+	// E9: a keys-only sorted-ordinal index, cached per (filterKey, sort). Holds
+	// only sort keys + int64 ordinals (never the records), so it stays bounded
+	// even on a file whose records did not fit the memory budget. Single-entry.
+	sortMu   sync.Mutex
+	sortKey  string
+	sortPerm []int64
 }
 
 // newRescanBackend builds a rescanBackend for an already-detected path/format,
@@ -199,6 +208,101 @@ func isMatchAllFilter(cf *CompiledFilter) bool {
 // count (a real filter, which happens to equal the exact total when the scan
 // reaches true EOF, but is reported as an inexact lower bound regardless --
 // the caller wanting a guaranteed-exact filtered count uses Count).
+// sortedOrdinals builds (and caches per filter+sort) the absolute ordinals of
+// matching records sorted by p.Sort, holding only (key, ordinal) pairs -- never
+// the records -- so it stays bounded on files too large for the memory tier.
+func (r *rescanBackend) sortedOrdinals(ctx context.Context, p *CompiledPlan) ([]int64, error) {
+	key := p.filterKey + "\x00" + p.Sort.cacheKey()
+	r.sortMu.Lock()
+	if r.sortKey == key && r.sortPerm != nil {
+		perm := r.sortPerm
+		r.sortMu.Unlock()
+		return perm, nil
+	}
+	r.sortMu.Unlock()
+
+	type kv struct {
+		key any
+		ord int64
+	}
+	var pairs []kv
+	err := r.scan(ctx, func(idx int64, rec any) (bool, error) {
+		if p.Filter.Match(rec) {
+			pairs = append(pairs, kv{resolveValue(rec, p.Sort.segs), idx})
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(pairs, func(a, b int) bool {
+		return p.Sort.LessKeys(pairs[a].key, pairs[a].ord, pairs[b].key, pairs[b].ord)
+	})
+	perm := make([]int64, len(pairs))
+	for i := range pairs {
+		perm[i] = pairs[i].ord
+	}
+	r.sortMu.Lock()
+	r.sortKey = key
+	r.sortPerm = perm
+	r.sortMu.Unlock()
+	return perm, nil
+}
+
+// querySorted serves a sorted window: consult the keys-only ordinal index, then
+// one forward pass fetching the window's records (rescan has no seek). Row.Index
+// STAYS the absolute ordinal.
+func (r *rescanBackend) querySorted(ctx context.Context, p *CompiledPlan, offset int64, limit int, w Window, start time.Time) (RowSet, error) {
+	perm, err := r.sortedOrdinals(ctx, p)
+	if err != nil {
+		return RowSet{}, err
+	}
+	lo := offset
+	if lo > int64(len(perm)) {
+		lo = int64(len(perm))
+	}
+	hi := offset + int64(limit)
+	if hi > int64(len(perm)) {
+		hi = int64(len(perm))
+	}
+	window := perm[lo:hi]
+
+	need := make(map[int64]bool, len(window))
+	for _, ord := range window {
+		need[ord] = true
+	}
+	got := make(map[int64]any, len(window))
+	found := 0
+	err = r.scan(ctx, func(idx int64, rec any) (bool, error) {
+		if need[idx] {
+			got[idx] = rec
+			found++
+			if found == len(need) {
+				return true, nil // all window records fetched
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return RowSet{}, err
+	}
+
+	rows := make([]Row, 0, len(window))
+	for _, ord := range window {
+		rows = append(rows, p.Transform.Project(got[ord], ord))
+	}
+	return RowSet{
+		Columns:    p.Transform.Columns(),
+		Rows:       rows,
+		Offset:     w.Offset,
+		Scanned:    int64(len(perm)),
+		Truncated:  hi < int64(len(perm)),
+		ElapsedMs:  time.Since(start).Milliseconds(),
+		Total:      int64(len(perm)),
+		TotalExact: true,
+	}, nil
+}
+
 func (r *rescanBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantTotal bool) (RowSet, error) {
 	start := time.Now()
 	if err := ctx.Err(); err != nil {
@@ -217,6 +321,10 @@ func (r *rescanBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wa
 		offset = 0
 	}
 	unfiltered := isMatchAllFilter(p.Filter)
+
+	if p.Sort != nil {
+		return r.querySorted(ctx, p, offset, limit, w, start)
+	}
 
 	rows := make([]Row, 0, limit)
 	var scanned int64

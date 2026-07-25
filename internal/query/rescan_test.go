@@ -4,12 +4,51 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/hoijun-kim/shape/internal/readers"
 )
+
+// manyNumberedRecords returns records with a numeric "n" (shuffled, so sorted
+// order != source order) and a float "f", for the E9 sort parity + Row.Index
+// tests. Deterministic (fixed seed). Shared by rescan + the T10 parity sweep.
+func manyNumberedRecords(nrec int) []map[string]any {
+	recs := make([]map[string]any, nrec)
+	r := rand.New(rand.NewSource(1))
+	perm := r.Perm(nrec)
+	for i := 0; i < nrec; i++ {
+		recs[i] = map[string]any{"n": perm[i], "f": float64(perm[i]) + 0.5}
+	}
+	return recs
+}
+
+func TestRescanBackend_SortMatchesMemoryTier(t *testing.T) {
+	maps := manyNumberedRecords(20000)               // > 1 MiB decoded -> BudgetMB=1 forces the rescan tier
+	engMem, hMem, _ := openExportFixture(t, maps, 0) // memory tier
+	engRe, hRe, _ := openExportFixture(t, maps, 1)   // rescan tier (fixture fails if not "rescan")
+	req := func(h string) QueryRequest {
+		return QueryRequest{Handle: h, Offset: 50, Limit: 30, Sort: SortSpec{Path: "n", Desc: true}}
+	}
+	rsMem, err := engMem.QueryRows(context.Background(), req(hMem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsRe, err := engRe.QueryRows(context.Background(), req(hRe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rsMem.Rows) != len(rsRe.Rows) || len(rsMem.Rows) == 0 {
+		t.Fatalf("window sizes: mem %d vs rescan %d (want equal, non-zero)", len(rsMem.Rows), len(rsRe.Rows))
+	}
+	for i := range rsMem.Rows {
+		if rsMem.Rows[i].Index != rsRe.Rows[i].Index {
+			t.Fatalf("row %d: mem Index %d != rescan Index %d (sorted windows must be byte-identical across tiers)", i, rsMem.Rows[i].Index, rsRe.Rows[i].Index)
+		}
+	}
+}
 
 // --- fixtures ----------------------------------------------------------------
 
