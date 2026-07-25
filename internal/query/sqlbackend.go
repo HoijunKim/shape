@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -573,6 +574,10 @@ func (s *sqlBackend) Query(ctx context.Context, p *CompiledPlan, w Window, wantT
 		offset = 0
 	}
 
+	if p.Sort != nil {
+		return s.querySorted(ctx, p, offset, limit, w, start)
+	}
+
 	if isMatchAllFilter(p.Filter) {
 		return s.queryUnfiltered(ctx, p, w, offset, limit, wantTotal, start)
 	}
@@ -629,6 +634,56 @@ func (s *sqlBackend) queryUnfiltered(ctx context.Context, p *CompiledPlan, w Win
 		rs.TotalExact = false
 	}
 	return rs, nil
+}
+
+// querySorted serves a sorted window with the shared Go comparator over the
+// _rowid_-ordered cursor scan (which yields idx == the absolute scan ordinal,
+// exactly what getCell/edit/stats key on). This is EXACT and cross-tier
+// identical, and it deliberately does NOT push ORDER BY to SQLite: a pushed
+// reorder would reproduce Row.Index only as rowid-1 on a dense-rowid table and
+// would silently stamp the sorted RANK otherwise (the E9 plan-review C2). The
+// SQL ORDER BY pushdown is a follow-up perf optimization, not correctness.
+// Row.Index STAYS the absolute ordinal (Project(rec, m.idx)).
+func (s *sqlBackend) querySorted(ctx context.Context, p *CompiledPlan, offset int64, limit int, w Window, start time.Time) (RowSet, error) {
+	type ir struct {
+		idx int64
+		rec any
+	}
+	var matches []ir
+	err := s.scan(ctx, func(idx int64, rec any) (bool, error) {
+		if p.Filter.Match(rec) {
+			matches = append(matches, ir{idx, rec})
+		}
+		return false, nil
+	})
+	if err != nil {
+		return RowSet{}, err
+	}
+	sort.SliceStable(matches, func(a, b int) bool {
+		return p.Sort.Less(matches[a].rec, matches[a].idx, matches[b].rec, matches[b].idx)
+	})
+	lo := offset
+	if lo > int64(len(matches)) {
+		lo = int64(len(matches))
+	}
+	hi := offset + int64(limit)
+	if hi > int64(len(matches)) {
+		hi = int64(len(matches))
+	}
+	rows := make([]Row, 0, hi-lo)
+	for _, m := range matches[lo:hi] {
+		rows = append(rows, p.Transform.Project(m.rec, m.idx))
+	}
+	return RowSet{
+		Columns:    p.Transform.Columns(),
+		Rows:       rows,
+		Offset:     w.Offset,
+		Scanned:    int64(len(matches)),
+		Truncated:  hi < int64(len(matches)),
+		ElapsedMs:  time.Since(start).Milliseconds(),
+		Total:      int64(len(matches)),
+		TotalExact: true,
+	}, nil
 }
 
 // queryFiltered is the non-empty-filter path (spec §4's critical subtlety):
