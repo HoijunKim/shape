@@ -1,7 +1,7 @@
 import { writable, get } from "svelte/store";
 import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
-import type { Column, CountResult, ExportResult, FieldCard, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, Transform } from "./types";
+import type { Column, CountResult, ExportResult, FieldCard, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, SortSpec, Transform } from "./types";
 
 // E7: one edited cell's value carried as kind + literal (a number keeps its
 // exact source text -- a JS number would round a >2^53 integer, so it is never
@@ -76,6 +76,9 @@ export interface ExplorerState {
   // reflect it and Explorer's empty state can say "no rows match your search"
   // distinct from "no rows in file". searchActive is `search !== ""`.
   search: string;
+  // E9: the active column sort (path "" = none). Exposed in state so the
+  // DataTable header can render the ▲/▼ direction indicator.
+  sort: SortSpec;
   resetToken: number;    // bumped on every filter change so DataTable (which owns
                           // scroll) knows to scroll back to row 0 -- the store cannot
                           // move the viewport itself
@@ -121,7 +124,7 @@ const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], baseColumns: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
-  pageError: "", filterActive: false, search: "", resetToken: 0,
+  pageError: "", filterActive: false, search: "", sort: { path: "", desc: false } as SortSpec, resetToken: 0,
   counting: false, matchCount: -1, matchExact: false,
   transformActive: false,
   exporting: false, exportRows: 0, exportError: "", exportResult: null,
@@ -147,6 +150,9 @@ function createExplorer() {
   // ANDs the two into one compiled predicate. A new file always starts
   // unsearched -- open()/close() reset this to "".
   let currentSearch = "";
+  // E9: the active column sort (path "" = none), threaded into QueryRows. Reset
+  // to none on open()/close(), like currentSearch.
+  let currentSort: SortSpec = { path: "", desc: false } as SortSpec;
   // E4: the projection currently applied to QueryRows, set via setTransform().
   let currentTransform: Transform = identityTransform();
   // E3 Task 5: the requestId of the CountMatches call currently in flight, or
@@ -203,6 +209,7 @@ function createExplorer() {
     inflight.clear();
     currentFilter = matchAllFilter(); // a new file always starts unfiltered
     currentSearch = ""; // ...and unsearched
+    currentSort = { path: "", desc: false } as SortSpec; // ...and unsorted
     currentTransform = identityTransform(); // ...and unprojected
     countReqId = null;
     countGen++;
@@ -295,6 +302,7 @@ function createExplorer() {
       try {
         const rs: RowSet = await QueryRows({
           requestId: reqId, handle: s.handle, filter: currentFilter, search: currentSearch, transform: currentTransform,
+          sort: currentSort,
           offset: page * pageRows, limit: pageRows, wantTotal: false,
         } as any);
         if (myGen !== gen || inflight.get(page) !== reqId) return; // superseded or stale file
@@ -390,6 +398,7 @@ function createExplorer() {
     cache.clear(); inflight.clear();
     currentFilter = matchAllFilter();
     currentSearch = "";
+    currentSort = { path: "", desc: false } as SortSpec;
     currentTransform = identityTransform();
     countReqId = null;
     countGen++;
@@ -500,6 +509,17 @@ function createExplorer() {
   function setSearch(q: string): void {
     currentSearch = q;
     requery({ search: q });
+  }
+
+  /** E9: applies a column sort (path "" = none). Same supersede/reset contract
+   *  as setFilter/setSearch (via requery), but a PURE sort does not recount --
+   *  requery's `anyActive` keys on filter/search only, so total stays baseTotal.
+   *  The overlay/getCell/stats are unaffected: Row.Index stays the absolute
+   *  ordinal, so an edit set before a sort is still addressable by the same
+   *  index. `sort` is threaded into every QueryRows payload. */
+  function setSort(spec: SortSpec): void {
+    currentSort = spec;
+    requery({ sort: spec });
   }
 
 
@@ -780,7 +800,7 @@ function createExplorer() {
 
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
-    setFilter, setSearch, cancelCount, setTransform, runExport, cancelExport, dismissExport,
+    setFilter, setSearch, setSort, cancelCount, setTransform, runExport, cancelExport, dismissExport,
     refreshCodegen, getCell, getColumnStats,
     setEdit, editFor, revertCell, revertAllEdits, editedIndices, saveEdits, dismissSave,
   };

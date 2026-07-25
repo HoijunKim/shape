@@ -31,6 +31,7 @@ export type SaveRequest = query.SaveRequest;
 export type SaveResult = query.SaveResult;
 export type CellEdit = query.CellEdit;
 export type ColumnStatsResult = query.ColumnStatsResult;
+export type SortSpec = query.SortSpec;
 export type FieldCard = visual.FieldCard;
 export type Generated = query.Generated;
 export type CodegenRequest = query.CodegenRequest;
