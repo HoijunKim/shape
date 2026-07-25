@@ -14,6 +14,10 @@ export function Codegen(arg1) {
   return window['go']['main']['App']['Codegen'](arg1);
 }
 
+export function ColumnStats(arg1) {
+  return window['go']['main']['App']['ColumnStats'](arg1);
+}
+
 export function CountMatches(arg1) {
   return window['go']['main']['App']['CountMatches'](arg1);
 }

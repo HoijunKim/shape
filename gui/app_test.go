@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -688,5 +691,32 @@ func TestAppGetCellForwardsTheRequest(t *testing.T) {
 	}
 	if spy.gotReq.Handle != req.Handle || spy.gotReq.Index != req.Index || spy.gotReq.Path != req.Path {
 		t.Fatalf("engine received %+v, want the request forwarded unchanged (%+v)", spy.gotReq, req)
+	}
+}
+
+func TestApp_ColumnStats_ForwardsAndReturnsACard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nums.ndjson")
+	var b strings.Builder
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "{\"n\": %d}\n", i)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &App{eng: query.NewEngine()}
+	open, err := a.OpenSource(query.OpenRequest{Path: path})
+	if err != nil {
+		t.Fatalf("OpenSource: %v", err)
+	}
+	t.Cleanup(func() { _ = a.CloseSource(open.Handle) })
+
+	res, err := a.ColumnStats(query.ColumnStatsRequest{Handle: open.Handle, Path: "n"})
+	if err != nil {
+		t.Fatalf("ColumnStats error = %v, want nil", err)
+	}
+	if !res.Found || res.Card.Path != "n" {
+		t.Fatalf("got Found=%v Card.Path=%q, want true and \"n\"", res.Found, res.Card.Path)
 	}
 }

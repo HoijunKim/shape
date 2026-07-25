@@ -8,10 +8,22 @@
 // This mounts the REAL StructureMap.svelte (which mounts real TreeNode.svelte
 // recursively), not a mock -- a regression in either area renders wrong DOM,
 // which these assertions catch directly.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { tick } from "svelte";
 import StructureMap from "./StructureMap.svelte";
 import type { FieldDTO } from "./types";
+
+// E8: TreeNode now mounts FieldStatsPanel (which imports ./store) when a field's
+// stats toggle is opened. Neither StructureMap nor TreeNode imports ./store
+// directly, so mocking it here only affects the panel. FieldDetail is stubbed
+// so the minimal card returned below cannot crash its real render (it reads
+// card.observations.toLocaleString()).
+vi.mock("./store", () => ({
+  explorer: { getColumnStats: vi.fn(() => Promise.resolve({ card: { path: "id" }, found: true })) },
+}));
+vi.mock("../FieldDetail.svelte", async () => ({
+  default: (await import("./__fixtures__/CardStub.svelte")).default,
+}));
 
 type Instance = {
   $set: (props: Record<string, unknown>) => void;
@@ -97,6 +109,36 @@ describe("StructureMap + TreeNode", () => {
     userRow!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await tick();
     expect(fired).toBe(false); // regression: a click on a non-column row must never focus it
+  });
+
+  it("toggling a field's stats affordance mounts the inline stats panel and fetches that path (E8)", async () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    cmp = new StructureMap({ target, props: { fields, focusPath: "", columnPaths } }) as unknown as Instance;
+    await tick();
+
+    const store = await import("./store");
+    const idRow = row(target, "id") as HTMLElement;
+    const toggle = idRow.querySelector(".stats-toggle") as HTMLButtonElement;
+    expect(toggle, "a profiled field row shows a stats toggle").toBeTruthy();
+
+    // Gate mutation ({#if node.field} without statsExpanded): a panel would
+    // appear here, before any click.
+    expect(target.querySelector(".field-stats"), "no panel before the toggle").toBeNull();
+
+    toggle.click();
+    // Panel mounts, its async onMount runs getColumnStats, then re-renders the
+    // card. Drain macrotasks + ticks so the fetch continuation lands.
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      await tick();
+    }
+
+    expect(target.querySelector(".field-stats"), "panel mounts on toggle").toBeTruthy();
+    // Path-forwarding mutation (path={node.path} -> a wrong literal): the panel
+    // must fetch THIS row's path, and the stub must render that path.
+    expect(vi.mocked(store.explorer.getColumnStats).mock.calls.at(-1)![0]).toBe("id");
+    expect(target.querySelector(".field-stats .card-stub")?.getAttribute("data-path")).toBe("id");
   });
 
   it("dims a node that HAS a FieldDTO but is absent from columnPaths, and it still renders a KindChip (proving the dimming cannot be explained by field === null)", async () => {

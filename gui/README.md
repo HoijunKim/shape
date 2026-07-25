@@ -141,6 +141,19 @@ the app's only view once a file is open:
   by the cell's absolute row index, so it is the same value regardless of which
   filter or search is active.)
 
+- **Column statistics (a field's stats toggle in the sidebar).** Each profiled
+  field row in the structure map carries a small chart affordance (distinct from
+  the tree caret, which expands sub-fields). Clicking it expands the field in
+  place to its full profile: a distribution histogram for numeric fields, a
+  top-values bar chart for low-cardinality/categorical fields, a type-mix bar, a
+  presence/null meter, quantiles (median/p95, min/max), the distinct count, and
+  any health flags. It is read-only and lazy — the rich card is fetched on first
+  expand from the profile the backend already retained from the open-time scan
+  (no rescan), reusing the same chart geometry the profiler dashboard computes.
+  It describes the SOURCE field, so under a column projection a renamed/derived
+  output column is not covered (its source path is), and a path with no profile
+  shows "No statistics for this column".
+
 - **Edit a cell + save a copy.** Double-click a scalar cell to edit its value in
   place. The editor validates as you go -- a number field rejects non-numeric
   text before it can be committed -- and a boolean toggles directly. A number
