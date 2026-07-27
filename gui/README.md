@@ -171,6 +171,13 @@ the app's only view once a file is open:
   read as `float64` from Parquet sorts identically to the same value read as a
   JSON number from NDJSON.
 
+- **Row detail (click the row number).** Clicking a row's gutter number opens
+  the WHOLE source record in the same collapsible tree overlay as the cell view
+  — the full, untruncated nested record (not the table's truncated preview
+  cells), fetched by the row's absolute index so it is the true record
+  regardless of the active projection, filter, search, or sort. Read-only, with
+  a Copy button for the exact JSON.
+
 - **Edit a cell + save a copy.** Double-click a scalar cell to edit its value in
   place. The editor validates as you go -- a number field rejects non-numeric
   text before it can be committed -- and a boolean toggles directly. A number
