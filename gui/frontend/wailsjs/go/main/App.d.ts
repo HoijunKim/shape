@@ -19,7 +19,11 @@ export function ExportQuery(arg1:query.ExportRequest):Promise<query.ExportResult
 
 export function GetCell(arg1:query.CellRequest):Promise<query.CellResult>;
 
+export function HelpSeen():Promise<boolean>;
+
 export function LoadViews():Promise<string>;
+
+export function MarkHelpSeen():Promise<void>;
 
 export function OpenFileDialog():Promise<string>;
 
