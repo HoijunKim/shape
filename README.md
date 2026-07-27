@@ -124,6 +124,11 @@ jq or SQL required.
   in place: a distribution histogram for numbers, a top-values chart for
   categorical fields, type mix, presence/null meters, quantiles and health flags
   — all from the single open-time profiling pass, fetched on demand, no rescan.
+- **Sort** — click a column header to sort by it (ascending → descending → off),
+  exact over the whole result on every tier — even a multi-gigabyte streaming
+  file, via a bounded keys-only index. Row numbers stay the true source ordinals
+  (so they read non-contiguously under a sort), which keeps editing and cell
+  lookups pointing at the right record.
 - **Reshape** — choose, reorder and rename the columns you want.
 - **Edit** — double-click a scalar cell to change its value in place. Edited
   cells are highlighted (and the row flagged in the gutter); an "Edited only"

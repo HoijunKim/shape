@@ -154,6 +154,23 @@ the app's only view once a file is open:
   output column is not covered (its source path is), and a path with no profile
   shows "No statistics for this column".
 
+- **Sort (click a column header).** Each header carries a small sort caret;
+  clicking it cycles the column none → ascending → descending → none, with a
+  ▲/▼ indicator on the active column (a header-body click still just scrolls the
+  column into view). The sort is **exact over the entire result on every storage
+  tier** — in-memory, SQLite, Parquet, and the >512 MiB streaming tier (which
+  sorts via a bounded keys-only ordinal index, never materialising the rows), so
+  it is never limited to the on-screen window. One column at a time.
+  *Honest edges:* the row-number gutter shows each row's TRUE source ordinal, so
+  under a sort the numbers are non-contiguous down the screen ("row 5, 900, 12")
+  — that is deliberate and is what keeps editing, cell-expand and column-stats
+  pointing at the right record (sort never renumbers rows). Go-to-row under a
+  sort scrolls to the Nth row *in sorted order*, not source row N. Exporting
+  still writes source order for now (the filter and search narrow an export;
+  sort does not reorder it). Numbers compare by exact value, so a float column
+  read as `float64` from Parquet sorts identically to the same value read as a
+  JSON number from NDJSON.
+
 - **Edit a cell + save a copy.** Double-click a scalar cell to edit its value in
   place. The editor validates as you go -- a number field rejects non-numeric
   text before it can be committed -- and a boolean toggles directly. A number
