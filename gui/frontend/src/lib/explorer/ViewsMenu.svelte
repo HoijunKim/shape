@@ -15,7 +15,11 @@
   let menuEl: HTMLDivElement | undefined;
   let restoreTo: HTMLElement | null = null;
 
+  // Reset restoreTo on close (whether via close() or the Header toggle flipping
+  // `open` to false), else enter()'s `if (restoreTo) return` guard stops the
+  // next open from re-focusing the input.
   $: if (open) void enter();
+  else restoreTo = null;
 
   async function enter(): Promise<void> {
     if (restoreTo) return;

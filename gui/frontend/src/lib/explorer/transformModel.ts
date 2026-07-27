@@ -137,6 +137,11 @@ export function projectedColumns(draft: DraftColumn[], cols: Column[]): Column[]
     .map((d, i) => {
       const base = byPath.get(d.path);
       const name = d.name.trim();
-      return { ...(base ?? ({} as Column)), name, index: i } as Column;
+      // Preserve the draft path when the base column is absent (E11: a saved
+      // reshape applied to a file missing that column), so every projected
+      // column keeps a DISTINCT path -- otherwise two absent columns both get
+      // path:undefined and DataTable's keyed {#each (col.path)} collides. The
+      // engine renders the missing base as an empty cell, as documented.
+      return { ...(base ?? ({ path: d.path } as Column)), name, index: i } as Column;
     });
 }

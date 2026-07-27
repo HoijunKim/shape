@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
-import { explorer } from "./store";
+import { explorer, parseSavedViews } from "./store";
 import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats, SaveViews } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, Filter } from "./types";
@@ -1050,6 +1050,16 @@ describe("setSearch and getCell (E6 Task 5)", () => {
     // Mutation: applyView skips the sort restore -> the next QueryRows lacks it.
     const q = vi.mocked(QueryRows).mock.calls.at(-1)![0] as any;
     expect(q.sort).toEqual({ path: "n", desc: true });
+  });
+
+  it("parseSavedViews always returns an array (a non-array/corrupt views.json degrades to [], never crashes)", () => {
+    expect(parseSavedViews("[{\"name\":\"v\"}]")).toEqual([{ name: "v" }]);
+    expect(parseSavedViews("")).toEqual([]);
+    // Mutation: drop the Array.isArray guard -> these return the object/null and
+    // the [...views] spread in open()/close() later throws, bricking the app.
+    expect(parseSavedViews("{\"oops\":\"x\"}")).toEqual([]);
+    expect(parseSavedViews("null")).toEqual([]);
+    expect(parseSavedViews("not json")).toEqual([]); // malformed -> []
   });
 
   it("deleteView removes and persists; saveView upserts; views survive open (E11)", async () => {

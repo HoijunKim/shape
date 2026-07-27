@@ -148,6 +148,21 @@ describe("projectedColumns", () => {
     expect(projectedColumns(draftFromColumns(COLS), COLS)).toBe(COLS);
   });
 
+  it("keeps DISTINCT paths for columns absent from the base (E11 cross-file apply)", () => {
+    // A saved reshape applied to a DIFFERENT file: two of its columns are not in
+    // this file's base set. Each projected column MUST keep its own (draft) path
+    // -- otherwise both get path:undefined and DataTable's keyed {#each (col.path)}
+    // collides on a duplicate key and crashes.
+    const draft: DraftColumn[] = [
+      { path: "gone.a", name: "A", visible: true },
+      { path: "gone.b", name: "B", visible: true },
+    ];
+    const got = projectedColumns(draft, COLS); // COLS has neither gone.a nor gone.b
+    // Mutation: fallback `{}` instead of `{ path: d.path }` -> both undefined.
+    expect(got.map((c) => c.path)).toEqual(["gone.a", "gone.b"]);
+    expect(new Set(got.map((c) => c.path)).size).toBe(2); // distinct keys
+  });
+
   it("renames only `name`, KEEPING the base path, and renumbers index", () => {
     const draft = draftFromColumns(COLS);
     draft[0].visible = false;

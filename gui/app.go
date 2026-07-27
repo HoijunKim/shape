@@ -466,9 +466,18 @@ func (a *App) LoadViews() (string, error) {
 	return string(b), nil
 }
 
+// saveViewsMu serializes SaveViews so two overlapping calls never race their
+// os.Rename onto the same views.json -- on Windows MoveFileEx returns
+// ERROR_ACCESS_DENIED when two renames target one destination concurrently, and
+// the frontend fires SaveViews without awaiting (persistViews), so a save then a
+// quick delete could otherwise drop one write. NOT a.mu (that guards handle).
+var saveViewsMu sync.Mutex
+
 // SaveViews atomically writes the saved-views JSON blob: a temp file in the same
 // dir + os.Rename, so a crash mid-write never corrupts an existing views.json.
 func (a *App) SaveViews(payload string) error {
+	saveViewsMu.Lock()
+	defer saveViewsMu.Unlock()
 	path, err := viewsPath()
 	if err != nil {
 		return err

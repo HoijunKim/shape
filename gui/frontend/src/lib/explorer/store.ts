@@ -44,6 +44,21 @@ function identityTransform(): Transform {
   return {} as unknown as Transform;
 }
 
+/** E11: parse the persisted views blob to a SavedView[], ALWAYS returning an
+ *  array. A missing, malformed, or valid-but-non-array views.json (e.g. a
+ *  hand-edited `{}`/`null`, or a future schema) degrades to `[]` -- never a
+ *  non-iterable that would later crash the [...views] spread in open()/close().
+ *  "A corrupt config file must never crash the explorer." */
+export function parseSavedViews(raw: string): SavedView[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SavedView[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface ExplorerState {
   status: Status;
   error: string;
@@ -164,8 +179,7 @@ function createExplorer() {
   let views: SavedView[] = [];
   void (async () => {
     try {
-      const raw = await LoadViews();
-      if (raw) views = JSON.parse(raw) as SavedView[];
+      views = parseSavedViews(await LoadViews());
       update((s) => ({ ...s, views: [...views] }));
     } catch (e) {
       // A missing/failed persistence layer must NEVER crash the explorer.

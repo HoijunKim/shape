@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -755,6 +756,35 @@ func TestApp_ViewsRoundTripAndAbsent(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "views.json" {
 			t.Fatalf("stray file in config dir: %s (atomic write must clean up)", e.Name())
+		}
+	}
+}
+
+func TestApp_SaveViews_ConcurrentIsSerialized(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	a := &App{eng: query.NewEngine()}
+
+	// The frontend fires SaveViews without awaiting, so overlapping calls are
+	// real. Without serialization, two os.Renames onto one views.json race and
+	// on Windows one fails ERROR_ACCESS_DENIED -> a dropped write. The mutex
+	// makes every write succeed (last-writer-wins, deterministic).
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = a.SaveViews(`[{"name":"v"}]`)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent SaveViews[%d] failed: %v (SaveViews must serialize its rename)", i, err)
 		}
 	}
 }
