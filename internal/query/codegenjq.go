@@ -399,49 +399,60 @@ func jqProgram(f Filter, t Transform, ctx CodegenContext) (string, []string, err
 	} else if searchExpr != "" {
 		stages = append(stages, "select("+searchExpr+")")
 	}
+	// `stages` now holds ONLY the filter/search select (if any). The projection
+	// is kept SEPARATE so a sort can run BETWEEN the two -- the engine resolves
+	// the sort key from the un-projected record, so the jq sort must too.
 	proj, err := jqProjection(t)
 	if err != nil {
 		return "", nil, err
 	}
+
+	// E9: sort_by needs an ARRAY, so a streaming per-record pipeline cannot just
+	// append `| sort_by(...)` -- that runs against a single object and errors
+	// (plan-review #15). Aggregate the FILTERED SOURCE records, sort by the
+	// source path, re-stream, THEN project. Sorting BEFORE the projection is
+	// load-bearing: sort_by navigates the source path, but a Select renames keys
+	// to aliases the source path cannot reach, so sorting after the projection is
+	// a silent no-op (branch-review finding). The input must be one array, so the
+	// invocation note changes: NDJSON must be slurped (jq -s); a JSON array is `.`.
+	if ctx.Sort.Path != "" {
+		segs, err := resolveSegs(ctx.Sort.Path, ctx.Cols)
+		if err != nil {
+			return "", nil, err
+		}
+		pre := "."
+		if len(stages) > 0 {
+			pre = strings.Join(stages, " | ")
+		}
+		body := "[ .[] | " + pre + " ] | sort_by(" + jqPredicatePath(segs) + ")"
+		if ctx.Sort.Desc {
+			body += " | reverse"
+		}
+		body += " | .[]"
+		if proj != "" {
+			body += " | " + proj
+		}
+		warnings = append(warnings, warnSortJQ)
+		header := jqSortInvocationNote(ctx.Format)
+		if ctx.Search != "" {
+			header += "\n# note: " + warnSearchNumericJQ
+		}
+		header += "\n# note: " + warnSortJQ
+		return header + "\n" + body, warnings, nil
+	}
+
+	// No sort: filter/search then projection, streamed per record.
 	if proj != "" {
 		stages = append(stages, proj)
 	}
 	if len(stages) == 0 {
 		stages = append(stages, ".")
 	}
-
-	body := strings.Join(stages, " | ")
-
-	// E9: sort_by needs an ARRAY, so a streaming per-record pipeline cannot just
-	// append `| sort_by(...)` -- that runs against a single object and errors
-	// (plan-review #15). Instead aggregate the whole records-array (`.`), map the
-	// per-record pipeline over it, sort, reverse for descending, then re-stream.
-	// This requires the input to be ONE array, so the invocation note changes:
-	// NDJSON must be slurped (jq -s); a JSON-array file is already `.`.
-	var header string
-	if ctx.Sort.Path != "" {
-		segs, err := resolveSegs(ctx.Sort.Path, ctx.Cols)
-		if err != nil {
-			return "", nil, err
-		}
-		body = "[ .[] | " + body + " ] | sort_by(" + jqPredicatePath(segs) + ")"
-		if ctx.Sort.Desc {
-			body += " | reverse"
-		}
-		body += " | .[]"
-		warnings = append(warnings, warnSortJQ)
-		header = jqSortInvocationNote(ctx.Format)
-		if ctx.Search != "" {
-			header += "\n# note: " + warnSearchNumericJQ
-		}
-		header += "\n# note: " + warnSortJQ
-	} else {
-		header = jqInvocationNote(ctx.Format)
-		if ctx.Search != "" {
-			header += "\n# note: " + warnSearchNumericJQ
-		}
+	header := jqInvocationNote(ctx.Format)
+	if ctx.Search != "" {
+		header += "\n# note: " + warnSearchNumericJQ
 	}
-	return header + "\n" + body, warnings, nil
+	return header + "\n" + strings.Join(stages, " | "), warnings, nil
 }
 
 // jqSortInvocationNote documents how to feed the SORTED program: it consumes the

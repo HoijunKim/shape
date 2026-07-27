@@ -586,3 +586,29 @@ func TestJQProgram_Sort(t *testing.T) {
 		t.Fatalf("descending jq output not reverse-sorted: %q", outDesc)
 	}
 }
+
+func TestJQProgram_SortBeforeProjection(t *testing.T) {
+	// Reshape user.age -> "years", sort by the SOURCE path user.age. The sort
+	// MUST run before the projection: sort_by navigates the source path, which a
+	// projected {years:...} object no longer has. Branch-review regression.
+	cols := codegenModel(t, []map[string]any{{"user": map[string]any{"age": 1}}})
+	tr := Transform{Select: []ColumnSpec{{Path: "user.age", As: "years"}}}
+	prog, _, err := jqProgram(Filter{}, tr, CodegenContext{Format: "json", Cols: cols, Sort: SortSpec{Path: "user.age"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Structural: sort_by must appear BEFORE the projection object in the pipeline.
+	si, pi := strings.Index(prog, "sort_by("), strings.Index(prog, `"years"`)
+	if si < 0 || pi < 0 || si > pi {
+		t.Fatalf("sort_by must precede the projection:\n%s", prog)
+	}
+	// Real jq: the projected output must actually be ordered by user.age.
+	// Mutation (sort after projection): sort_by(.user?.age?) hits null on every
+	// {years:...} object -> stable no-op -> source order 1,3,2 below -> fails.
+	input := `[{"user":{"age":3}},{"user":{"age":1}},{"user":{"age":2}}]`
+	out := runJQ(t, prog, input)
+	i1, i2, i3 := strings.Index(out, `"years":1`), strings.Index(out, `"years":2`), strings.Index(out, `"years":3`)
+	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
+		t.Fatalf("reshape+sort jq output not ordered by the source key:\n%s", out)
+	}
+}
