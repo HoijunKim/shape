@@ -353,7 +353,7 @@ git commit -m "feat(profile): approximate quantiles from streaming histogram"
 - Test: `internal/profile/accumulator_test.go` (add integration test)
 
 **Interfaces:**
-- Consumes: `numHistogram`, `newNumHistogram`, `histMaxBins`, `HistBin` (Tasks 1–2).
+- Consumes: `numHistogram`, `newNumHistogram`, `histMaxBins`, `HistBin` (Tasks 1-2).
 - Produces (on the exported `FieldProfile`):
   - `Histogram []HistBin` - bins for numeric fields (nil for non-numeric).
   - `Median *float64` - approximate 0.5 quantile (nil for non-numeric).
@@ -474,10 +474,10 @@ git commit -m "feat(profile): surface histogram, median, p95 on FieldProfile"
 
 ## Self-Review
 
-**Spec coverage (P1 scope only):** Spec §3 "streaming numeric histogram sketch" → Tasks 1–2. Spec §3 "surfaced on FieldProfile … alongside existing numeric min/max" → Task 3. Spec §11 "histogram accuracy against known distributions, bounded memory, single-pass golden tests" → `TestHistogramExactBelowCap`, `TestHistogramBoundedBins`, `TestHistogramQuantileUniformAccuracy`, `TestAccumulatorNumericHistogram`. Spec §1 "CLI stays exactly as it is" → Task 3 Step 5 verification + Global Constraints (render package untouched). Consumers (`internal/visual`, GUI) are P2/P3, out of this plan's scope.
+**Spec coverage (P1 scope only):** Spec §3 "streaming numeric histogram sketch" → Tasks 1-2. Spec §3 "surfaced on FieldProfile … alongside existing numeric min/max" → Task 3. Spec §11 "histogram accuracy against known distributions, bounded memory, single-pass golden tests" → `TestHistogramExactBelowCap`, `TestHistogramBoundedBins`, `TestHistogramQuantileUniformAccuracy`, `TestAccumulatorNumericHistogram`. Spec §1 "CLI stays exactly as it is" → Task 3 Step 5 verification + Global Constraints (render package untouched). Consumers (`internal/visual`, GUI) are P2/P3, out of this plan's scope.
 
 **Placeholder scan:** No TBD/TODO; every code step shows complete code; every run step shows the exact command and expected result.
 
-**Type consistency:** `HistBin{Value float64, Count int}`, `newNumHistogram(int) *numHistogram`, `add(float64)`, `snapshot() []HistBin`, `quantile(float64) float64`, `total int`, and `histMaxBins` are named identically across Tasks 1–3. `FieldProfile` new fields `Histogram []HistBin`, `Median *float64`, `P95 *float64` match their reads in Task 3's tests.
+**Type consistency:** `HistBin{Value float64, Count int}`, `newNumHistogram(int) *numHistogram`, `add(float64)`, `snapshot() []HistBin`, `quantile(float64) float64`, `total int`, and `histMaxBins` are named identically across Tasks 1-3. `FieldProfile` new fields `Histogram []HistBin`, `Median *float64`, `P95 *float64` match their reads in Task 3's tests.
 
 **Note on determinism:** streaming-histogram merges are order-sensitive in general, so accuracy tests use tolerance bands; the exact-value assertions (`TestHistogramExactBelowCap`, `TestHistogramQuantileClamp`) only use inputs whose distinct count stays under the bin cap, where no merging occurs and results are exact.

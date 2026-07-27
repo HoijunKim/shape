@@ -570,7 +570,7 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 
 - [ ] **Step 1: Write the failing test** - `setSort({path:"n",desc:true})`: (a) sends `sort` in the next `QueryRows` payload; (b) clears the page cache and bumps `resetToken` (scroll-to-top), mirroring `setSearch`'s `requery({})`. **A pure sort does NOT reset `total` to -1 or recount** - `requery` only sets `total=-1`+recount when a filter/search is active (`anyActive`), and a sort changes neither (plan-review #20/#22: the original `total=-1` mutation was vacuous). Mutation A: **skip `cache.clear()` in the sort path** → a stale pre-sort page is served for row 0 (assert the served rows change after a sort). Also assert **identity is preserved**: an edit set (via `setEdit`) before a sort is still addressable by the same `row.index` after (getCell/overlay unchanged).
 
-- [ ] **Step 2–5:** run FAIL → implement `currentSort: SortSpec` (module var next to `currentSearch`) + `setSort(spec)` = set `currentSort` + `requery({ sort: spec })` (so `$explorer.sort` updates for the indicator) + thread `currentSort` into the `QueryRows` payload + the `ExplorerState.sort` field + the `types.ts` re-export → run PASS → prove Mutation A (skip `cache.clear`). 
+- [ ] **Step 2-5:** run FAIL → implement `currentSort: SortSpec` (module var next to `currentSearch`) + `setSort(spec)` = set `currentSort` + `requery({ sort: spec })` (so `$explorer.sort` updates for the indicator) + thread `currentSort` into the `QueryRows` payload + the `ExplorerState.sort` field + the `types.ts` re-export → run PASS → prove Mutation A (skip `cache.clear`). 
 
 - [ ] **Step 6: check + commit** `feat(gui): store.setSort threads sort through the query like search`.
 
@@ -588,7 +588,7 @@ Add `sortPushable(cs, cols) (string, bool)` in sqlpushdown.go: returns the `ORDE
 
 - [ ] **Step 1: Write the failing test** - clicking the sort control on column "n" calls `setSort({path:"n",desc:false})`; clicking again `{path:"n",desc:true}`; a third time `{path:"",...}` (clear). Mutation: the sort click also fires `focus` (scroll-to-column) → assert no `focus` event on a sort click. Follow DataTable.edit.test.ts's mocked-store harness.
 
-- [ ] **Step 2–5:** FAIL → implement the header control (a small caret button with `on:click|stopPropagation`, cycling logic reading `$explorer` sort) → PASS → prove the no-focus + cycle mutations.
+- [ ] **Step 2-5:** FAIL → implement the header control (a small caret button with `on:click|stopPropagation`, cycling logic reading `$explorer` sort) → PASS → prove the no-focus + cycle mutations.
 
 - [ ] **Step 6: full suite + check + commit** `feat(gui): click a column header to sort, with a direction indicator`.
 

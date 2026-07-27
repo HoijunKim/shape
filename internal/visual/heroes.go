@@ -106,7 +106,7 @@ func highCard(fp profile.FieldProfile) *HighCardString {
 		hc.StrLen = &StrLenBar{
 			Min:  *fp.StrLenMin,
 			Max:  *fp.StrLenMax,
-			Text: fmt.Sprintf("%d–%d chars", *fp.StrLenMin, *fp.StrLenMax),
+			Text: fmt.Sprintf("%d-%d chars", *fp.StrLenMin, *fp.StrLenMax),
 		}
 	}
 

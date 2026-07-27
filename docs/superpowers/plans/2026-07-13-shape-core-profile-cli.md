@@ -12,7 +12,7 @@
 
 - Module path: `github.com/hoijun-kim/shape` (repo already exists, private).
 - Go version floor: `go 1.23`.
-- Text/copy rule: plain ASCII hyphen `-` only in all output and docs. Never use `-`, `–`, or `·`.
+- Text/copy rule: plain ASCII hyphen `-` only in all output and docs. Never use `-`, `-`, or `·`.
 - Numbers must be decoded with `json.Decoder.UseNumber()` so integers and floats are distinguishable (they arrive as `json.Number`, not `float64`).
 - Core package `internal/profile` MUST NOT import `internal/readers`, `internal/render`, or `internal/cmd`. Dependencies point toward the core only.
 - Commit after each task. Commit messages use Conventional Commits. Do NOT add any co-author trailer.

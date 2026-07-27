@@ -257,7 +257,7 @@ GUI build needs cgo + native webkit; the CLI stays cgo-free on every OS.
 
 Blink (the WebView2/Chromium engine) caps any element's height at ~33.5M
 physical pixels, so a table that sized its scroll spacer at `HEADER_H +
-total * ROW_H` would, past ~600–800k rows (the cap divided by the display's
+total * ROW_H` would, past ~600-800k rows (the cap divided by the display's
 DPR and the 28px row height), have the browser silently clamp the scrollable
 area and leave most of the file unreachable. `DataTable.svelte` avoids that:
 below the cap it scrolls 1:1 as usual; past it the scroll spacer is capped

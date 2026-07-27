@@ -218,7 +218,7 @@ func TestHighCardStrLenPresent(t *testing.T) {
 	if hc.StrLen.Min != 3 || hc.StrLen.Max != 12 {
 		t.Errorf("StrLen = %+v, want Min=3 Max=12", hc.StrLen)
 	}
-	wantText := "3–12 chars" // en dash, U+2013
+	wantText := "3-12 chars" // plain ASCII hyphen '-'
 	if hc.StrLen.Text != wantText {
 		t.Errorf("StrLen.Text = %q, want %q", hc.StrLen.Text, wantText)
 	}

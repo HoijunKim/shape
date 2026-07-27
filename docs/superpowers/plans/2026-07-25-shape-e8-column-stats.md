@@ -702,7 +702,7 @@ All 6 tasks complete. Next (outside this plan): the whole-branch adversarial rev
 - `store.getColumnStats` (getCell sibling, owns no state, rejects on failure) + `FieldCard` re-export → Task 3. ✓
 - Sidebar expand-in-place, revived `FieldDetail` + `charts/*`, concurrency guard, theme audit → Tasks 4 + 5. ✓
 - Source-field-only (not projected names) → enforced by matching `FieldCard.Path` (Task 1) + documented (Task 6). ✓
-- Read-only, lazy per E6 pattern → Tasks 3–5. ✓
+- Read-only, lazy per E6 pattern → Tasks 3-5. ✓
 - Edge cases (path-not-found, all-null/non-numeric form, approximate distinct, theme tokens) → Task 1 (Found), Task 4 (audit), FieldCard forms handled by the existing `FieldDetail`. ✓
 
 **Placeholder scan:** every code step carries real code; the only "read the file first" note is the theme-audit grep (Task 4 Step 6) and the StructureMap fixture reuse (Task 5 Step 1), both with concrete commands. No TODO/TBD. ✓

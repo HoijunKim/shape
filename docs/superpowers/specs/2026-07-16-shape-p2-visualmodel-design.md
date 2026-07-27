@@ -353,7 +353,7 @@ displayHistogram(fp):
   for i in 0..DisplayBins-1:
       Bins[i] = HistBar{Lo: lo+i*w, Hi: lo+(i+1)*w, Count: counts[i],
                         Frac: safeDiv(counts[i], maxCount),
-                        Label: fmtNum(lo+i*w)+"–"+fmtNum(lo+(i+1)*w)}
+                        Label: fmtNum(lo+i*w)+"-"+fmtNum(lo+(i+1)*w)}
   return Histogram{Min:lo, Max:hi, BinWidth:w, Bins:Bins, MaxCount:maxCount, Total:total}
 ```
 
@@ -550,7 +550,7 @@ Format derivation (`Options.Format==""`): from the `Name`/`Source` extension -
    (exact). Do not assert `Σ Percent == 100`; if P3 needs pixel-perfect stacking,
    drive widths from `Frac` (or apply largest-remainder rounding in the view).
 7. Placeholder glyph for a missing value is EM DASH `-` (U+2014) everywhere
-   (`fmtNum`, `deriveFormat`, empty diff `Old`/`New`); the EN DASH `–` (U+2013)
+   (`fmtNum`, `deriveFormat`, empty diff `Old`/`New`); the EN DASH `-` (U+2013)
    appears only as a numeric-range separator (histogram bin labels, `StrLenBar`).
    Separately, the differ's own preformatted present/absent marker `-` (ASCII
    hyphen) passes through diff detail text verbatim per §6 - a diff view may see

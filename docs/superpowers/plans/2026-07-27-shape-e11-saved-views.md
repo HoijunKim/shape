@@ -306,7 +306,7 @@ Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `s
 
 - [ ] **Step 1: Write the failing test** (mocked store, mirroring `SaveDialog.test.ts`): with `open` + a `views` list, a name input + Save calls `saveView(name)`; a view-row click calls `applyView("v1")`; the `×` calls `deleteView("v1")`; Save is disabled when the input is blank. Mutation for each (Save calls applyView instead of saveView; row click passes the wrong name).
 
-- [ ] **Step 2–5:** FAIL → implement the dropdown (reuse SaveDialog's backdrop/Escape/focus pattern; a `<ul>` of view rows) → PASS → prove the mutations.
+- [ ] **Step 2-5:** FAIL → implement the dropdown (reuse SaveDialog's backdrop/Escape/focus pattern; a `<ul>` of view rows) → PASS → prove the mutations.
 
 - [ ] **Step 6: check + commit** `feat(gui): ViewsMenu dropdown to save, apply, and delete views`.
 

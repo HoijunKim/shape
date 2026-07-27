@@ -48,7 +48,7 @@ func displayHistogram(fp profile.FieldProfile) Histogram {
 		bins[i] = HistBar{
 			Lo: binLo, Hi: binHi, Count: c,
 			Frac:  safeDiv(float64(c), float64(maxCount)),
-			Label: fmtNum(binLo) + "–" + fmtNum(binHi),
+			Label: fmtNum(binLo) + "-" + fmtNum(binHi),
 		}
 	}
 

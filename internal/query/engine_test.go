@@ -179,14 +179,14 @@ func TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant(t *testing.T) {
 
 // TestEngine_OpenSource_RescanTier_StreamingWarningExact (A4) pins the exact
 // warning string engine.go emits for a rescan-tier OpenSource, byte for byte
-// -- including the em dash (U+2014), not a hyphen or en dash. Several earlier
+// -- including its exact punctuation (a plain ASCII hyphen "-"). Several earlier
 // task briefs asserted a Go test already covered this ("a Go test matches
 // this byte-for-byte"); that claim was checked during T9 and found false --
 // grep over every *_test.go in this package finds no exact-string assertion
 // anywhere, only TestEngine_OpenSource_BudgetDowngrade_CrossTierInvariant's
 // `len(rescanRes.Warnings) == 0` check, which would pass just as happily if
-// the string were reworded, mis-punctuated, or had its dash swapped for a
-// plain "-". The frontend (StatusBar.svelte) renders this string verbatim
+// the string were reworded, mis-punctuated, or had its hyphen swapped for a
+// dash or other glyph. The frontend (StatusBar.svelte) renders this string verbatim
 // with no reformatting, so a silent wording drift here would ship straight
 // to the status bar.
 func TestEngine_OpenSource_RescanTier_StreamingWarningExact(t *testing.T) {

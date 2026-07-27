@@ -131,6 +131,6 @@
 
 **Coverage:** Backend contract (T1); design system + validated palette (T2); primitives (T3) + charts (T4); premium overview (T5); cockpit detail (T6); app shell/theme/build-screenshot (T7); diff view (T8); launch assets (T9). Parent-spec §3 (dashboard), §4 (health badges - via model), §5 (diff view), §7 (visual direction / dataviz), §9 (P7 launch overlaps T9).
 
-**Verification is visual:** T2–T8 end with a `wails build` + screenshot look, not just a unit test - the star quality is only provable by looking. T1 has a real Go test. Each task is independently committable; the first share-worthy screenshot lands at T7.
+**Verification is visual:** T2-T8 end with a `wails build` + screenshot look, not just a unit test - the star quality is only provable by looking. T1 has a real Go test. Each task is independently committable; the first share-worthy screenshot lands at T7.
 
 **Risk:** Wails build toolchain on Windows (needs the WebView2 + Go + node); if `wails build` fails on environment, fall back to `wails dev` or a Vite-only preview of components with a mocked VisualModel JSON fixture, and capture screenshots there. Note any toolchain fix for a future project skill.
