@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -435,4 +437,72 @@ func (a *App) SaveText(defaultName, content string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// viewsPath is the saved-views config file: <UserConfigDir>/shape/views.json.
+func viewsPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "shape", "views.json"), nil
+}
+
+// LoadViews returns the saved-views JSON blob, or "" if none has been saved yet.
+// The payload is opaque here -- the frontend owns and validates the view schema
+// (E11). An absent file is not an error (a fresh install).
+func (a *App) LoadViews() (string, error) {
+	path, err := viewsPath()
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// saveViewsMu serializes SaveViews so two overlapping calls never race their
+// os.Rename onto the same views.json -- on Windows MoveFileEx returns
+// ERROR_ACCESS_DENIED when two renames target one destination concurrently, and
+// the frontend fires SaveViews without awaiting (persistViews), so a save then a
+// quick delete could otherwise drop one write. NOT a.mu (that guards handle).
+var saveViewsMu sync.Mutex
+
+// SaveViews atomically writes the saved-views JSON blob: a temp file in the same
+// dir + os.Rename, so a crash mid-write never corrupts an existing views.json.
+func (a *App) SaveViews(payload string) error {
+	saveViewsMu.Lock()
+	defer saveViewsMu.Unlock()
+	path, err := viewsPath()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "views-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(payload); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

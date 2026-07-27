@@ -4,6 +4,7 @@
   import { OnFileDrop, OnFileDropOff } from "../wailsjs/runtime/runtime";
   import Header from "./lib/Header.svelte";
   import Explorer from "./lib/explorer/Explorer.svelte";
+  import ViewsMenu from "./lib/explorer/ViewsMenu.svelte";
   import { explorer } from "./lib/explorer/store";
 
   // T8: the P3 dashboard (KpiRow/FieldGrid/FieldDetail) and the ProfileFile
@@ -28,6 +29,7 @@
   let columnsOpen = false;
   let exportOpen = false;
   let codeOpen = false;
+  let viewsOpen = false; // E11: saved-views menu
 
   async function load(path: string): Promise<void> {
     if (!path) return;
@@ -88,12 +90,14 @@
     {filterOpen}
     {columnsOpen}
     {codeOpen}
+    {viewsOpen}
     on:open={open}
     on:export={exportSchema}
     on:toggleTheme={toggleTheme}
     on:toggleFilter={() => (filterOpen = !filterOpen)}
     on:toggleColumns={() => (columnsOpen = !columnsOpen)}
     on:toggleCode={() => (codeOpen = !codeOpen)}
+    on:toggleViews={() => (viewsOpen = !viewsOpen)}
     on:exportData={() => (exportOpen = true)}
   />
 
@@ -104,6 +108,10 @@
 
     <Explorer on:open={open} bind:filterOpen bind:columnsOpen bind:exportOpen bind:codeOpen />
   </div>
+
+  <!-- E11: saved-views menu is APP-level (global, works before a file opens),
+       not routed through Explorer like the file-scoped dialogs. -->
+  <ViewsMenu open={viewsOpen} on:close={() => (viewsOpen = false)} />
 </main>
 
 <style>

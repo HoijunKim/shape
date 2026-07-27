@@ -34,6 +34,10 @@ export function GetCell(arg1) {
   return window['go']['main']['App']['GetCell'](arg1);
 }
 
+export function LoadViews() {
+  return window['go']['main']['App']['LoadViews']();
+}
+
 export function OpenFileDialog() {
   return window['go']['main']['App']['OpenFileDialog']();
 }
@@ -60,6 +64,10 @@ export function SaveFileDialog(arg1, arg2) {
 
 export function SaveText(arg1, arg2) {
   return window['go']['main']['App']['SaveText'](arg1, arg2);
+}
+
+export function SaveViews(arg1) {
+  return window['go']['main']['App']['SaveViews'](arg1);
 }
 
 export function SchemaJSON(arg1) {

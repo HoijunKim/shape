@@ -178,6 +178,18 @@ the app's only view once a file is open:
   regardless of the active projection, filter, search, or sort. Read-only, with
   a Copy button for the exact JSON.
 
+- **Saved views (the header's Views menu).** Save the current query shape — the
+  visual filter, the global search, the column sort, and the reshape (which
+  columns are shown/reordered/renamed) — under a name, and re-apply it later. A
+  saved view is **global and file-independent**: it captures the query shape, not
+  the open file, so the same view applies to whatever you open next
+  (best-effort — a filter condition on a column the new file lacks simply matches
+  nothing, and a reshape of an absent column shows empty cells). Views **persist
+  across restarts** in a plain JSON file at `<user config dir>/shape/views.json`
+  (`%AppData%\shape\views.json` on Windows), written atomically so a crash never
+  corrupts it; a corrupt file is treated as "no views" rather than crashing the
+  app. Save a view (name + Save), click a view to apply it, or `×` to delete it.
+
 - **Edit a cell + save a copy.** Double-click a scalar cell to edit its value in
   place. The editor validates as you go -- a number field rejects non-numeric
   text before it can be committed -- and a boolean toggles directly. A number

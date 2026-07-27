@@ -17,6 +17,9 @@
   export let columnsOpen = false;
   // E5: the jq/SQL panel's toggle, owned by App.svelte like the others.
   export let codeOpen = false;
+  // E11: the saved-views menu toggle. Owned by App (global, works before a file
+  // is open), so it is a plain toggle like codeOpen.
+  export let viewsOpen = false;
 
   const dispatch = createEventDispatcher<{
     open: void;
@@ -25,6 +28,7 @@
     toggleFilter: void;
     toggleColumns: void;
     toggleCode: void;
+    toggleViews: void;
     exportData: void;
   }>();
 
@@ -72,6 +76,13 @@
       title="Show the equivalent jq and SQL"
     >
       Code
+    </button>
+    <button
+      on:click={() => dispatch("toggleViews")}
+      aria-pressed={viewsOpen}
+      title="Save and apply views (filter, search, sort, reshape)"
+    >
+      Views
     </button>
     <button on:click={() => dispatch("open")}>Open</button>
     <!-- The pre-E4 "Export schema" action, kept working and demoted to a
