@@ -116,6 +116,30 @@
     }
   }
 
+  // E10: the row detail view -- the whole record in the SAME overlay as the cell
+  // tree, fetched via getCell with the ROOT path ("") which returns the entire
+  // record. Shares cellReq, so a slow row fetch cannot land after the user opens
+  // a different row or cell.
+  async function onExpandRow(e: CustomEvent<{ index: number }>): Promise<void> {
+    const { index } = e.detail;
+    const myReq = ++cellReq;
+    cellOpen = true;
+    cellLoading = true;
+    cellError = "";
+    cellLabel = `Row ${index}`;
+    try {
+      const res = await explorer.getCell(index, ""); // "" = the whole record
+      if (myReq !== cellReq) return;
+      cellValue = res.value;
+      cellFound = res.found;
+      cellLoading = false;
+    } catch (err) {
+      if (myReq !== cellReq) return;
+      cellError = String(err);
+      cellLoading = false;
+    }
+  }
+
   function closeCell(): void {
     cellReq++; // any in-flight fetch must not reopen the overlay after this
     cellOpen = false;
@@ -277,6 +301,7 @@
             resetToken={$explorer.resetToken}
             on:focus={onFocus}
             on:expandCell={onExpandCell}
+            on:expandRow={onExpandRow}
           />
         {/if}
       </div>

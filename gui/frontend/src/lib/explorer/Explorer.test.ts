@@ -337,6 +337,33 @@ describe("Explorer", () => {
     expect(target.querySelector(".viewport"), "the table is shown instead").toBeTruthy();
   });
 
+  it("opens the row detail overlay with the whole record on a gutter click (E10)", async () => {
+    const columns = [makeColumn("a")];
+    vi.mocked(OpenSource).mockResolvedValue(openResultFor("h1", columns, [makeField("a")]));
+    vi.mocked(QueryRows).mockResolvedValue(rowSetFor(columns));
+    vi.mocked(GetCell).mockResolvedValue({ value: { a: 1 }, found: true } as any);
+
+    cmp = new Explorer({ target, props: {} }) as unknown as { $destroy: () => void };
+    await explorer.open("/f.ndjson");
+    await flush();
+    await tick();
+
+    const gutter = target.querySelector(".gutter-cell.clickable") as HTMLElement;
+    expect(gutter, "a loaded gutter is clickable").toBeTruthy();
+    gutter.click();
+    await flush();
+    await tick();
+
+    const last = vi.mocked(GetCell).mock.calls.at(-1)![0] as any;
+    // Mutation: fetch a non-empty path / wrong index -> these fail.
+    expect(last.path).toBe("");
+    expect(last.index).toBe(0);
+    // The row-detail overlay is open, labelled "Row 0".
+    const dialog = target.querySelector("[role='dialog']") as HTMLElement;
+    expect(dialog, "the value-tree overlay opens").toBeTruthy();
+    expect(dialog.querySelector(".title")?.textContent).toBe("Row 0");
+  });
+
   describe("StatusBar wiring (A3)", () => {
     it("wires totalExact straight through, independent of sampled", async () => {
       const columns = [makeColumn("id")];
