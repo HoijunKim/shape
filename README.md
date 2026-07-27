@@ -161,7 +161,9 @@ jq or SQL required.
   200k-row count), and anything it cannot vouch for falls back to the same Go
   predicate every other format uses, so the answer never changes.
 
-It still exports the inferred JSON Schema too (the header's "Schema" button).
+First launch opens a **"?" help overlay** explaining every feature; the header's
+"?" button reopens it anytime. It still exports the inferred JSON Schema too (the
+header's "Schema" button).
 Build it with `wails build` (see `gui/README.md` for the required build order).
 
 ## Supported formats
