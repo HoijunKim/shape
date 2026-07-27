@@ -96,7 +96,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           asset="shape-gui_${{ github.ref_name }}_darwin_universal.zip"
-          ditto -c -k --keepParent build/bin/shape-gui.app "$asset"
+          # wails names the .app bundle after wails.json "name" (shape), not
+          # "outputfilename" (shape-gui, used for the raw win/linux binary).
+          ditto -c -k --keepParent build/bin/shape.app "$asset"
           gh release upload "${{ github.ref_name }}" "$asset" --clobber
 
       - name: Package + upload (Linux)
