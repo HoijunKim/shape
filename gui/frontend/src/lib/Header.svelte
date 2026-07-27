@@ -20,6 +20,8 @@
   // E11: the saved-views menu toggle. Owned by App (global, works before a file
   // is open), so it is a plain toggle like codeOpen.
   export let viewsOpen = false;
+  // E12: the help overlay toggle (App-level, always available).
+  export let helpOpen = false;
 
   const dispatch = createEventDispatcher<{
     open: void;
@@ -29,6 +31,7 @@
     toggleColumns: void;
     toggleCode: void;
     toggleViews: void;
+    toggleHelp: void;
     exportData: void;
   }>();
 
@@ -92,6 +95,15 @@
     </button>
     <button class="primary" disabled={!canExport} on:click={() => dispatch("exportData")}>
       Export
+    </button>
+    <button
+      class="help-btn"
+      on:click={() => dispatch("toggleHelp")}
+      aria-pressed={helpOpen}
+      aria-label="Help"
+      title="Help — what every feature does"
+    >
+      ?
     </button>
   </div>
 </header>
