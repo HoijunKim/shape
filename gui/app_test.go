@@ -788,3 +788,23 @@ func TestApp_SaveViews_ConcurrentIsSerialized(t *testing.T) {
 		}
 	}
 }
+
+func TestApp_HelpSeen(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	a := &App{eng: query.NewEngine()}
+
+	seen, err := a.HelpSeen()
+	if err != nil || seen {
+		t.Fatalf("HelpSeen(absent) = (%v, %v), want (false, nil)", seen, err)
+	}
+	if err := a.MarkHelpSeen(); err != nil {
+		t.Fatalf("MarkHelpSeen: %v", err)
+	}
+	seen, err = a.HelpSeen()
+	if err != nil || !seen {
+		t.Fatalf("HelpSeen(after mark) = (%v, %v), want (true, nil)", seen, err)
+	}
+}

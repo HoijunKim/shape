@@ -55,6 +55,19 @@ describe("Header", () => {
     expect(button("Views")!.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("dispatches toggleHelp and reflects helpOpen on the ? button (E12)", async () => {
+    mount({ helpOpen: false });
+    let fired = 0;
+    header!.$on("toggleHelp", () => (fired += 1));
+    // Mutation: the ? button dispatches the wrong event -> fired stays 0.
+    button("?")!.click();
+    expect(fired).toBe(1);
+    expect(button("?")!.getAttribute("aria-pressed")).toBe("false");
+    header!.$set({ helpOpen: true });
+    await tick();
+    expect(button("?")!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   // The E5 button sits alongside the E4 ones; a regression that dropped any of
   // them would break the corresponding panel with no other signal.
   it("still offers Columns, Filter, Schema and Export", () => {

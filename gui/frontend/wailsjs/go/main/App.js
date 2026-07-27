@@ -34,8 +34,16 @@ export function GetCell(arg1) {
   return window['go']['main']['App']['GetCell'](arg1);
 }
 
+export function HelpSeen() {
+  return window['go']['main']['App']['HelpSeen']();
+}
+
 export function LoadViews() {
   return window['go']['main']['App']['LoadViews']();
+}
+
+export function MarkHelpSeen() {
+  return window['go']['main']['App']['MarkHelpSeen']();
 }
 
 export function OpenFileDialog() {

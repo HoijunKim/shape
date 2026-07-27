@@ -439,13 +439,43 @@ func (a *App) SaveText(defaultName, content string) (string, error) {
 	return path, nil
 }
 
-// viewsPath is the saved-views config file: <UserConfigDir>/shape/views.json.
-func viewsPath() (string, error) {
+// configPath is <UserConfigDir>/shape/<name> -- the app's config-file home.
+func configPath(name string) (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "shape", "views.json"), nil
+	return filepath.Join(dir, "shape", name), nil
+}
+
+// viewsPath is the saved-views config file: <UserConfigDir>/shape/views.json.
+func viewsPath() (string, error) { return configPath("views.json") }
+
+// HelpSeen reports whether the first-launch help overlay has been shown (a flag
+// file under the config dir). An absent/unreadable flag is "not seen", never a
+// startup-blocking error (E12).
+func (a *App) HelpSeen() (bool, error) {
+	path, err := configPath("help-seen")
+	if err != nil {
+		return false, nil // no config dir -> treat as not seen, don't block startup
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// MarkHelpSeen records that the help overlay has been shown (write-once, so no
+// atomic rename needed).
+func (a *App) MarkHelpSeen() error {
+	path, err := configPath("help-seen")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("1"), 0o644)
 }
 
 // LoadViews returns the saved-views JSON blob, or "" if none has been saved yet.

@@ -178,6 +178,12 @@ the app's only view once a file is open:
   regardless of the active projection, filter, search, or sort. Read-only, with
   a Copy button for the exact JSON.
 
+- **Help (the header's "?" button).** Opens an overlay explaining every feature
+  at a glance — grouped into getting-started, explore, shape-the-query, inspect,
+  edit-and-save, and reuse. It appears automatically the first time you launch
+  the app (a one-line "seen" flag next to `views.json` remembers it), and the
+  "?" reopens it anytime.
+
 - **Saved views (the header's Views menu).** Save the current query shape — the
   visual filter, the global search, the column sort, and the reshape (which
   columns are shown/reordered/renamed) — under a name, and re-apply it later. A

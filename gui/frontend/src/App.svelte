@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SchemaJSON, OpenFileDialog, SaveText } from "../wailsjs/go/main/App";
+  import { SchemaJSON, OpenFileDialog, SaveText, HelpSeen, MarkHelpSeen } from "../wailsjs/go/main/App";
   import { OnFileDrop, OnFileDropOff } from "../wailsjs/runtime/runtime";
   import Header from "./lib/Header.svelte";
   import Explorer from "./lib/explorer/Explorer.svelte";
   import ViewsMenu from "./lib/explorer/ViewsMenu.svelte";
+  import HelpOverlay from "./lib/HelpOverlay.svelte";
   import { explorer } from "./lib/explorer/store";
 
   // T8: the P3 dashboard (KpiRow/FieldGrid/FieldDetail) and the ProfileFile
@@ -30,6 +31,7 @@
   let exportOpen = false;
   let codeOpen = false;
   let viewsOpen = false; // E11: saved-views menu
+  let helpOpen = false; // E12: help overlay
 
   async function load(path: string): Promise<void> {
     if (!path) return;
@@ -78,6 +80,20 @@
 
     return () => OnFileDropOff();
   });
+
+  // E12: on the very first launch, open the help overlay once, then mark it seen.
+  // Wrapped so a persistence failure just skips the auto-open -- never blocks
+  // startup. The "?" button path is unaffected.
+  onMount(async () => {
+    try {
+      if (!(await HelpSeen())) {
+        helpOpen = true;
+        void MarkHelpSeen();
+      }
+    } catch {
+      /* no config dir / read-only FS -> skip the auto-open */
+    }
+  });
 </script>
 
 <main class="app">
@@ -91,6 +107,7 @@
     {columnsOpen}
     {codeOpen}
     {viewsOpen}
+    {helpOpen}
     on:open={open}
     on:export={exportSchema}
     on:toggleTheme={toggleTheme}
@@ -98,6 +115,7 @@
     on:toggleColumns={() => (columnsOpen = !columnsOpen)}
     on:toggleCode={() => (codeOpen = !codeOpen)}
     on:toggleViews={() => (viewsOpen = !viewsOpen)}
+    on:toggleHelp={() => (helpOpen = !helpOpen)}
     on:exportData={() => (exportOpen = true)}
   />
 
@@ -112,6 +130,7 @@
   <!-- E11: saved-views menu is APP-level (global, works before a file opens),
        not routed through Explorer like the file-scoped dialogs. -->
   <ViewsMenu open={viewsOpen} on:close={() => (viewsOpen = false)} />
+  <HelpOverlay open={helpOpen} on:close={() => (helpOpen = false)} />
 </main>
 
 <style>
