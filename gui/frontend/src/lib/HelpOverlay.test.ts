@@ -36,6 +36,20 @@ describe("HelpOverlay (E12)", () => {
     expect(t.querySelector(".backdrop.opaque")).toBeTruthy();
   });
 
+  it("traps Tab inside the dialog (never escapes behind the opaque backdrop)", async () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const t = mount();
+    await tick();
+    outside.focus(); // focus escaped behind the backdrop
+    // Mutation: no onTab branch -> Tab does not pull focus back inside.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", cancelable: true }));
+    await tick();
+    const dlg = t.querySelector(".dialog") as HTMLElement;
+    expect(dlg.contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
   it("Escape and × each dispatch close", async () => {
     const t = mount();
     let closed = 0;

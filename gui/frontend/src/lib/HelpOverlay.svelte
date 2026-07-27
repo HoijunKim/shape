@@ -82,10 +82,42 @@
     back?.focus();
   }
 
+  // Focus trap: keep Tab inside the dialog so it never escapes behind the opaque
+  // backdrop to the (aria-modal-inert, invisible) header buttons -- same trap the
+  // ExportDialog/SaveDialog/ValueTreeOverlay modals use.
+  function focusables(): HTMLElement[] {
+    if (!dialogEl) return [];
+    return Array.from(
+      dialogEl.querySelectorAll<HTMLElement>("button:not([disabled]), select, input, [href], [tabindex]:not([tabindex='-1'])"),
+    );
+  }
+
+  function onTab(e: KeyboardEvent): void {
+    const items = focusables();
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || !dialogEl?.contains(active)) {
+      e.preventDefault();
+      first.focus();
+      return;
+    }
+    if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    }
+  }
+
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.stopPropagation();
       close();
+    } else if (e.key === "Tab") {
+      onTab(e);
     }
   }
 </script>
