@@ -720,3 +720,41 @@ func TestApp_ColumnStats_ForwardsAndReturnsACard(t *testing.T) {
 		t.Fatalf("got Found=%v Card.Path=%q, want true and \"n\"", res.Found, res.Card.Path)
 	}
 }
+
+func TestApp_ViewsRoundTripAndAbsent(t *testing.T) {
+	// Redirect os.UserConfigDir() on EVERY platform to a temp dir so the test
+	// never touches the real user profile: Windows reads APPDATA, Linux reads
+	// XDG_CONFIG_HOME (the ubuntu-latest CI job), macOS reads HOME.
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	a := &App{eng: query.NewEngine()}
+
+	// Absent file -> ("", nil), not an error.
+	got, err := a.LoadViews()
+	if err != nil || got != "" {
+		t.Fatalf("LoadViews(absent) = (%q, %v), want (\"\", nil)", got, err)
+	}
+
+	payload := `[{"name":"v1","filter":{"combinator":"and"}}]`
+	if err := a.SaveViews(payload); err != nil {
+		t.Fatalf("SaveViews: %v", err)
+	}
+	got, err = a.LoadViews()
+	if err != nil {
+		t.Fatalf("LoadViews: %v", err)
+	}
+	if got != payload {
+		t.Fatalf("round-trip = %q, want %q", got, payload)
+	}
+	// It landed under <configdir>/shape/views.json, and no stray temp survives.
+	cfg, _ := os.UserConfigDir()
+	dir := filepath.Join(cfg, "shape")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "views.json" {
+			t.Fatalf("stray file in config dir: %s (atomic write must clean up)", e.Name())
+		}
+	}
+}

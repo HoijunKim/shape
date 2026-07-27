@@ -19,6 +19,8 @@ export function ExportQuery(arg1:query.ExportRequest):Promise<query.ExportResult
 
 export function GetCell(arg1:query.CellRequest):Promise<query.CellResult>;
 
+export function LoadViews():Promise<string>;
+
 export function OpenFileDialog():Promise<string>;
 
 export function OpenSource(arg1:query.OpenRequest):Promise<query.OpenResult>;
@@ -32,5 +34,7 @@ export function SaveEdits(arg1:query.SaveRequest):Promise<query.SaveResult>;
 export function SaveFileDialog(arg1:string,arg2:string):Promise<string>;
 
 export function SaveText(arg1:string,arg2:string):Promise<string>;
+
+export function SaveViews(arg1:string):Promise<void>;
 
 export function SchemaJSON(arg1:string):Promise<string>;
