@@ -133,6 +133,10 @@ jq or SQL required.
   (so they read non-contiguously under a sort), which keeps editing and cell
   lookups pointing at the right record.
 - **Reshape** — choose, reorder and rename the columns you want.
+- **Saved views** — save the current filter, search, sort and reshape under a
+  name from the header's Views menu, and re-apply it anytime — across restarts.
+  Views are global (they apply to whatever file is open) and live in a plain JSON
+  file in your config dir.
 - **Edit** — double-click a scalar cell to change its value in place. Edited
   cells are highlighted (and the row flagged in the gutter); an "Edited only"
   toggle lists just the changes as *was → now*, each revertable. Number literals
