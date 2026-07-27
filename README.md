@@ -14,8 +14,9 @@
   these -- they must be the real app.
 
   A design MOCK-UP landing page (stylized UI, fictional data, not screen
-  captures) lives at docs/landing.html for reference / GitHub Pages -- it is
-  labeled as a mock-up in-page and is NOT a substitute for the real stills above.
+  captures) lives at docs/index.html and is served via GitHub Pages at
+  https://hoijun-kim.github.io/shape/ -- it is labeled as a mock-up in-page and
+  is NOT a substitute for the real stills above.
 -->
 
 # shape
