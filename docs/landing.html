@@ -118,6 +118,11 @@
   .nav-links a:not(.btn):hover { color: var(--ink); background: var(--surface-2); }
   .nav-links .star { display: none; }
   @media (min-width: 620px) { .nav-links .star { display: inline-flex; } }
+  /* Mobile: text links would crowd the bar -- swap them for the star CTA. */
+  @media (max-width: 619px) {
+    .nav-links a:not(.star) { display: none; }
+    .nav-links .star { display: inline-flex; }
+  }
 
   .btn {
     display: inline-flex; align-items: center; gap: 8px; justify-content: center;
@@ -169,8 +174,10 @@
   .fname b { color: var(--ink); font-weight: 600; }
   .mocktag {
     margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--muted); border: 1px dashed var(--line-strong); padding: 3px 8px; border-radius: 20px;
+    color: var(--muted); border: 1px dashed var(--line-strong); padding: 3px 8px; border-radius: 20px; white-space: nowrap;
   }
+  /* Tiny screens: the chrome bar is tight; the disclaimer below still says "mock-up". */
+  @media (max-width: 479px) { .mocktag { display: none; } }
   .appbar {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 11px 14px; border-bottom: 1px solid var(--line);
@@ -619,7 +626,10 @@
     }
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
-        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+        // Toggle (not unobserve) so the reveal replays every time an element
+        // re-enters -- scroll up, then down, and it animates again.
+        if (e.isIntersecting) e.target.classList.add("in");
+        else e.target.classList.remove("in");
       });
     }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
     nodes.forEach(function (n) { io.observe(n); });
