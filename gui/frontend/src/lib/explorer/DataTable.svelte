@@ -31,6 +31,9 @@
     // asks Explorer to fetch and show the cell's FULL value. index is the
     // absolute Row.Index the table already rendered; path is the column path.
     expandCell: { index: number; path: string };
+    // E10: a click on the row-number gutter asks Explorer to fetch and show the
+    // WHOLE record (getCell with the root path). index is the absolute Row.Index.
+    expandRow: { index: number };
   }>();
 
   // Only object/array cells get an expand affordance -- a scalar's full value
@@ -546,7 +549,21 @@
           data-row-index={i}
           style="top:{rowTopFor(i, effectiveFirstRow, ROW_H, scaled)}px; height:{ROW_H}px; width:{contentWidth}px;"
         >
-          <div class="gutter-cell" class:row-edited={row && !!$explorer.edits?.[row.index]} role="rowheader" style="width:{GUTTER_W}px;">
+          <!-- E10: a loaded gutter cell opens the whole record (role=button +
+               keyboard); a skeleton gutter stays a passive rowheader. -->
+          <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-tabindex -->
+          <div
+            class="gutter-cell"
+            class:row-edited={row && !!$explorer.edits?.[row.index]}
+            class:clickable={!!row}
+            role={row ? "button" : "rowheader"}
+            tabindex={row ? 0 : undefined}
+            aria-label={row ? `Show full record for row ${row.index}` : undefined}
+            title={row ? "Show full record" : undefined}
+            style="width:{GUTTER_W}px;"
+            on:click={() => row && dispatch("expandRow", { index: row.index })}
+            on:keydown={(e) => { if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); dispatch("expandRow", { index: row.index }); } }}
+          >
             {#if row}
               {#if $explorer.edits?.[row.index]}<span class="edit-dot" title="Row has edits" aria-hidden="true"></span>{/if}
               {row.index}
@@ -778,6 +795,21 @@
     background: var(--surface-1);
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
+  }
+
+  /* E10: a loaded gutter cell opens the full record on click. */
+  .gutter-cell.clickable {
+    cursor: pointer;
+  }
+
+  .gutter-cell.clickable:hover {
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
+
+  .gutter-cell.clickable:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .data-cell {
