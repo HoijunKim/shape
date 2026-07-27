@@ -1,7 +1,8 @@
 import { writable, get } from "svelte/store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats, LoadViews, SaveViews } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
-import type { Column, CountResult, ExportResult, FieldCard, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SaveResult, SortSpec, Transform } from "./types";
+import type { Column, CountResult, ExportResult, FieldCard, FieldDTO, Filter, Generated, OpenResult, Row, RowSet, SavedView, SaveResult, SortSpec, Transform } from "./types";
+import { projectedColumns, draftFromTransform } from "./transformModel";
 
 // E7: one edited cell's value carried as kind + literal (a number keeps its
 // exact source text -- a JS number would round a >2^53 integer, so it is never
@@ -79,6 +80,9 @@ export interface ExplorerState {
   // E9: the active column sort (path "" = none). Exposed in state so the
   // DataTable header can render the ▲/▼ direction indicator.
   sort: SortSpec;
+  // E11: the saved views (loaded once at store init, persisted to a config
+  // file). File-independent -- survives open()/close().
+  views: SavedView[];
   resetToken: number;    // bumped on every filter change so DataTable (which owns
                           // scroll) knows to scroll back to row 0 -- the store cannot
                           // move the viewport itself
@@ -124,7 +128,7 @@ const empty: ExplorerState = {
   status: "idle", error: "", path: "", handle: "", tier: "", format: "",
   warnings: [], fields: [], baseColumns: [], columns: [], columnsTruncated: false, totalPaths: 0,
   total: -1, totalExact: false, sampled: false, skipped: 0, focusPath: "", fetching: false, version: 0,
-  pageError: "", filterActive: false, search: "", sort: { path: "", desc: false } as SortSpec, resetToken: 0,
+  pageError: "", filterActive: false, search: "", sort: { path: "", desc: false } as SortSpec, views: [], resetToken: 0,
   counting: false, matchCount: -1, matchExact: false,
   transformActive: false,
   exporting: false, exportRows: 0, exportError: "", exportResult: null,
@@ -153,6 +157,21 @@ function createExplorer() {
   // E9: the active column sort (path "" = none), threaded into QueryRows. Reset
   // to none on open()/close(), like currentSearch.
   let currentSort: SortSpec = { path: "", desc: false } as SortSpec;
+
+  // E11: the saved views. The module var is the source of truth; the state
+  // slice mirrors it for the UI. File-independent: it is NOT reset by open()/
+  // close() (those carry `views` through). Loaded ONCE at store init below.
+  let views: SavedView[] = [];
+  void (async () => {
+    try {
+      const raw = await LoadViews();
+      if (raw) views = JSON.parse(raw) as SavedView[];
+      update((s) => ({ ...s, views: [...views] }));
+    } catch (e) {
+      // A missing/failed persistence layer must NEVER crash the explorer.
+      console.warn("saved views: could not load", e);
+    }
+  })();
   // E4: the projection currently applied to QueryRows, set via setTransform().
   let currentTransform: Transform = identityTransform();
   // E3 Task 5: the requestId of the CountMatches call currently in flight, or
@@ -217,7 +236,7 @@ function createExplorer() {
     saveReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
-    set({ ...empty, status: "opening", path });
+    set({ ...empty, status: "opening", path, views: [...views] }); // E11: views survive a file open
     try {
       // I-1: send a per-open unique, monotonically-increasing requestId
       // (`open${myGen}`) rather than "". Wails runs every binding call in its
@@ -406,7 +425,7 @@ function createExplorer() {
     saveReqId = null;
     baseTotal = -1;
     baseTotalExact = false;
-    set({ ...empty });
+    set({ ...empty, views: [...views] }); // E11: views survive close()
   }
 
   /** E3 Task 5: runs one CountMatches to finality for `filter`, superseded-safe
@@ -520,6 +539,52 @@ function createExplorer() {
   function setSort(spec: SortSpec): void {
     currentSort = spec;
     requery({ sort: spec });
+  }
+
+  /** E11: mirrors the module `views` var into state + persists it. A failed save
+   *  must not crash the explorer -- it is a config file, not the data. */
+  function persistViews(): void {
+    update((s) => ({ ...s, views: [...views] }));
+    void SaveViews(JSON.stringify(views)).catch((e) => console.warn("saved views: could not save", e));
+  }
+
+  /** E11: snapshots the current query shape under `name` (upsert by name). */
+  function saveView(name: string): void {
+    if (!name) return;
+    const v: SavedView = {
+      name,
+      filter: currentFilter,
+      search: currentSearch,
+      sort: currentSort,
+      transform: currentTransform,
+    };
+    const i = views.findIndex((x) => x.name === name);
+    if (i >= 0) views[i] = v;
+    else views.push(v);
+    persistViews();
+  }
+
+  /** E11: restores a saved view's filter+search+sort+reshape. The four setters
+   *  each requery, but requery supersedes, so only the final (setTransform)
+   *  completes -- one effective query. Best-effort across files: a condition on
+   *  an absent path zero-matches, a reshape of an absent column yields empty. */
+  function applyView(name: string): void {
+    const v = views.find((x) => x.name === name);
+    if (!v) return;
+    setFilter(v.filter);
+    setSearch(v.search);
+    setSort(v.sort);
+    const s = get({ subscribe });
+    // projectedColumns(draft, cols) -- reconstruct the draft from the view's
+    // transform first (there is no Transform->Column[] mapping).
+    const draft = draftFromTransform(v.transform, s.baseColumns);
+    setTransform(v.transform, projectedColumns(draft, s.baseColumns));
+  }
+
+  /** E11: removes a saved view + persists. */
+  function deleteView(name: string): void {
+    views = views.filter((x) => x.name !== name);
+    persistViews();
   }
 
 
@@ -801,7 +866,7 @@ function createExplorer() {
 
   return {
     subscribe, open, ensurePages, rowAt, focus, close, dismissPageError, retryPageError,
-    setFilter, setSearch, setSort, cancelCount, setTransform, runExport, cancelExport, dismissExport,
+    setFilter, setSearch, setSort, saveView, applyView, deleteView, cancelCount, setTransform, runExport, cancelExport, dismissExport,
     refreshCodegen, getCell, getColumnStats,
     setEdit, editFor, revertCell, revertAllEdits, editedIndices, saveEdits, dismissSave,
   };

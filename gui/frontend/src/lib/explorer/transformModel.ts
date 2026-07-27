@@ -29,6 +29,17 @@ export function draftFromColumns(cols: Column[]): DraftColumn[] {
   return cols.map((c) => ({ path: c.path, name: c.path, visible: true }));
 }
 
+/** E11: reconstruct a draft from a SAVED VIEW's Transform, so projectedColumns
+ *  can recompute the projected Column[] when the view is applied. buildTransform
+ *  only ever emits `select` (never `drop`), so select-only reconstruction is
+ *  sufficient; an identity transform ({} / no select) maps back to every base
+ *  column visible, in source order. */
+export function draftFromTransform(t: Transform, cols: Column[]): DraftColumn[] {
+  const sel = (t as unknown as PlainTransform).select;
+  if (!sel || sel.length === 0) return draftFromColumns(cols);
+  return sel.map((s) => ({ path: s.path, name: s.as, visible: true }));
+}
+
 /** Moves one row up (-1) or down (+1), returning a NEW array. Out-of-range
  *  moves are no-ops, so the caller can wire ↑/↓ buttons without bounds checks. */
 export function moveColumn(draft: DraftColumn[], index: number, delta: -1 | 1): DraftColumn[] {

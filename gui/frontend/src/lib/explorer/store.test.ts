@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { explorer } from "./store";
-import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats } from "../../../wailsjs/go/main/App";
+import { OpenSource, QueryRows, CloseSource, Cancel, CountMatches, ExportQuery, Codegen, GetCell, SaveEdits, ColumnStats, SaveViews } from "../../../wailsjs/go/main/App";
 import { EventsOn } from "../../../wailsjs/runtime";
 import type { Column, Filter } from "./types";
 
@@ -26,6 +26,9 @@ vi.mock("../../../wailsjs/go/main/App", () => ({
   SaveEdits: vi.fn(() => Promise.resolve({ outPath: "", rowsOut: 0, editsApplied: 0, editsUnapplied: 0, bytesOut: 0, elapsedMs: 0 })),
   // E8: store.ts calls ColumnStats for the sidebar stats panel.
   ColumnStats: vi.fn(() => Promise.resolve({ card: { path: "" }, found: false })),
+  // E11: store init calls LoadViews; saveView/deleteView call SaveViews.
+  LoadViews: vi.fn(() => Promise.resolve("")),
+  SaveViews: vi.fn(() => Promise.resolve()),
 }));
 
 // E4: store.ts subscribes to shape:progress per export. The real module reaches
@@ -84,6 +87,7 @@ beforeEach(async () => {
   vi.mocked(Codegen).mockClear();
   vi.mocked(GetCell).mockReset().mockResolvedValue({ value: null, found: false } as any);
   vi.mocked(ColumnStats).mockReset().mockResolvedValue({ card: { path: "" }, found: false } as any);
+  vi.mocked(SaveViews).mockClear(); // keep the resolve impl; clear call history
   vi.mocked(SaveEdits).mockReset().mockResolvedValue({ outPath: "/o", rowsOut: 3, editsApplied: 1, editsUnapplied: 0, bytesOut: 9, elapsedMs: 0 } as any);
   progressHandlers = [];
   vi.mocked(EventsOn).mockReset().mockImplementation((_evt: string, cb: any) => {
@@ -1025,6 +1029,46 @@ describe("setSearch and getCell (E6 Task 5)", () => {
     // "counting" sentinel a filter/search sets) -- requery's anyActive excludes sort.
     expect(get(explorer).total).not.toBe(-1);
     expect(get(explorer).sort).toEqual({ path: "n", desc: true });
+  });
+
+  it("saveView snapshots the current query shape and persists it; applyView restores it (E11)", async () => {
+    await openMemory();
+    explorer.setSort({ path: "n", desc: true } as any);
+    await flush();
+
+    explorer.saveView("v1");
+    await flush();
+    // Persisted with the ACTIVE sort in the snapshot (mutation: omit sort -> fails).
+    const payload = JSON.parse(vi.mocked(SaveViews).mock.calls.at(-1)![0] as string);
+    expect(payload[0]).toMatchObject({ name: "v1", sort: { path: "n", desc: true } });
+
+    // Clear the sort, then applyView restores v1's sort into the next query.
+    explorer.setSort({ path: "", desc: false } as any);
+    await flush();
+    explorer.applyView("v1");
+    await flush();
+    // Mutation: applyView skips the sort restore -> the next QueryRows lacks it.
+    const q = vi.mocked(QueryRows).mock.calls.at(-1)![0] as any;
+    expect(q.sort).toEqual({ path: "n", desc: true });
+  });
+
+  it("deleteView removes and persists; saveView upserts; views survive open (E11)", async () => {
+    await openMemory();
+    explorer.saveView("v1");
+    await flush();
+    explorer.saveView("v1"); // upsert, not append
+    await flush();
+    expect(get(explorer).views.filter((v) => v.name === "v1")).toHaveLength(1);
+
+    // Views survive a file open (mutation: reset with set({...empty}) -> vanish).
+    await openMemory();
+    await flush();
+    expect(get(explorer).views.some((v) => v.name === "v1")).toBe(true);
+
+    explorer.deleteView("v1");
+    await flush();
+    expect(get(explorer).views.some((v) => v.name === "v1")).toBe(false);
+    expect(vi.mocked(SaveViews)).toHaveBeenCalled();
   });
 });
 

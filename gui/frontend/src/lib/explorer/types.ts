@@ -32,6 +32,17 @@ export type SaveResult = query.SaveResult;
 export type CellEdit = query.CellEdit;
 export type ColumnStatsResult = query.ColumnStatsResult;
 export type SortSpec = query.SortSpec;
+
+// E11: a saved view -- a named, file-independent snapshot of the query shape
+// (filter + search + sort + reshape). Persisted as a JSON array via the Go
+// LoadViews/SaveViews binding; the schema lives here, the Go side is opaque.
+export interface SavedView {
+  name: string;
+  filter: Filter;
+  search: string;
+  sort: SortSpec;
+  transform: Transform;
+}
 export type FieldCard = visual.FieldCard;
 export type Generated = query.Generated;
 export type CodegenRequest = query.CodegenRequest;
