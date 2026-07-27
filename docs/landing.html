@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="shape — a cgo-free desktop data explorer and CLI that shows the jq and SQL for whatever you build.">
+</head>
+<body>
+<title>shape — see the shape of any data file</title>
+
+<style>
+  :root {
+    /* light (base) */
+    --paper: #F4F6F9;
+    --surface: #FFFFFF;
+    --surface-2: #FAFBFD;
+    --ink: #171A21;
+    --ink-2: #3E4552;
+    --muted: #6B7482;
+    --line: #E3E7ED;
+    --line-strong: #CFD5DE;
+    --accent: #E07C15;
+    --accent-ink: #B5620A;
+    --accent-soft: #FBEAD1;
+    --good: #2E8B6F;
+    --focus: #3560E0;
+    --t-string: #2E8B6F;
+    --t-number: #3560E0;
+    --t-bool: #8257C9;
+    --t-null: #8A94A2;
+    --t-object: #5C6BC0;
+    --shadow: 0 24px 60px -24px rgba(23, 26, 33, 0.28);
+    --shadow-sm: 0 2px 10px -4px rgba(23, 26, 33, 0.18);
+
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, Consolas, monospace;
+
+    --wrap: 1080px;
+    --r-sm: 6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0E1116;
+      --surface: #161A21;
+      --surface-2: #1B212B;
+      --ink: #EAEDF2;
+      --ink-2: #BAC2CE;
+      --muted: #7E8896;
+      --line: #262C36;
+      --line-strong: #353D49;
+      --accent: #F2933A;
+      --accent-ink: #F4A860;
+      --accent-soft: #2A2114;
+      --good: #4FB595;
+      --focus: #6E9BFF;
+      --t-string: #57C6A2;
+      --t-number: #6E9BFF;
+      --t-bool: #B392E8;
+      --t-null: #8A94A2;
+      --t-object: #93A0E8;
+      --shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
+      --shadow-sm: 0 2px 12px -4px rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #F4F6F9; --surface: #FFFFFF; --surface-2: #FAFBFD;
+    --ink: #171A21; --ink-2: #3E4552; --muted: #6B7482;
+    --line: #E3E7ED; --line-strong: #CFD5DE;
+    --accent: #E07C15; --accent-ink: #B5620A; --accent-soft: #FBEAD1;
+    --good: #2E8B6F; --focus: #3560E0;
+    --t-string: #2E8B6F; --t-number: #3560E0; --t-bool: #8257C9; --t-null: #8A94A2; --t-object: #5C6BC0;
+    --shadow: 0 24px 60px -24px rgba(23, 26, 33, 0.28);
+    --shadow-sm: 0 2px 10px -4px rgba(23, 26, 33, 0.18);
+  }
+  :root[data-theme="dark"] {
+    --paper: #0E1116; --surface: #161A21; --surface-2: #1B212B;
+    --ink: #EAEDF2; --ink-2: #BAC2CE; --muted: #7E8896;
+    --line: #262C36; --line-strong: #353D49;
+    --accent: #F2933A; --accent-ink: #F4A860; --accent-soft: #2A2114;
+    --good: #4FB595; --focus: #6E9BFF;
+    --t-string: #57C6A2; --t-number: #6E9BFF; --t-bool: #B392E8; --t-null: #8A94A2; --t-object: #93A0E8;
+    --shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
+    --shadow-sm: 0 2px 12px -4px rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: var(--accent); color: #fff; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+
+  .wrap { width: 100%; max-width: var(--wrap); margin-inline: auto; padding-inline: 24px; }
+
+  /* ---------- nav ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-in { display: flex; align-items: center; gap: 20px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+  .brand svg { display: block; }
+  .nav-links { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .nav-links a { padding: 7px 12px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 14px; font-weight: 500; transition: color .15s, background .15s; }
+  .nav-links a:hover { color: var(--ink); background: var(--surface-2); }
+  .nav-links .star { display: none; }
+  @media (min-width: 620px) { .nav-links .star { display: inline-flex; } }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+    padding: 11px 18px; border-radius: var(--r-sm); font-weight: 600; font-size: 14.5px;
+    border: 1px solid transparent; cursor: pointer; transition: transform .12s ease, background .15s, border-color .15s, box-shadow .15s;
+    font-family: var(--sans);
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: #1a1206; box-shadow: var(--shadow-sm); }
+  .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+  :root[data-theme="dark"] .btn-primary, :root:not([data-theme="light"]) .btn-primary { }
+  .btn-ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+  .btn-ghost:hover { border-color: var(--ink-2); background: var(--surface-2); }
+  .btn-sm { padding: 7px 12px; font-size: 13px; }
+
+  /* ---------- hero ---------- */
+  header.hero { padding-top: clamp(48px, 8vw, 92px); padding-bottom: 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent-ink);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 26px; height: 2px; background: var(--accent); border-radius: 2px; }
+  h1.title {
+    margin: 18px 0 0; font-size: clamp(2.35rem, 5.6vw, 4rem); line-height: 1.04;
+    letter-spacing: -0.03em; font-weight: 750; text-wrap: balance; max-width: 15ch;
+  }
+  h1.title em { font-style: normal; color: var(--accent); }
+  .lead { margin: 22px 0 0; font-size: clamp(1.05rem, 1.7vw, 1.3rem); color: var(--ink-2); max-width: 60ch; line-height: 1.5; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .cta-meta { margin-top: 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); letter-spacing: 0.01em; }
+  .cta-meta b { color: var(--good); font-weight: 600; }
+
+  /* ---------- mock window ---------- */
+  .stage { padding: 40px 0 8px; }
+  .window {
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-lg);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .chrome {
+    display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+    border-bottom: 1px solid var(--line); background: var(--surface-2);
+  }
+  .dots { display: flex; gap: 7px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; background: var(--line-strong); }
+  .dots i:nth-child(1) { background: #E06A5B; }
+  .dots i:nth-child(2) { background: #E0B24E; }
+  .dots i:nth-child(3) { background: #6FB98A; }
+  .fname { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+  .fname b { color: var(--ink); font-weight: 600; }
+  .mocktag {
+    margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); border: 1px dashed var(--line-strong); padding: 3px 8px; border-radius: 20px;
+  }
+  .appbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 11px 14px; border-bottom: 1px solid var(--line);
+  }
+  .search {
+    flex: 1 1 200px; min-width: 160px; display: flex; align-items: center; gap: 8px;
+    padding: 7px 11px; border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+    color: var(--muted); font-size: 13px; background: var(--surface-2);
+  }
+  .chip {
+    font-family: var(--mono); font-size: 12px; padding: 6px 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--line-strong); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .chip.on { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); background: var(--accent-soft); color: var(--accent-ink); }
+  .chip .caret { color: var(--accent); font-weight: 700; }
+  .rowcount { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .rowcount b { color: var(--ink-2); font-weight: 600; }
+
+  .workspace { display: grid; grid-template-columns: 1fr; }
+  @media (min-width: 720px) { .workspace { grid-template-columns: 232px 1fr; } }
+  .sidebar { border-bottom: 1px solid var(--line); padding: 14px; }
+  @media (min-width: 720px) { .sidebar { border-bottom: 0; border-right: 1px solid var(--line); } }
+  .side-h { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .field { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); }
+  .field:first-of-type { border-top: 0; }
+  .field .fn { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+  .field .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); grid-column: 1 / -1; }
+  .ty { font-family: var(--mono); font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 20px; justify-self: end; }
+  .ty.str { color: var(--t-string); background: color-mix(in srgb, var(--t-string) 14%, transparent); }
+  .ty.num { color: var(--t-number); background: color-mix(in srgb, var(--t-number) 14%, transparent); }
+  .ty.obj { color: var(--t-object); background: color-mix(in srgb, var(--t-object) 14%, transparent); }
+  .ty.boolt { color: var(--t-bool); background: color-mix(in srgb, var(--t-bool) 14%, transparent); }
+
+  .grid-wrap { overflow-x: auto; }
+  table.grid { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  table.grid th, table.grid td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  table.grid thead th {
+    color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.03em; text-transform: uppercase;
+    position: sticky; top: 0; background: var(--surface-2);
+  }
+  table.grid thead th .sc { color: var(--accent); margin-left: 4px; }
+  .gut { color: var(--muted); text-align: right !important; width: 1%; user-select: none; }
+  td.v-num { color: var(--t-number); }
+  td.v-str { color: var(--ink); }
+  td.v-null { color: var(--t-null); font-style: italic; }
+  td.v-obj { color: var(--t-object); }
+  td.v-obj u { text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+  td.edited { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); color: var(--accent-ink); position: relative; }
+  table.grid tbody tr:hover td { background: color-mix(in srgb, var(--focus) 5%, transparent); }
+  table.grid tbody tr:hover td.edited { background: var(--accent-soft); }
+
+  .codebar { border-top: 1px solid var(--line); background: var(--surface-2); }
+  .code-tabs { display: flex; gap: 2px; padding: 8px 14px 0; }
+  .code-tabs span { font-family: var(--mono); font-size: 12px; padding: 6px 12px; border-radius: var(--r-sm) var(--r-sm) 0 0; color: var(--muted); }
+  .code-tabs span.act { color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-bottom-color: var(--surface); }
+  .code-body { padding: 12px 16px 16px; overflow-x: auto; }
+  .code-body pre { margin: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--ink-2); }
+  .code-body .k { color: var(--t-bool); }
+  .code-body .f { color: var(--focus); }
+  .code-body .s { color: var(--t-string); }
+  .code-body .n { color: var(--t-number); }
+
+  /* ---------- differentiator bar ---------- */
+  .diff { display: grid; grid-template-columns: 1fr; gap: 1px; margin-top: 56px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+  @media (min-width: 720px) { .diff { grid-template-columns: repeat(3, 1fr); } }
+  .diff div { background: var(--surface); padding: 20px 22px; }
+  .diff .dk { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-ink); }
+  .diff .dt { margin-top: 8px; font-size: 15px; color: var(--ink); font-weight: 600; }
+  .diff .dd { margin-top: 4px; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+
+  /* ---------- sections ---------- */
+  section { padding: clamp(56px, 9vw, 100px) 0 0; }
+  .sec-head { max-width: 60ch; }
+  .kicker { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-ink); }
+  h2 { margin: 14px 0 0; font-size: clamp(1.7rem, 3.4vw, 2.4rem); letter-spacing: -0.02em; line-height: 1.1; font-weight: 720; text-wrap: balance; }
+  .sec-sub { margin: 14px 0 0; font-size: 1.08rem; color: var(--ink-2); line-height: 1.55; }
+
+  /* ---------- feature grid ---------- */
+  .features { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 40px; }
+  @media (min-width: 620px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 940px) { .features { grid-template-columns: repeat(3, 1fr); } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 22px; transition: border-color .18s, transform .18s, box-shadow .18s;
+  }
+  .card:hover { border-color: var(--line-strong); transform: translateY(-3px); box-shadow: var(--shadow-sm); }
+  .card .ico { width: 38px; height: 38px; border-radius: var(--r-sm); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-ink); margin-bottom: 14px; }
+  .card .ico svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .card h3 { margin: 0; font-size: 16.5px; font-weight: 650; letter-spacing: -0.01em; }
+  .card p { margin: 8px 0 0; font-size: 14px; color: var(--muted); line-height: 1.55; }
+
+  /* ---------- spotlight jq/sql ---------- */
+  .spot { display: grid; grid-template-columns: 1fr; gap: 32px; align-items: center; margin-top: 44px; }
+  @media (min-width: 900px) { .spot { grid-template-columns: 0.9fr 1.1fr; gap: 48px; } }
+  .spot-panels { display: grid; gap: 14px; }
+  .panel { background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md); overflow: hidden; box-shadow: var(--shadow-sm); }
+  .panel .ph { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .panel .ph .lang { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink); }
+  .panel .ph .lang.jq { color: var(--t-object); }
+  .panel .ph .lang.sql { color: var(--t-number); }
+  .panel .ph .copy { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 3px 9px; border-radius: 20px; }
+  .panel pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--ink-2); }
+
+  .spot ul.notes { list-style: none; margin: 22px 0 0; padding: 0; display: grid; gap: 14px; }
+  .spot ul.notes li { position: relative; padding-left: 26px; font-size: 14.5px; color: var(--ink-2); line-height: 1.5; }
+  .spot ul.notes li::before { content: ""; position: absolute; left: 0; top: 8px; width: 12px; height: 12px; border-radius: 3px; border: 2px solid var(--accent); }
+  .spot ul.notes b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- CLI terminal ---------- */
+  .term { margin-top: 40px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-md); overflow: hidden; box-shadow: var(--shadow-sm); }
+  .term .chrome { background: var(--surface-2); }
+  .term-body { padding: 18px 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; }
+  .term-body .pl { color: var(--accent); user-select: none; }
+  .term-body .cm { color: var(--ink); }
+  .term-body .cm .fl { color: var(--t-bool); }
+  .term-body .out { color: var(--muted); }
+  .term-body .out .g { color: var(--good); }
+  .term-body .out .n { color: var(--t-number); }
+  .term-body .out .h { color: var(--ink-2); }
+  .term-body .row { white-space: pre; }
+  .term-cap { margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .term-cap code { font-family: var(--mono); font-size: 13px; color: var(--ink-2); background: var(--surface-2); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); }
+
+  /* ---------- final CTA + footer ---------- */
+  .final { margin-top: clamp(64px, 10vw, 110px); text-align: center; }
+  .final h2 { max-width: 18ch; margin-inline: auto; }
+  .final .cta-row { justify-content: center; }
+  .install { margin: 30px auto 0; max-width: 560px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px; text-align: left; }
+  .install pre { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); overflow-x: auto; line-height: 1.7; }
+  .install .pl { color: var(--accent); }
+  .install .cm2 { color: var(--muted); }
+
+  footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line); padding: 34px 0 60px; }
+  .foot-in { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  @media (min-width: 700px) { .foot-in { grid-template-columns: 1.4fr 1fr; align-items: start; } }
+  .foot-lic { font-size: 13.5px; color: var(--muted); line-height: 1.6; }
+  .foot-lic b { color: var(--ink-2); font-weight: 650; }
+  .foot-lic a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+  .foot-meta { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .foot-meta .brand { font-size: 15px; margin-bottom: 8px; color: var(--ink); }
+  .disclaim { margin-top: 22px; font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
+
+  /* ---------- reveal ---------- */
+  .js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.7,.2,1); }
+  .js .reveal.in { opacity: 1; transform: none; }
+  .js .stagger > * { opacity: 0; transform: translateY(14px); }
+  .js .stagger.in > * { animation: rise .5s cubic-bezier(.2,.7,.2,1) forwards; }
+  .js .stagger.in > *:nth-child(1) { animation-delay: .04s; }
+  .js .stagger.in > *:nth-child(2) { animation-delay: .10s; }
+  .js .stagger.in > *:nth-child(3) { animation-delay: .16s; }
+  .js .stagger.in > *:nth-child(4) { animation-delay: .22s; }
+  .js .stagger.in > *:nth-child(5) { animation-delay: .28s; }
+  .js .stagger.in > *:nth-child(6) { animation-delay: .34s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+    .js .reveal, .js .stagger > * { opacity: 1 !important; transform: none !important; }
+  }
+</style>
+
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="shape home">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="8.5" height="8.5" rx="1.5" fill="var(--accent)"></rect>
+        <rect x="12" y="1.5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="var(--ink-2)" stroke-width="1.4"></rect>
+        <rect x="1.5" y="12" width="8.5" height="8.5" rx="1.5" fill="none" stroke="var(--ink-2)" stroke-width="1.4"></rect>
+        <circle cx="16.25" cy="16.25" r="4.25" fill="none" stroke="var(--ink-2)" stroke-width="1.4"></circle>
+      </svg>
+      shape
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#queries">jq &amp; SQL</a>
+      <a href="#cli">CLI</a>
+      <a class="btn btn-primary btn-sm star" href="https://github.com/hoijun-kim/shape">★ Star</a>
+    </div>
+  </div>
+</nav>
+
+<div id="top"></div>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow reveal">Desktop explorer · CLI · cgo-free Go</span>
+    <h1 class="title reveal">See the <em>shape</em> of any data file.</h1>
+    <p class="lead reveal">Drag in JSON, NDJSON, CSV, TSV, Parquet or SQLite and work with the real rows — filter, sort, reshape, edit and export by clicking. shape writes the matching <b>jq</b> and <b>SQL</b> for everything you build, so you leave knowing how.</p>
+    <div class="cta-row reveal">
+      <a class="btn btn-primary" href="https://github.com/hoijun-kim/shape">★ Star on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/hoijun-kim/shape/releases">Download for desktop</a>
+    </div>
+    <div class="cta-meta reveal">Free for noncommercial use · <b>Windows · macOS · Linux</b> · no jq or SQL required</div>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="wrap">
+    <div class="window reveal" role="img" aria-label="Illustrative mock-up of the shape desktop explorer: a structure map of fields on the left, a sorted data table, and the generated jq and SQL below.">
+      <div class="chrome">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="fname">shape — <b>events.ndjson</b></span>
+        <span class="mocktag">illustrative mock-up</span>
+      </div>
+
+      <div class="appbar">
+        <span class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4-4"></path></svg>
+          search any value…
+        </span>
+        <span class="chip on">amount <span class="caret">&gt;</span> 0</span>
+        <span class="chip">amount <span class="caret">▼</span></span>
+        <span class="rowcount"><b>~200,000</b> rows · <b>63,204</b> match</span>
+      </div>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="side-h">Structure map</div>
+          <div class="field"><span class="fn">id</span><span class="ty num">num</span><span class="meta">200k distinct · 0% null</span></div>
+          <div class="field"><span class="fn">user</span><span class="ty str">str</span><span class="meta">48,210 distinct</span></div>
+          <div class="field"><span class="fn">event</span><span class="ty str">str</span><span class="meta">6 distinct</span></div>
+          <div class="field"><span class="fn">amount</span><span class="ty num">num</span><span class="meta">41% null · 0 – 149.00</span></div>
+          <div class="field"><span class="fn">country</span><span class="ty str">str</span><span class="meta">23 distinct</span></div>
+          <div class="field"><span class="fn">props</span><span class="ty obj">obj</span><span class="meta">nested object</span></div>
+        </aside>
+
+        <div class="grid-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th class="gut">#</th>
+                <th>id</th>
+                <th>user</th>
+                <th>event</th>
+                <th>amount<span class="sc">▼</span></th>
+                <th>props</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="gut">88</td><td class="v-num">4824</td><td class="v-str">turing</td><td class="v-str">purchase</td><td class="v-num edited">149.00</td><td class="v-obj"><u>{ plan: "pro" }</u></td></tr>
+              <tr><td class="gut">351</td><td class="v-num">4835</td><td class="v-str">ritchie</td><td class="v-str">purchase</td><td class="v-num">99.00</td><td class="v-obj"><u>{ plan: "pro" }</u></td></tr>
+              <tr><td class="gut">12</td><td class="v-num">4821</td><td class="v-str">ada.byron</td><td class="v-str">purchase</td><td class="v-num">49.00</td><td class="v-obj"><u>{ plan: "pro" }</u></td></tr>
+              <tr><td class="gut">210</td><td class="v-num">4830</td><td class="v-str">mccarthy</td><td class="v-str">purchase</td><td class="v-num">24.00</td><td class="v-obj"><u>{ plan: "team" }</u></td></tr>
+              <tr><td class="gut">47</td><td class="v-num">4823</td><td class="v-str">hopper</td><td class="v-str">purchase</td><td class="v-num">12.50</td><td class="v-obj"><u>{ plan: "team" }</u></td></tr>
+              <tr><td class="gut">103</td><td class="v-num">4826</td><td class="v-str">knuth</td><td class="v-str">purchase</td><td class="v-num">8.00</td><td class="v-obj"><u>{ plan: "pro" }</u></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="codebar">
+        <div class="code-tabs">
+          <span class="act">jq</span>
+          <span>SQL</span>
+        </div>
+        <div class="code-body">
+<pre><span class="f">.[]</span> | <span class="k">select</span>(.amount <span class="k">&gt;</span> <span class="n">0</span>) | {id, user, event, amount, props}</pre>
+        </div>
+      </div>
+    </div>
+    <p class="disclaim">Illustrative mock-up — a stylized rendering of the interface, not a screen capture. Sample data is fictional.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="diff reveal">
+    <div>
+      <div class="dk">Bigger than RAM</div>
+      <div class="dt">Streams, never loads</div>
+      <div class="dd">A multi-gigabyte file opens in one pass with bounded memory — nothing is slurped into RAM.</div>
+    </div>
+    <div>
+      <div class="dk">Honest numbers</div>
+      <div class="dt">Counts are exact — or say ~</div>
+      <div class="dd">Match counts are computed exactly. When a number is an estimate, it wears a leading tilde. No quiet guessing.</div>
+    </div>
+    <div>
+      <div class="dk">One engine</div>
+      <div class="dt">Same rows, every source</div>
+      <div class="dd">In-memory, streaming, SQLite and Parquet all run one filter model — byte-identical results whatever the file.</div>
+    </div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Everything, by clicking</div>
+      <h2>Poke at a data file the way you always wanted to.</h2>
+      <p class="sec-sub">Most tools assume you already know jq or SQL. shape is for everyone who bounces off them — the whole workflow is visual, and the query is generated for you.</p>
+    </div>
+
+    <div class="features stagger reveal">
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 9h18M9 9v11"></path></svg></div>
+        <h3>Explore the real rows</h3>
+        <p>A virtualized table over the actual data — millions of rows scroll smoothly — beside a structure map of every field with its type, presence and distinct count.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z"></path></svg></div>
+        <h3>Filter &amp; search</h3>
+        <p>Build type-aware AND/OR conditions by clicking, and search any value across every field. Applied live, with a cancellable exact match count.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M8 5l-3 3M8 5l3 3M16 19V5M16 19l-3-3M16 19l3-3"></path></svg></div>
+        <h3>Sort at any size</h3>
+        <p>Click a header to sort — exact over the whole result on every tier, even a multi-gigabyte streaming file. Row numbers stay the true source ordinals.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-7"></path></svg></div>
+        <h3>Column statistics</h3>
+        <p>Expand a field for its full profile in place: a distribution histogram, top values, quantiles and health flags — from the single open-time pass, no rescan.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4-1L20 7l-3-3L5 16z"></path><path d="M14 6l3 3"></path></svg></div>
+        <h3>Edit &amp; save a copy</h3>
+        <p>Double-click a scalar cell to change it; number literals stay exact, so a 19-digit id never loses a digit. Save back to a new file — the original is never touched.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16l-5-4-5 4z"></path></svg></div>
+        <h3>Saved views</h3>
+        <p>Name a filter + search + sort + reshape and reapply it anytime — across restarts. Plus export the full result to JSON, NDJSON, CSV, TSV or Parquet.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="queries">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Take the query with you</div>
+      <h2>Learn jq and SQL by watching them get written.</h2>
+    </div>
+
+    <div class="spot">
+      <div class="spot-panels reveal">
+        <div class="panel">
+          <div class="ph"><span class="lang jq">jq</span><span class="copy">copy</span></div>
+<pre><span class="f">.[]</span>
+  | <span class="k">select</span>(.amount &gt; <span class="n">0</span>)
+  | {id, user, event, amount, props}</pre>
+        </div>
+        <div class="panel">
+          <div class="ph"><span class="lang sql">SQL</span><span class="copy">copy</span></div>
+<pre><span class="k">select</span> id, user, event, amount, props
+<span class="k">from</span> data
+<span class="k">where</span> amount &gt; <span class="n">0</span>
+<span class="k">order by</span> amount <span class="k">desc</span></pre>
+        </div>
+      </div>
+      <div>
+        <ul class="notes">
+          <li><b>Everything you build has both.</b> The filter, search, sort and reshape you assembled by clicking appear as an exact jq expression and SQL query, ready to copy.</li>
+          <li><b>Differences are called out, not glossed.</b> Where the three engines genuinely disagree, shape says so instead of pretending they match.</li>
+          <li><b>On SQLite, it actually runs.</b> A filter it can translate is pushed into the database — measured ~12× faster on a 200k-row count — and anything it can't vouch for falls back to the same Go predicate, so the answer never changes.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Same core, on the command line</div>
+      <h2>A streaming profiler for your terminal and CI.</h2>
+      <p class="sec-sub">The cgo-free engine also ships as a CLI: profile a file in one pass, infer a JSON Schema, and fail a pull request on breaking data-shape changes.</p>
+    </div>
+
+    <div class="term reveal">
+      <div class="chrome">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="fname">bash</span>
+      </div>
+      <div class="term-body">
+<div class="row"><span class="pl">$ </span><span class="cm">shape profile events.ndjson</span></div>
+<div class="row"><span class="out">  field     type      null    distinct   range</span></div>
+<div class="row"><span class="out">  <span class="h">id</span>        number    <span class="n">0%</span>      <span class="n">200,000</span>    4821 … 61240</span></div>
+<div class="row"><span class="out">  <span class="h">user</span>      string    <span class="n">0%</span>       <span class="n">48,210</span>    "aaronson" … "zuse"</span></div>
+<div class="row"><span class="out">  <span class="h">event</span>     string    <span class="n">0%</span>            <span class="n">6</span>    purchase · signup · …</span></div>
+<div class="row"><span class="out">  <span class="h">amount</span>    number   <span class="n">41%</span>        <span class="n">312</span>    -9.99 … 149.00</span></div>
+<div class="row"><span class="out">  <span class="h">props</span>     object    <span class="n">0%</span>            —    { plan, ref }</span></div>
+<div class="row">&nbsp;</div>
+<div class="row"><span class="pl">$ </span><span class="cm">shape diff baseline.ndjson events.ndjson <span class="fl">--fail-on</span> breaking</span></div>
+<div class="row"><span class="out">  <span class="g">✓</span> amount: nullability widened (added null)   <span class="g">— non-breaking</span></div>
+<div class="row"><span class="out">  <span class="g">✓</span> country: new field (string)                <span class="g">— non-breaking</span></div>
+<div class="row"><span class="out">  <span class="g">✓ no breaking changes — exit 0</span></span></div>
+      </div>
+    </div>
+    <p class="term-cap">Gate a PR with the <code>hoijun-kim/shape@v1</code> GitHub Action, or install with <code>go install github.com/hoijun-kim/shape@latest</code>.</p>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="kicker">Open a file. See its shape.</div>
+      <h2>Stop guessing at your data. Start reading it.</h2>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/hoijun-kim/shape">★ Star on GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/hoijun-kim/shape/releases">Download</a>
+      </div>
+      <div class="install">
+<pre><span class="cm2"># desktop app — grab a build for your platform</span>
+<span class="pl">→</span> github.com/hoijun-kim/shape/releases
+
+<span class="cm2"># or the CLI, anywhere Go runs</span>
+<span class="pl">$</span> go install github.com/hoijun-kim/shape@latest</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <div class="foot-lic">
+      <b>PolyForm Noncommercial License 1.0.0.</b> shape is source-available and free for any noncommercial purpose — personal projects, research, teaching, evaluation, and use by nonprofits or government. Commercial use needs a separate license — contact <a href="mailto:hoijun.kim00@gmail.com">hoijun.kim00@gmail.com</a>.
+      <div class="disclaim">This page is an illustrative mock-up of the interface, not a screen capture.</div>
+    </div>
+    <div class="foot-meta">
+      <div class="brand" style="display:flex;align-items:center;gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 22 22" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="8.5" height="8.5" rx="1.5" fill="var(--accent)"></rect>
+          <rect x="12" y="1.5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="var(--muted)" stroke-width="1.4"></rect>
+          <rect x="1.5" y="12" width="8.5" height="8.5" rx="1.5" fill="none" stroke="var(--muted)" stroke-width="1.4"></rect>
+          <circle cx="16.25" cy="16.25" r="4.25" fill="none" stroke="var(--muted)" stroke-width="1.4"></circle>
+        </svg>
+        shape
+      </div>
+      Made by Hoijun Kim<br>
+      github.com/hoijun-kim/shape
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    root.classList.add("js");
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var nodes = document.querySelectorAll(".reveal");
+    if (reduce || !("IntersectionObserver" in window)) {
+      nodes.forEach(function (n) { n.classList.add("in"); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
+    nodes.forEach(function (n) { io.observe(n); });
+  })();
+</script>
+
+</body>
+</html>

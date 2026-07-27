@@ -12,6 +12,10 @@
   Capture in both light and dark (the header toggle) for the two stills. Put the
   files under docs/ (e.g. docs/demo.gif) and embed here. Do NOT fake or mock
   these -- they must be the real app.
+
+  A design MOCK-UP landing page (stylized UI, fictional data, not screen
+  captures) lives at docs/landing.html for reference / GitHub Pages -- it is
+  labeled as a mock-up in-page and is NOT a substitute for the real stills above.
 -->
 
 # shape
