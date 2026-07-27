@@ -176,6 +176,14 @@ Made by **Hoijun Kim** ([hoijun-kim](https://github.com/hoijun-kim)).
 
 ## License
 
-**PolyForm Noncommercial License 1.0.0** — free for any noncommercial purpose
-(personal, research, education, nonprofits); commercial use is not permitted.
-See [LICENSE](LICENSE). For a commercial license, contact the author.
+**PolyForm Noncommercial License 1.0.0.** shape is source-available and **free
+for any noncommercial purpose** — personal projects, research, teaching,
+evaluation, and use by nonprofits or government. You may run, read, modify, fork
+and redistribute it for those uses.
+
+**Commercial use is not permitted under this license.** Using shape in or for a
+business's paid product, service, or operations needs a separate commercial
+license — contact **Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;**.
+
+Full terms — including the precise definitions of "noncommercial" and "permitted
+purpose" — are in [LICENSE](LICENSE).

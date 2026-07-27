@@ -1,3 +1,42 @@
+shape — License
+
+Copyright 2026 Hoijun Kim. All rights reserved except as licensed below.
+
+shape is source-available and FREE FOR NONCOMMERCIAL USE, under the PolyForm
+Noncommercial License 1.0.0 (the full, governing text follows this summary).
+
+Plain-language summary (informational only — the license text below governs):
+
+  ALLOWED, free of charge, for any NONCOMMERCIAL purpose
+    - Personal projects and your own data.
+    - Research, teaching, and coursework.
+    - Evaluation and internal testing.
+    - Use by a charity, a school, or a government agency for its own
+      noncommercial work.
+  You may run, read, modify, fork, and redistribute shape (source or builds)
+  for those purposes, as long as the use stays noncommercial and you keep this
+  notice and the license with any copy you pass on.
+
+  NOT ALLOWED without a separate commercial license
+    - Any use in, or in support of, a business's commercial activity — for
+      example, shipping shape (or a derivative) inside a paid product or a paid
+      service, or using it in the paid operations of a for-profit company.
+  "Noncommercial" and "permitted purpose" are defined precisely in the license
+  below; when in doubt, read those sections.
+
+  COMMERCIAL LICENSE
+    Want to use shape commercially? A separate commercial license is available.
+    Contact Hoijun Kim <hoijun.kim00@gmail.com>.
+
+  NO WARRANTY
+    shape is provided "as is", without warranty, and the author is not liable
+    for any damages — see the Disclaimer and Excuse sections below.
+
+This summary is not legal advice and is not a substitute for the license. If it
+and the license below ever seem to disagree, the license below controls.
+
+--------------------------------------------------------------------------------
+
 # PolyForm Noncommercial License 1.0.0
 
 Required Notice: Copyright 2026 Hoijun Kim
