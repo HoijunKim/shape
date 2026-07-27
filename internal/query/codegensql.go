@@ -370,6 +370,19 @@ func sqlQuery(f Filter, t Transform, ctx CodegenContext) (string, []string, erro
 	if len(whereParts) > 0 {
 		stmt += " WHERE " + strings.Join(whereParts, " AND ")
 	}
+	// E9: reflect the active column sort as ORDER BY <col> [DESC].
+	if ctx.Sort.Path != "" {
+		segs, err := resolveSegs(ctx.Sort.Path, ctx.Cols)
+		if err != nil {
+			return "", nil, err
+		}
+		colExpr, w := sqlPathExpr(ctx.Sort.Path, segs, ctx.Cols, ctx.sqlTargetsSQLite())
+		warnings = append(warnings, w...)
+		stmt += " ORDER BY " + colExpr
+		if ctx.Sort.Desc {
+			stmt += " DESC"
+		}
+	}
 	lines = append(lines, stmt+";")
 
 	// Caveat comments mirror the warnings, once each, so a user reading only

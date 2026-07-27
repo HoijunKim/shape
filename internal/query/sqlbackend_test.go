@@ -793,3 +793,27 @@ func TestCrossBackend_SQLBackendMatchesMemBackend(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLBackend_SortKeepsAbsoluteIndex(t *testing.T) {
+	// n = [3,1,2] at scan positions [0,1,2]. Ascending by n -> display order
+	// n=1,2,3 -> absolute positions 1,2,0. Row.Index MUST be the absolute
+	// ordinal (matches getCell + the mem/rescan tiers), NOT the display rank.
+	sb := newTestSQLBackend(t, "t", []string{"n"}, "n INTEGER", []map[string]any{{"n": 3}, {"n": 1}, {"n": 2}})
+	p := compilePlan(t, Filter{}, Transform{}, sb.Columns())
+	cs, err := CompileSort(SortSpec{Path: "n"}, sb.Columns())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Sort = cs
+	rs, err := sb.Query(context.Background(), p, Window{Limit: 100}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rows) != 3 {
+		t.Fatalf("len(Rows) = %d, want 3", len(rs.Rows))
+	}
+	got := []int64{rs.Rows[0].Index, rs.Rows[1].Index, rs.Rows[2].Index}
+	if got[0] != 1 || got[1] != 2 || got[2] != 0 {
+		t.Fatalf("sql sorted Row.Index = %v, want [1 2 0] (absolute ordinals in sorted order)", got)
+	}
+}

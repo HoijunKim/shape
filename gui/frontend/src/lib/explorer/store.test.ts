@@ -1011,6 +1011,21 @@ describe("setSearch and getCell (E6 Task 5)", () => {
     // Mutation: return a constant instead of the binding result -> this fails.
     expect(out).toEqual({ card: { path: "user.age" }, found: true });
   });
+
+  it("setSort threads the sort into the next QueryRows payload, and a pure sort does not recount", async () => {
+    await openMemory(100);
+    await flush();
+    explorer.setSort({ path: "n", desc: true } as any);
+    await flush();
+    // Mutation: setSort calls requery but never sets currentSort -> the payload
+    // carries the default empty sort.
+    const last = vi.mocked(QueryRows).mock.calls.at(-1)![0] as any;
+    expect(last.sort).toEqual({ path: "n", desc: true });
+    // A pure sort (no filter/search) must NOT trigger a recount (-1 is the
+    // "counting" sentinel a filter/search sets) -- requery's anyActive excludes sort.
+    expect(get(explorer).total).not.toBe(-1);
+    expect(get(explorer).sort).toEqual({ path: "n", desc: true });
+  });
 });
 
 describe("edit overlay + saveEdits (E7 Task 2)", () => {

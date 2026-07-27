@@ -958,3 +958,41 @@ func TestMemBackend_Count_NilFilterMatchesAll(t *testing.T) {
 		t.Fatalf("Count(nil) = (%d, %v), want (%d, true)", total, exact, len(maps))
 	}
 }
+
+func TestMemBackend_SortsByColumnKeepingAbsoluteIndex(t *testing.T) {
+	// records: n = [3,1,2] at absolute indices [0,1,2].
+	eng, handle := openMemFixtureForSort(t)
+	rs, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Limit: 100, Sort: SortSpec{Path: "n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ascending by n -> display order is n=1,2,3 -> absolute indices 1,2,0. The
+	// Row.Index MUST be the absolute ordinal, NOT 0,1,2 (the display rank).
+	got := []int64{rs.Rows[0].Index, rs.Rows[1].Index, rs.Rows[2].Index}
+	if got[0] != 1 || got[1] != 2 || got[2] != 0 {
+		t.Fatalf("sorted Row.Index = %v, want [1 2 0] (absolute ordinals in sorted order)", got)
+	}
+}
+
+func TestMemBackend_NoSortIsSourceOrder(t *testing.T) {
+	eng, handle := openMemFixtureForSort(t)
+	rs, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Limit: 100, Sort: SortSpec{Path: ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []int64{rs.Rows[0].Index, rs.Rows[1].Index, rs.Rows[2].Index}
+	if got[0] != 0 || got[1] != 1 || got[2] != 2 {
+		t.Fatalf("unsorted Row.Index = %v, want [0 1 2] (source order)", got)
+	}
+}
+
+func TestMemBackend_SortOffsetPastEndIsEmpty(t *testing.T) {
+	eng, handle := openMemFixtureForSort(t)
+	rs, err := eng.QueryRows(context.Background(), QueryRequest{Handle: handle, Offset: 1000, Limit: 10, Sort: SortSpec{Path: "n"}})
+	if err != nil {
+		t.Fatalf("an offset past the end must not panic: %v", err)
+	}
+	if len(rs.Rows) != 0 {
+		t.Fatalf("offset past end returned %d rows, want 0", len(rs.Rows))
+	}
+}

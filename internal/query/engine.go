@@ -256,6 +256,7 @@ type QueryRequest struct {
 	Offset    int64     `json:"offset"`
 	Limit     int       `json:"limit"`
 	WantTotal bool      `json:"wantTotal"`
+	Sort      SortSpec  `json:"sort"`
 }
 
 // ProfileDTO adapts profile.ProfileResult to a TS-friendly shape (spec §8):
@@ -439,6 +440,11 @@ func (e *Engine) QueryRows(ctx context.Context, req QueryRequest) (RowSet, error
 	if err != nil {
 		return RowSet{}, fmt.Errorf("query: QueryRows: %w", err)
 	}
+	cs, err := CompileSort(req.Sort, plan.Columns)
+	if err != nil {
+		return RowSet{}, fmt.Errorf("query: sort: %w", err)
+	}
+	plan.Sort = cs
 	ctx, release := e.begin(ctx, req.RequestID)
 	defer release()
 	rs, err := backend.Query(ctx, plan, Window{Offset: req.Offset, Limit: req.Limit}, req.WantTotal)

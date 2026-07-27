@@ -336,6 +336,7 @@ type CompiledPlan struct {
 	Filter    *CompiledFilter
 	Transform *CompiledTransform
 	Columns   *ColumnModel
+	Sort      *CompiledSort // nil == no sort (source order); E9
 
 	filterKey string // canonical Filter-only hash (== Filter.Key()); see FilterKey
 }
