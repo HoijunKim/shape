@@ -80,6 +80,20 @@ export namespace query {
 	        this.found = source["found"];
 	    }
 	}
+	export class SortSpec {
+	    path: string;
+	    desc: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SortSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.desc = source["desc"];
+	    }
+	}
 	export class ColumnSpec {
 	    path: string;
 	    as?: string;
@@ -243,6 +257,7 @@ export namespace query {
 	    filter: Filter;
 	    search: string;
 	    transform: Transform;
+	    sort: SortSpec;
 	
 	    static createFrom(source: any = {}) {
 	        return new CodegenRequest(source);
@@ -254,6 +269,7 @@ export namespace query {
 	        this.filter = this.convertValues(source["filter"], Filter);
 	        this.search = source["search"];
 	        this.transform = this.convertValues(source["transform"], Transform);
+	        this.sort = this.convertValues(source["sort"], SortSpec);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -662,20 +678,6 @@ export namespace query {
 		}
 	}
 	
-	export class SortSpec {
-	    path: string;
-	    desc: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new SortSpec(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.desc = source["desc"];
-	    }
-	}
 	export class QueryRequest {
 	    requestId?: string;
 	    handle: string;

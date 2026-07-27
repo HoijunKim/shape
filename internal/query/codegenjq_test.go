@@ -547,3 +547,42 @@ func TestJQProgram_ElemNullOpsMatchTheEngine(t *testing.T) {
 		})
 	}
 }
+
+func TestJQProgram_Sort(t *testing.T) {
+	cols := codegenModel(t, []map[string]any{{"n": 1}})
+	// Ascending: aggregate the records-array, sort_by, re-stream.
+	asc, _, err := jqProgram(Filter{}, Transform{}, CodegenContext{Format: "json", Cols: cols, Sort: SortSpec{Path: "n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(asc, "sort_by(") || !strings.Contains(asc, "[ .[] |") || !strings.Contains(asc, "| .[]") {
+		t.Fatalf("jq sort must aggregate ([ .[] | ... ] | sort_by | .[]):\n%s", asc)
+	}
+	if strings.Contains(asc, "| reverse") {
+		t.Fatalf("ascending must not have a reverse stage:\n%s", asc)
+	}
+	// No sort -> no sort_by (mutation: always emit -> this fails).
+	none, _, _ := jqProgram(Filter{}, Transform{}, CodegenContext{Format: "json", Cols: cols})
+	if strings.Contains(none, "sort_by(") {
+		t.Fatalf("no sort must not emit sort_by:\n%s", none)
+	}
+	// Descending reverses.
+	desc, _, _ := jqProgram(Filter{}, Transform{}, CodegenContext{Format: "json", Cols: cols, Sort: SortSpec{Path: "n", Desc: true}})
+	if !strings.Contains(desc, "| reverse") {
+		t.Fatalf("descending must reverse:\n%s", desc)
+	}
+
+	// Real jq: the aggregate form RUNS (a streaming `| sort_by` would error) and
+	// actually sorts. A JSON-array file is `.` as-is, so runJQ's -c works.
+	input := `[{"n":3},{"n":1},{"n":2}]`
+	out := runJQ(t, asc, input) // -c: one object per line, ascending
+	i1, i2, i3 := strings.Index(out, `"n":1`), strings.Index(out, `"n":2`), strings.Index(out, `"n":3`)
+	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
+		t.Fatalf("ascending jq output not sorted: %q", out)
+	}
+	outDesc := runJQ(t, desc, input)
+	d3, d2, d1 := strings.Index(outDesc, `"n":3`), strings.Index(outDesc, `"n":2`), strings.Index(outDesc, `"n":1`)
+	if !(d3 >= 0 && d3 < d2 && d2 < d1) {
+		t.Fatalf("descending jq output not reverse-sorted: %q", outDesc)
+	}
+}

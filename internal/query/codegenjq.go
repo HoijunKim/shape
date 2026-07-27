@@ -12,6 +12,7 @@ type CodegenContext struct {
 	Format string       `json:"format"` // "json"|"ndjson"|"csv"|"parquet"|"sqlite"
 	Table  string       `json:"table,omitempty"`
 	Search string       `json:"search,omitempty"` // global search term, AND-ed with the filter
+	Sort   SortSpec     `json:"sort,omitempty"`   // active column sort (path "" = none); E9
 	Cols   *ColumnModel `json:"-"`
 	// Tainted marks columns whose stored SQLite value differs from the value
 	// shape shows (a BLOB, or a date the driver converts to RFC3339): a
@@ -409,9 +410,52 @@ func jqProgram(f Filter, t Transform, ctx CodegenContext) (string, []string, err
 		stages = append(stages, ".")
 	}
 
-	header := jqInvocationNote(ctx.Format)
-	if ctx.Search != "" {
-		header += "\n# note: " + warnSearchNumericJQ
+	body := strings.Join(stages, " | ")
+
+	// E9: sort_by needs an ARRAY, so a streaming per-record pipeline cannot just
+	// append `| sort_by(...)` -- that runs against a single object and errors
+	// (plan-review #15). Instead aggregate the whole records-array (`.`), map the
+	// per-record pipeline over it, sort, reverse for descending, then re-stream.
+	// This requires the input to be ONE array, so the invocation note changes:
+	// NDJSON must be slurped (jq -s); a JSON-array file is already `.`.
+	var header string
+	if ctx.Sort.Path != "" {
+		segs, err := resolveSegs(ctx.Sort.Path, ctx.Cols)
+		if err != nil {
+			return "", nil, err
+		}
+		body = "[ .[] | " + body + " ] | sort_by(" + jqPredicatePath(segs) + ")"
+		if ctx.Sort.Desc {
+			body += " | reverse"
+		}
+		body += " | .[]"
+		warnings = append(warnings, warnSortJQ)
+		header = jqSortInvocationNote(ctx.Format)
+		if ctx.Search != "" {
+			header += "\n# note: " + warnSearchNumericJQ
+		}
+		header += "\n# note: " + warnSortJQ
+	} else {
+		header = jqInvocationNote(ctx.Format)
+		if ctx.Search != "" {
+			header += "\n# note: " + warnSearchNumericJQ
+		}
 	}
-	return header + "\n" + strings.Join(stages, " | "), warnings, nil
+	return header + "\n" + body, warnings, nil
+}
+
+// jqSortInvocationNote documents how to feed the SORTED program: it consumes the
+// whole records-array as `.`, so NDJSON must be slurped and a JSON-array file is
+// used as-is (no `.[]` prefix, unlike the streaming note).
+func jqSortInvocationNote(format string) string {
+	switch format {
+	case "ndjson":
+		return "# jq (sorted): slurp the stream into one array -- run: jq -s '<program>' file.ndjson"
+	case "json":
+		return "# jq (sorted): the file is one JSON array -- run: jq '<program>' file.json"
+	case "csv", "parquet", "sqlite":
+		return "# jq needs JSON input; convert " + format + " first, or use the SQL below"
+	default:
+		return "# jq (sorted): run: jq '<program>' file.json"
+	}
 }

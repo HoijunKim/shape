@@ -580,6 +580,7 @@ function createExplorer() {
     try {
       const res: Generated = await Codegen({
         handle: s.handle, filter: currentFilter, search: currentSearch, transform: currentTransform,
+        sort: currentSort,
       } as any);
       if (myGen !== gen) return;
       update((st) => ({ ...st, codegen: res, codegenError: "" }));

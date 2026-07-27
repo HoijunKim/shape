@@ -28,6 +28,7 @@ const (
 	warnSearchNumericJQ = "global search matches numbers on their source text, but jq's tostring canonicalises them (e.g. 1e3 becomes \"1E+3\"), so a search for an exponent or odd-decimal number can match shape yet not this jq"
 	warnSearchColumnSQL = "the global search here only covers the source's top-level columns; shape searches every nested leaf value generically"
 	warnSearchUnrepSQL  = "the global search is not represented in this illustrative SQL: it searches nested leaf values and this source has no top-level column to translate it onto"
+	warnSortJQ          = "sort: jq's sort_by/reverse orders ties and missing-vs-null differently from shape (reverse flips equal-key rows; a missing key sorts as null), and large integers can lose precision, so a sorted view can differ from shape at the boundaries"
 )
 
 // jqIdentRe matches a path segment that can be written as a bare jq field
@@ -233,6 +234,7 @@ type CodegenRequest struct {
 	Filter    Filter    `json:"filter"`
 	Search    string    `json:"search"`
 	Transform Transform `json:"transform"`
+	Sort      SortSpec  `json:"sort"`
 }
 
 // Codegen renders f+t as the equivalent jq program and SQL query.
@@ -288,6 +290,7 @@ func (e *Engine) Codegen(req CodegenRequest) (Generated, error) {
 		Format: meta.format,
 		Table:  meta.table,
 		Search: req.Search,
+		Sort:   req.Sort,
 		Cols:   backend.Columns(),
 	}
 	if sb, ok := backend.(*sqlBackend); ok {

@@ -563,3 +563,26 @@ func TestElemNullOps_MatchTheEngine(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLQuery_Sort(t *testing.T) {
+	cols := codegenModel(t, []map[string]any{{"n": 1}})
+	asc, _, err := sqlQuery(Filter{}, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Cols: cols, Sort: SortSpec{Path: "n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(asc, "ORDER BY") {
+		t.Fatalf("SQL sort must emit ORDER BY:\n%s", asc)
+	}
+	if strings.Contains(asc, "DESC") {
+		t.Fatalf("ascending must not emit DESC:\n%s", asc)
+	}
+	desc, _, _ := sqlQuery(Filter{}, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Cols: cols, Sort: SortSpec{Path: "n", Desc: true}})
+	if !strings.Contains(desc, "ORDER BY") || !strings.Contains(desc, "DESC") {
+		t.Fatalf("descending must emit ORDER BY ... DESC:\n%s", desc)
+	}
+	// No sort -> no ORDER BY (mutation: always emit -> this fails).
+	none, _, _ := sqlQuery(Filter{}, Transform{}, CodegenContext{Format: "sqlite", Table: "t", Cols: cols})
+	if strings.Contains(none, "ORDER BY") {
+		t.Fatalf("no sort must not emit ORDER BY:\n%s", none)
+	}
+}
