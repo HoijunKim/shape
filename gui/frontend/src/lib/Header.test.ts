@@ -42,6 +42,19 @@ describe("Header", () => {
     expect(button("Code")!.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("dispatches toggleViews and reflects viewsOpen on the Views button (E11)", async () => {
+    mount({ viewsOpen: false });
+    let fired = 0;
+    header!.$on("toggleViews", () => (fired += 1));
+    // Mutation: the Views button dispatches the wrong event (e.g. toggleCode) -> fired stays 0.
+    button("Views")!.click();
+    expect(fired).toBe(1);
+    expect(button("Views")!.getAttribute("aria-pressed")).toBe("false");
+    header!.$set({ viewsOpen: true });
+    await tick();
+    expect(button("Views")!.getAttribute("aria-pressed")).toBe("true");
+  });
+
   // The E5 button sits alongside the E4 ones; a regression that dropped any of
   // them would break the corresponding panel with no other signal.
   it("still offers Columns, Filter, Schema and Export", () => {
