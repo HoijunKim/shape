@@ -120,6 +120,9 @@ jq or SQL required.
   combined with the filter and reflected in the count, the export and the code.
 - **Expand** — click a truncated object/array cell to open its full value as a
   collapsible tree, with a Copy button for the exact JSON.
+- **Row detail** — click a row's number to open the whole record as a
+  collapsible tree — the full, untruncated nested value (the row-level companion
+  to Expand), with the same Copy button.
 - **Column stats** — expand a field in the structure map to see its full profile
   in place: a distribution histogram for numbers, a top-values chart for
   categorical fields, type mix, presence/null meters, quantiles and health flags
