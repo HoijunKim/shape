@@ -35,7 +35,13 @@ Add to `gui/app_test.go` (redirect the config dir to a temp dir so the real prof
 
 ```go
 func TestApp_ViewsRoundTripAndAbsent(t *testing.T) {
-	t.Setenv("APPDATA", t.TempDir()) // os.UserConfigDir() reads APPDATA on Windows
+	// Redirect os.UserConfigDir() on EVERY platform to a temp dir so the test
+	// never touches the real user profile: Windows reads APPDATA, Linux reads
+	// XDG_CONFIG_HOME (the ubuntu-latest CI job), macOS reads HOME.
+	tmp := t.TempDir()
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
 	a := &App{eng: query.NewEngine()}
 
 	// Absent file -> ("", nil), not an error.
@@ -66,7 +72,7 @@ func TestApp_ViewsRoundTripAndAbsent(t *testing.T) {
 }
 ```
 
-(`viewsPathForTest` is a tiny test helper calling the same `viewsPath()`; or assert `os.Stat` on `filepath.Join(os.UserConfigDir(), "shape", "views.json")`. On non-Windows CI `os.UserConfigDir` reads `XDG_CONFIG_HOME`/`HOME` — set `t.Setenv("XDG_CONFIG_HOME", t.TempDir())` too so the test is cross-platform.)
+(`viewsPathForTest` is a tiny test helper calling the same `viewsPath()`; or assert `os.Stat` on `filepath.Join(os.UserConfigDir(), "shape", "views.json")` — which resolves inside `tmp` on every platform thanks to the three `t.Setenv` above, all pointing at ONE shared temp dir so `viewsPath()` is consistent across calls.)
 
 - [ ] **Step 2: Run — FAIL** (`a.LoadViews` undefined). `go test ./gui/ -run TestApp_Views -count=1`
 
@@ -157,8 +163,8 @@ git commit -m "feat(gui): LoadViews/SaveViews persist saved views to a config fi
 - Modify: `gui/frontend/src/lib/explorer/store.test.ts`
 
 **Interfaces:**
-- Consumes: generated `LoadViews`/`SaveViews`; `transformModel.projectedColumns`; the existing `setFilter`/`setSearch`/`setSort`/`setTransform` + `currentFilter`/`currentSearch`/`currentSort`/`currentTransform`.
-- Produces: `SavedView { name; filter: Filter; search: string; sort: SortSpec; transform: Transform }`; `ExplorerState.views: SavedView[]`; `explorer.saveView(name)`, `explorer.applyView(name)`, `explorer.deleteView(name)`.
+- Consumes: generated `LoadViews`/`SaveViews`; `transformModel.projectedColumns(draft: DraftColumn[], cols: Column[])` + `draftFromColumns` (existing) + a NEW `draftFromTransform` (added here); the existing `setFilter`/`setSearch`/`setSort`/`setTransform` + `currentFilter`/`currentSearch`/`currentSort`/`currentTransform`.
+- Produces: `SavedView { name; filter: Filter; search: string; sort: SortSpec; transform: Transform }`; `ExplorerState.views: SavedView[]`; `explorer.saveView(name)`, `explorer.applyView(name)`, `explorer.deleteView(name)`; `transformModel.draftFromTransform`.
 
 - [ ] **Step 1: types + init load (no test yet)**
 
@@ -186,6 +192,22 @@ let views: SavedView[] = [];
 })();
 ```
 `import { LoadViews, SaveViews } from "../../../wailsjs/go/main/App";` and `SavedView` from `./types`.
+
+NOTE (cross-test safety): the init IIFE runs at store-module load, so EVERY real-store test triggers `LoadViews()`. Test files whose App mock lacks `LoadViews`/`SaveViews` will call `undefined()` — but the `try/catch` here (and `persistViews`'s `.catch`) swallow it into a `console.warn`, so no test breaks (only `store.test.ts` needs the mock entries, to assert the payloads). This is deliberate: a missing/failed persistence layer must never crash the explorer.
+
+**CRITICAL (plan-review): views must SURVIVE open()/close().** Both reset the whole state with `set({ ...empty, ... })` (store.ts:220 open, :409 close), which would wipe `state.views` to `[]` the moment a file is opened — saved views vanish from the menu. Carry the module `views` var through BOTH resets: `set({ ...empty, status: "opening", path, views })` (open) and `set({ ...empty, views })` (close). (The `views` module var is the source of truth; the state slice is just its mirror for the UI.)
+
+In `transformModel.ts`, add the Transform→draft reconstructor `applyView` needs (there is NO existing Transform→Column[] mapping; `buildTransform` only ever emits `select`, never `drop`):
+```ts
+/** E11: reconstruct a draft from a saved view's Transform, so projectedColumns
+ *  can recompute the projected Column[] when the view is applied. An identity
+ *  transform ({} / no select) maps back to every base column visible. */
+export function draftFromTransform(t: Transform, cols: Column[]): DraftColumn[] {
+  const sel = (t as unknown as { select?: { path: string; as: string }[] }).select;
+  if (!sel || sel.length === 0) return draftFromColumns(cols);
+  return sel.map((s) => ({ path: s.path, name: s.as, visible: true }));
+}
+```
 
 - [ ] **Step 2: Write the failing test**
 
@@ -251,7 +273,12 @@ function applyView(name: string): void {
   setSearch(v.search);
   setSort(v.sort);
   const s = get({ subscribe });
-  setTransform(v.transform, projectedColumns(s.baseColumns, v.transform));
+  // setTransform needs the projected Column[]. The REAL projectedColumns takes
+  // (draft: DraftColumn[], cols: Column[]) -- NOT (cols, transform). There is no
+  // existing Transform -> Column[] mapping, so reconstruct a draft from the
+  // view's transform first (see draftFromTransform, added in Task 2 Step 1).
+  const draft = draftFromTransform(v.transform, s.baseColumns);
+  setTransform(v.transform, projectedColumns(draft, s.baseColumns));
 }
 
 function deleteView(name: string): void {
@@ -259,9 +286,9 @@ function deleteView(name: string): void {
   persistViews();
 }
 ```
-Import `projectedColumns` from `./transformModel`. Export `saveView, applyView, deleteView` in the returned object. (Confirm `projectedColumns`'s exact signature by reading transformModel.ts; adjust the call. If `setSearch("")` on an empty search is a wasteful no-op requery, it is still correct — requery supersedes.)
+Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `saveView, applyView, deleteView` in the returned object. (`projectedColumns(draft, cols)` and `draftFromTransform(transform, cols)` — the signatures confirmed above. If `setSearch("")` on an empty search is a wasteful no-op requery, it is still correct — requery supersedes.)
 
-- [ ] **Step 5: Run — PASS. Prove the mutations** — (a) omit `sort` from the `saveView` snapshot → the persist test fails; (b) drop the `setSort(v.sort)` line in `applyView` → the restore test's `q.sort` fails; (c) `views.push(v)` unconditionally (no upsert) → the upsert test finds two. Restore each.
+- [ ] **Step 5: Run — PASS. Prove the mutations** — (a) omit `sort` from the `saveView` snapshot → the persist test fails; (b) drop the `setSort(v.sort)` line in `applyView` → the restore test's `q.sort` fails; (c) `views.push(v)` unconditionally (no upsert) → the upsert test finds two. Restore each. ALSO add a **views-survive-open** test: `saveView("v1")`, then `await openMemory()`, then assert `get(explorer).views` still contains `v1` (mutation: reset with `set({ ...empty })` instead of `set({ ...empty, ..., views })` → the view vanishes and this fails).
 
 - [ ] **Step 6: check + commit** — `npm run check` 0 errors; full `store.test.ts`. Commit `feat(gui): store saveView/applyView/deleteView over a persisted views slice`.
 
@@ -288,13 +315,15 @@ Import `projectedColumns` from `./transformModel`. Export `saveView, applyView, 
 ### Task 4: App/Header wiring (the Views toggle)
 
 **Files:**
-- Modify: `gui/frontend/src/App.svelte` (a `viewsOpen` state + mount `ViewsMenu`, or route it into `Explorer` like the other panels), `gui/frontend/src/lib/Header.svelte` (a "Views" button), and `Explorer.svelte` if the menu mounts there (mirror `exportOpen`/`codeOpen`).
-- Modify: the relevant test (`Header.test.ts` or `Explorer.test.ts`).
+- Modify: `gui/frontend/src/App.svelte` (a `viewsOpen` state + mount `ViewsMenu` at APP level), `gui/frontend/src/lib/Header.svelte` (a "Views" button).
+- Modify: `Header.test.ts` (the Views-button test).
 
 **Interfaces:**
-- Produces: a header **Views** button toggling `viewsOpen`; `ViewsMenu` mounted with `open={viewsOpen}`, closing back via its `close` event.
+- Produces: a header **Views** button toggling `viewsOpen`; `ViewsMenu` mounted with `open={viewsOpen}` **in App.svelte, always rendered** (outside any status gate).
 
-- [ ] **Steps:** TDD the Header button (dispatches/toggles `viewsOpen`, mirroring the Export/Code buttons — read `Header.svelte` + `Header.test.ts` for the exact pattern) → wire `ViewsMenu` into the mount point that owns the other dialogs (`Explorer.svelte`) → mutation (the button toggles the wrong flag) → commit `feat(gui): Views button in the header opens the saved-views menu`.
+**CRITICAL (plan-review): mount ViewsMenu in App.svelte, NOT inside Explorer's `status === "ready"` branch.** Saved views are global — the menu must work before any file is opened (the header Views button is always visible). If the menu mounts only in Explorer's ready branch, the button is dead on the idle/opening screens. So: App owns `viewsOpen` and renders `<ViewsMenu open={viewsOpen} on:close={() => (viewsOpen = false)} />` as a sibling of `<Header>` / `<Explorer>` (not routed through Explorer like ExportDialog). Pass `{viewsOpen}` to Header for `aria-pressed` (mirror how `codeOpen` is passed), and toggle it from Header's `toggleViews` dispatch.
+
+- [ ] **Steps:** Read `Header.svelte` + `Header.test.ts` + `App.svelte` for the EXACT existing button/toggle pattern (Export/Code: a dispatched event `App` binds, driving a bindable prop for `aria-pressed`). TDD the Header **Views** button (toggles `viewsOpen`, `aria-pressed` reflects it — mirror the Code button's test). Mount `ViewsMenu` at App level. Mutation: the Views button toggles the wrong flag (e.g. `codeOpen`) → the aria-pressed/toggle test fails. Commit `feat(gui): Views button in the header opens the saved-views menu`.
 
 ---
 
