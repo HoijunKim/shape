@@ -17,6 +17,10 @@
   captures) lives at docs/index.html and is served via GitHub Pages at
   https://hoijun-kim.github.io/shape/ -- it is labeled as a mock-up in-page and
   is NOT a substitute for the real stills above.
+
+  That page's favicon, touch icon and Open Graph card are generated from
+  gui/build/appicon.png by `python tools/make-site-icons.py` (Pillow only).
+  Re-run it if the app icon changes.
 -->
 
 # shape
