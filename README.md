@@ -12,6 +12,10 @@
   Capture in both light and dark (the header toggle) for the two stills. Put the
   files under docs/ (e.g. docs/demo.gif) and embed here. Do NOT fake or mock
   these -- they must be the real app.
+
+  A design MOCK-UP landing page (stylized UI, fictional data, not screen
+  captures) lives at docs/landing.html for reference / GitHub Pages -- it is
+  labeled as a mock-up in-page and is NOT a substitute for the real stills above.
 -->
 
 # shape
@@ -176,6 +180,14 @@ Made by **Hoijun Kim** ([hoijun-kim](https://github.com/hoijun-kim)).
 
 ## License
 
-**PolyForm Noncommercial License 1.0.0** — free for any noncommercial purpose
-(personal, research, education, nonprofits); commercial use is not permitted.
-See [LICENSE](LICENSE). For a commercial license, contact the author.
+**PolyForm Noncommercial License 1.0.0.** shape is source-available and **free
+for any noncommercial purpose** — personal projects, research, teaching,
+evaluation, and use by nonprofits or government. You may run, read, modify, fork
+and redistribute it for those uses.
+
+**Commercial use is not permitted under this license.** Using shape in or for a
+business's paid product, service, or operations needs a separate commercial
+license — contact **Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;**.
+
+Full terms — including the precise definitions of "noncommercial" and "permitted
+purpose" — are in [LICENSE](LICENSE).
