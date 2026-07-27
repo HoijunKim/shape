@@ -25,7 +25,7 @@
 - Constants, pinned: `MaxColumns=512` (`columns.go:477`), `previewCap=200` (`columns.go:154`), `DefaultMemBudgetBytes=512<<20` (`source.go:18`), `cancelCheckStride=4096` (`rescan.go:128`), new `maxMatchCacheEntries=16` (Task 1), new `ROW_H=28`, `PAGE_ROW_BUDGET=30000`, `PAGE_ROWS_MIN=40`, `PAGE_ROWS_MAX=200` (Task 5).
 - **Commits: Conventional Commits, lowercase imperative subject, NO co-author trailer.** This overrides Claude Code's default trailer.
 - **Do not touch** the existing CLI (`internal/cmd`), `internal/visual`, `internal/diff`, or the P3 Svelte dashboard components. `go test ./...` must stay green for all 16 packages at every commit.
-- **Leave `engine.go:178`'s warning string byte-identical**, em dash included: `"large file — streaming mode (totals are estimates)"`. The spec quotes it verbatim and a test matches on it.
+- **Leave `engine.go:178`'s warning string byte-identical**, em dash included: `"large file - streaming mode (totals are estimates)"`. The spec quotes it verbatim and a test matches on it.
 - Every Go task ends with `go test ./...`; every frontend task ends with `cd gui/frontend && npm run check` reporting 0 errors.
 
 ---
@@ -52,7 +52,7 @@
   - `TestMemBackend_MatchCache_CancelledComputeNotCached`: cancel mid-scan; assert `len(mb.matchCache) == 0` afterwards.
   - `TestMemBackend_Close_ClearsMatchCache`: after `Close()`, `len(mb.matchCache) == 0` (**rewrite of the `countCache` assertion at `memstore_test.go:478`**).
   - **Delete `TestCompiledPlan_FilterKey_DistinctForDifferentTransform` (`transform_test.go:357-374`).** It pins the (Filter,Transform) key this task deliberately removes and asserts the exact inverse of `TestCompiledPlan_FilterKey_IgnoresTransform`; both cannot pass. This is an intentional behavior change, not a test dropped to go green - `TestCompiledPlan_FilterKey_IgnoresTransform` replaces it, while `TestCompiledPlan_FilterKey_DistinctForDifferentFilter` (`:338`) and `_StableForIdenticalInput` (`:317`) stay as-is and must still pass.
-- [ ] **Step 2: Run — FAIL** (`go test ./internal/query/ -run 'TestCompiledFilter_Key|TestCompiledPlan_FilterKey|TestMemBackend_(Count_Reuses|QueryAndCount|MatchCache|Close_Clears)' -v`).
+- [ ] **Step 2: Run - FAIL** (`go test ./internal/query/ -run 'TestCompiledFilter_Key|TestCompiledPlan_FilterKey|TestMemBackend_(Count_Reuses|QueryAndCount|MatchCache|Close_Clears)' -v`).
 - [ ] **Step 3: Implement.**
 
 In `internal/query/transform.go`, replace `canonicalPlanKey` (currently at `:286`) with a filter-only sibling and retarget its two callers:
@@ -207,8 +207,8 @@ func (m *memBackend) matchBitsetFor(ctx context.Context, cf *CompiledFilter) (*b
 
 `Query` (`:138`) calls `m.matchBitsetFor(ctx, p.Filter)`; `Count` (`:191`) calls `m.matchBitsetFor(ctx, f)`. No other backend has a cache, so nothing else changes. `Backend.Count`'s signature is untouched - the key rides on the `*CompiledFilter` it already receives.
 
-- [ ] **Step 4: Run — PASS + full `go test ./...`.**
-- [ ] **Step 5: Commit** — `fix(query): filter-only cache key and LRU match cache`.
+- [ ] **Step 4: Run - PASS + full `go test ./...`.**
+- [ ] **Step 5: Commit** - `fix(query): filter-only cache key and LRU match cache`.
 
 ---
 
@@ -238,7 +238,7 @@ func (m *memBackend) matchBitsetFor(ctx context.Context, cf *CompiledFilter) (*b
   - `TestEngine_Cancel_ReleasesRegistryOnCompletion`: after a normal `QueryRows`, `e.inFlightCount() == 0`, and `Cancel` on that id now errors (no leak).
   - `TestEngine_OpenSource_HonorsCancelledContext` for all four tiers (ndjson/csv fixture -> ingest, sqlite fixture, parquet fixture): an already-cancelled ctx makes `OpenSource` return `context.Canceled` rather than a populated `OpenResult`.
   - `TestOpenIngestBackend_CancelsMidIngest`: call `openIngestBackend` **directly** with a fake `readers.RecordStream` (the interface is 2 methods - `Next() (any, error)` and `Skipped() int`, `internal/readers/readers.go:17`) whose `Next` returns a small `map[string]any` every call, counts its calls, and invokes the test's `cancel()` exactly once on call 4096 - immediately before the loop's `n%cancelCheckStride == 0` check at n=4096 - then keeps returning records so the loop can never reach EOF. Pass `DefaultMemBudgetBytes` so the over-budget `break` cannot end the loop first, and any `path` string (it is only used for `fileSizeOf` and error text). Assert `errors.Is(err, context.Canceled)`. **Do not** write this as an NDJSON fixture plus a `time.Sleep` goroutine cancel: `openIngestBackend` exposes no progress signal and the only check points are n=0 and n=4096, so a sleep-aimed cancel lands either before n=0 (silently duplicating `TestEngine_OpenSource_HonorsCancelledContext` and never reaching the stride check) or after EOF (a false failure under the `-count=2` no-flakes gate, especially on Windows' coarse timer). `TestSQLBackend_Query_WantTotal_CountCancelledMidFlight` (`internal/query/sqlbackend_test.go:437`) documents this same objection for the sqlite path - follow that precedent.
-- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 2: Run - FAIL.**
 - [ ] **Step 3: Implement.**
 
 `internal/query/engine.go` - registry on the Engine, alongside the existing backend map:
@@ -409,8 +409,8 @@ and inside `openIngestBackend`'s loop (currently `source.go:122-140`), immediate
 
 After this task, `grep -n 'context.Background()' internal/query/*.go` must return **only** matches inside `_test.go` files.
 
-- [ ] **Step 4: Run — PASS + full `go test ./...` + `CGO_ENABLED=0 go build ./...`.**
-- [ ] **Step 5: Commit** — `feat(query): thread ctx through open/query and add cancel registry`.
+- [ ] **Step 4: Run - PASS + full `go test ./...` + `CGO_ENABLED=0 go build ./...`.**
+- [ ] **Step 5: Commit** - `feat(query): thread ctx through open/query and add cancel registry`.
 
 ---
 
@@ -441,7 +441,7 @@ After this task, `grep -n 'context.Background()' internal/query/*.go` must retur
   - `TestEngine_QueryRows_ReportsColumnTruncation`: the same wide fixture through `QueryRows` sets the same two fields on `RowSet`.
   - `TestAllCellKindValues_CoversEveryKind`: assert `AllCellKindValues` has exactly 8 entries and that its `Value` set equals `{CellMissing, CellNull, CellBool, CellInt, CellFloat, CellString, CellObject, CellArray}` - **a compile-time-adjacent guard so a future ninth kind cannot silently skip the TS union**.
   - `TestOpenResult_JSONShape`: `json.Marshal` an `OpenResult` and assert the raw JSON contains `"columnsTruncated"` and `"totalPaths"` (tag conformance - the frontend reads these names).
-- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 2: Run - FAIL.**
 - [ ] **Step 3: Implement.**
 
 `internal/query/engine.go`:
@@ -549,8 +549,8 @@ var AllCellKindValues = []struct {
 }
 ```
 
-- [ ] **Step 4: Run — PASS + full `go test ./...`.**
-- [ ] **Step 5: Commit** — `feat(query): CountMatches, wide-data DTO fields, CellKind enum export`.
+- [ ] **Step 4: Run - PASS + full `go test ./...`.**
+- [ ] **Step 5: Commit** - `feat(query): CountMatches, wide-data DTO fields, CellKind enum export`.
 
 ---
 
@@ -580,7 +580,7 @@ var AllCellKindValues = []struct {
   - `TestAppCancelUnknownRequest`: returns an error, does not panic (nil ctx path).
   - `TestAppCloseSourceThenQuery`: after `CloseSource(h)`, `QueryRows` on `h` errors; a second `CloseSource(h)` errors rather than panicking.
   - `TestAppRowSetMarshals`: `json.Marshal` the `RowSet` from a real query and assert no error and that the output contains `"columnsTruncated"` and `"cells"` - the Wails bridge marshals exactly this.
-- [ ] **Step 2: Run — FAIL** (`cd gui && go test ./... -run 'TestApp(OpenSource|QueryRows|CountMatches|Cancel|CloseSource|RowSet)' -v`).
+- [ ] **Step 2: Run - FAIL** (`cd gui && go test ./... -run 'TestApp(OpenSource|QueryRows|CountMatches|Cancel|CloseSource|RowSet)' -v`).
 - [ ] **Step 3: Implement.**
 
 `gui/app.go`:
@@ -677,11 +677,11 @@ Add `"sync"` and `"github.com/hoijun-kim/shape/internal/query"` to the imports. 
  gui/frontend/package.json.md5
 ```
 
-- [ ] **Step 4: Run — PASS + full `go test ./...`.** Then regenerate and stage the bindings:
+- [ ] **Step 4: Run - PASS + full `go test ./...`.** Then regenerate and stage the bindings:
   - `cd gui && wails generate module`
   - Confirm `gui/frontend/wailsjs/go/main/App.d.ts` now declares `OpenSource`, `QueryRows`, `CountMatches`, `Cancel`, `CloseSource`, and that `gui/frontend/wailsjs/go/models.ts` contains a `query` namespace with `Cell`, `Row`, `RowSet`, `Column`, `OpenResult`, `ProfileDTO`, `CountResult`.
-  - `cd gui/frontend && npm run check` — expect 0 errors.
-- [ ] **Step 5: Commit** `gui/app.go`, `gui/main.go`, `gui/app_test.go`, `.gitignore`, and the now-tracked `gui/frontend/wailsjs/` — `feat(gui): bind the query engine to the Wails app`.
+  - `cd gui/frontend && npm run check` - expect 0 errors.
+- [ ] **Step 5: Commit** `gui/app.go`, `gui/main.go`, `gui/app_test.go`, `.gitignore`, and the now-tracked `gui/frontend/wailsjs/` - `feat(gui): bind the query engine to the Wails app`.
 
 ---
 
@@ -792,7 +792,7 @@ describe("buildTree", () => {
 });
 ```
 
-- [ ] **Step 2: Run — FAIL.** `cd gui/frontend && npm i -D vitest && npm run test` — expect module-not-found for `./paging` and `./tree`. Add to `package.json` scripts: `"test": "vitest run"`.
+- [ ] **Step 2: Run - FAIL.** `cd gui/frontend && npm i -D vitest && npm run test` - expect module-not-found for `./paging` and `./tree`. Add to `package.json` scripts: `"test": "vitest run"`.
 - [ ] **Step 3: Implement.**
 
 `types.ts` re-exports the generated DTOs under short local names. Its `CellKind` export depends on Task 4's VERIFY outcome - **use exactly one of blocks (A) or (B) below and record which in the task report**:
@@ -1089,8 +1089,8 @@ export const explorer = createExplorer();
 
 **`total` is authoritative only on the exact tiers.** On `rescan` it is a seed that each landed page corrects via the EOF reconciliation above; Task 6's row addressing and Task 8's row-count label both read the reconciled value.
 
-- [ ] **Step 4: Run — PASS.** `cd gui/frontend && npm run test` (all paging + tree tests green) and `npm run check` (0 errors).
-- [ ] **Step 5: Commit** — `feat(gui): explorer store, paging and tree math`.
+- [ ] **Step 4: Run - PASS.** `cd gui/frontend && npm run test` (all paging + tree tests green) and `npm run check` (0 errors).
+- [ ] **Step 5: Commit** - `feat(gui): explorer store, paging and tree math`.
 
 ---
 
@@ -1171,7 +1171,7 @@ export function prefixSums(widths: number[]): number[] {
 `CellView.svelte` renders exactly the table above, one `{#if}` chain on `cell.kind`. Under Task 5's branch (A) the chain must compare **enum members** - `{#if cell.kind === CellKind.MISSING}` ... `CellKind.ARRAY}`, member names being Task 3's `TSName` values - not string literals; under branch (B) it compares the string literals directly. `npm run check` catches the wrong form (TS2367). `DataTable.svelte` owns the scroll container, the sticky header (each header cell is a `<button>` dispatching `focus` with its `path`, and carries `.focused` when `column.path === focusPath`), the sticky index gutter, the rAF-throttled scroll handler, and a `focusPath` reactive block that scrolls the focused column into view via `scrollLeft = prefix[i] - 24` when focus changes from outside.
 
 - [ ] **Step 2: BUILD + RUN + SCREENSHOT (the star check).** `cd gui && wails build`, run the binary, drop `internal/cmd/testdata/sample.ndjson` on it, then a wide/deep fixture. **Capture screenshots and look at them.** Check: rows render with real values; numbers right-aligned, monospace, and in the `--kind-number` blue rather than muted gray; `null` visibly different from `missing`; container cells show a preview plus a count badge - `sample.ndjson` row 3 is `"tags":[]`, whose badge must read `[0]`, not `[undefined]`, and a `false` bool and an empty string must render `false` and blank, never `undefined`; the header stays put while scrolling down and the gutter stays put while scrolling right; scrolling 10k rows stays smooth and shows skeleton rows briefly rather than blank space. On a rescan-tier fixture, drag the scrollbar to the very bottom: the last row must be a real row, not a skeleton, and the status count must have settled to an exact `N`. A blank frame, a misaligned header, cells that shift horizontally as rows load, permanent skeleton rows at the tail, or a literal `undefined` anywhere is a failure - iterate before committing.
-- [ ] **Step 3: Commit** — `feat(gui): virtualized data table with typed cell rendering`.
+- [ ] **Step 3: Commit** - `feat(gui): virtualized data table with typed cell rendering`.
 
 ---
 
@@ -1195,7 +1195,7 @@ export function prefixSums(widths: number[]): number[] {
 
 - [ ] **Step 1: Build it.**
 - [ ] **Step 2: BUILD + RUN + SCREENSHOT.** `cd gui && wails build`, open `gui/testdata/nested.ndjson`. **Look at the screenshots.** Check: nested paths nest visually; carets expand/collapse; clicking a field scrolls that column into view in the table and both the sidebar row and the column header show as focused; clicking a table header highlights the matching sidebar row and expands its ancestors; non-column fields are dimmed and inert; presence bars and drift badges render in both themes; numeric chips show the `--kind-number` blue, not muted gray. A flat list, a dead click, or a sidebar that scrolls the wrong column is a failure.
-- [ ] **Step 3: Commit** — `feat(gui): structure-map sidebar with column focus`.
+- [ ] **Step 3: Commit** - `feat(gui): structure-map sidebar with column focus`.
 
 ---
 
@@ -1219,7 +1219,7 @@ export function prefixSums(widths: number[]): number[] {
 | ready, zero rows | `total === 0` | centered "No rows in this file" plus the column count |
 | ready, zero columns | `columns.length === 0` | centered "No columns detected" plus `$explorer.skipped` when > 0 |
 | error | `status === "error"` | the existing `role="alert"` bar with the message and a Retry button that re-runs `open(path)` |
-| large file | `sampled === true` | the `warnings` strings rendered verbatim in the status bar - including `"large file — streaming mode (totals are estimates)"`, which must not be reworded |
+| large file | `sampled === true` | the `warnings` strings rendered verbatim in the status bar - including `"large file - streaming mode (totals are estimates)"`, which must not be reworded |
 | estimated total, EOF reached | `rs.truncated` on the last fetched page (Task 5 reconciles it) | the count switches from `~N` to an exact `N` and the scrollbar shortens to the real end; no skeleton rows remain below the last real row |
 | wide file | `columnsTruncated` | `showing 512 of {totalPaths} columns` in the status bar |
 | counting | `fetching === true` | a subtle "loading..." pip in the status bar; never a blanking overlay |
@@ -1230,7 +1230,7 @@ export function prefixSums(widths: number[]): number[] {
 
 - [ ] **Step 1: Build it.**
 - [ ] **Step 2: BUILD + RUN + SCREENSHOT every state.** `cd gui && wails build`. Exercise: launch with no file (drop zone); open `sample.ndjson` (ready); open a >512 MiB or `budgetMB`-forced rescan source (streaming-mode warning + `~N rows`), then scroll it to roughly row 5,000 and confirm each page lands at interactive latency - a multi-second stall per page means `wantTotal` is being sent and the backend is re-scanning to EOF - and drag to the very bottom to confirm the count settles to an exact `N` with no skeleton tail; open a wide fixture (`showing 512 of N columns`); open a nonexistent path via a stale drop (error bar + Retry); open a CSV with a header but no data rows (zero rows). **Look at each screenshot.** Then re-open a second file and confirm the first handle was closed (no memory growth across ten opens in Task Manager / `ps`). A blank frame in any state, a stale row set after switching files, or an estimate shown without its `~` is a failure.
-- [ ] **Step 3: Commit** — `feat(gui): explorer shell, status bar and state handling`.
+- [ ] **Step 3: Commit** - `feat(gui): explorer shell, status bar and state handling`.
 
 ---
 
@@ -1241,14 +1241,14 @@ export function prefixSums(widths: number[]): number[] {
 **Consumes:** everything.
 
 - [ ] **Step 1: Verify the whole stack.**
-  - `CGO_ENABLED=0 go build ./...` — passes.
-  - `go test ./... -count=2` — all 16 packages green, no flakes across both runs.
-  - `grep -n 'context.Background()' internal/query/*.go` — matches only in `_test.go` files.
-  - `cd gui/frontend && npm run check` — 0 errors, 0 warnings; `npm run test` — green.
-  - `cd gui && wails build` — succeeds; `gui/frontend/wailsjs/` is tracked and matches a fresh `wails generate module` (regenerate, then `git diff --exit-code gui/frontend/wailsjs/`).
+  - `CGO_ENABLED=0 go build ./...` - passes.
+  - `go test ./... -count=2` - all 16 packages green, no flakes across both runs.
+  - `grep -n 'context.Background()' internal/query/*.go` - matches only in `_test.go` files.
+  - `cd gui/frontend && npm run check` - 0 errors, 0 warnings; `npm run test` - green.
+  - `cd gui && wails build` - succeeds; `gui/frontend/wailsjs/` is tracked and matches a fresh `wails generate module` (regenerate, then `git diff --exit-code gui/frontend/wailsjs/`).
   - Confirm the CLI is untouched: `go run ./cmd/shape profile internal/cmd/testdata/sample.ndjson` still prints the profile.
 - [ ] **Step 2: The star screenshot.** Open `gui/testdata/nested.ndjson` (or a larger nested file), scroll deep, focus a nested field from the sidebar, and capture the single frame that would go in the README: structure map on the left, real rows filling the view, honest row count in the status bar. **Look at it.** If it does not read as "I dropped a messy file and I am browsing my data", say so in the report rather than declaring success - that judgment is the deliverable of this task.
-- [ ] **Step 3: Commit** — `docs(gui): document the explorer view` (plus any `fix(gui):`/`fix(query):` commits the verification produced, each separate).
+- [ ] **Step 3: Commit** - `docs(gui): document the explorer view` (plus any `fix(gui):`/`fix(query):` commits the verification produced, each separate).
 
 ---
 

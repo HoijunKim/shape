@@ -1,15 +1,15 @@
-# shape E10 — row detail view
+# shape E10 - row detail view
 
 Status: design approved 2026-07-27. Next: implementation plan (writing-plans).
 
 ## Goal
 
 Click a row's number (the gutter cell) to open the WHOLE record as a collapsible
-tree — the row-level companion to E6's per-cell value tree. It shows the full,
+tree - the row-level companion to E6's per-cell value tree. It shows the full,
 untruncated, nested source record (not the table's truncated/flattened preview
 cells), so a user can inspect everything in one row without hunting cell by cell.
 
-## Architecture — pure reuse of E6
+## Architecture - pure reuse of E6
 
 No new engine method, no new binding, no new component. The pieces exist:
 
@@ -19,7 +19,7 @@ No new engine method, no new binding, no new component. The pieces exist:
   `resolve(record, [])` returns `[record]` (columns.go:114), so `resolveFullCell`
   marshals the entire record. Verified. `store.getCell(index, "")` therefore
   returns `{ value: <whole record>, found: true }`.
-- **Display:** reuse `ValueTreeOverlay` (E6) verbatim — the collapsible tree +
+- **Display:** reuse `ValueTreeOverlay` (E6) verbatim - the collapsible tree +
   Copy button, capped huge-container rendering, focus trap. Label = `Row {index}`.
 - **State/guard:** Explorer already owns the overlay + a `cellReq` concurrency
   guard for `onExpandCell`. Row detail is a sibling handler `onExpandRow(index)`
@@ -48,7 +48,7 @@ handler today. Make it open the row detail:
   stays in the table).
 - No prev/next row navigation in the overlay (a follow-up).
 - Row detail shows the SOURCE record (by absolute index), independent of the
-  active projection/filter/search/sort — the same index contract E6/E7/E8 use.
+  active projection/filter/search/sort - the same index contract E6/E7/E8 use.
 
 ## Edge cases
 
@@ -73,5 +73,5 @@ handler today. Make it open the row detail:
 
 A gutter click + `expandRow` event + a11y in `DataTable.svelte`; an `onExpandRow`
 handler in `Explorer.svelte` reusing the ValueTreeOverlay + `getCell(index, "")`;
-tests for each; docs (both READMEs — a "Row detail" note next to the cell tree).
+tests for each; docs (both READMEs - a "Row detail" note next to the cell tree).
 Branch `feat/e10-row-detail` off current master. Small; ~3 tasks.

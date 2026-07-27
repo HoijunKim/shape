@@ -147,7 +147,7 @@ the app's only view once a file is open:
   place to its full profile: a distribution histogram for numeric fields, a
   top-values bar chart for low-cardinality/categorical fields, a type-mix bar, a
   presence/null meter, quantiles (median/p95, min/max), the distinct count, and
-  any health flags. It is read-only and lazy — the rich card is fetched on first
+  any health flags. It is read-only and lazy - the rich card is fetched on first
   expand from the profile the backend already retained from the open-time scan
   (no rescan), reusing the same chart geometry the profiler dashboard computes.
   It describes the SOURCE field, so under a column projection a renamed/derived
@@ -158,12 +158,12 @@ the app's only view once a file is open:
   clicking it cycles the column none → ascending → descending → none, with a
   ▲/▼ indicator on the active column (a header-body click still just scrolls the
   column into view). The sort is **exact over the entire result on every storage
-  tier** — in-memory, SQLite, Parquet, and the >512 MiB streaming tier (which
+  tier** - in-memory, SQLite, Parquet, and the >512 MiB streaming tier (which
   sorts via a bounded keys-only ordinal index, never materialising the rows), so
   it is never limited to the on-screen window. One column at a time.
   *Honest edges:* the row-number gutter shows each row's TRUE source ordinal, so
   under a sort the numbers are non-contiguous down the screen ("row 5, 900, 12")
-  — that is deliberate and is what keeps editing, cell-expand and column-stats
+  - that is deliberate and is what keeps editing, cell-expand and column-stats
   pointing at the right record (sort never renumbers rows). Go-to-row under a
   sort scrolls to the Nth row *in sorted order*, not source row N. Exporting
   still writes source order for now (the filter and search narrow an export;
@@ -173,23 +173,23 @@ the app's only view once a file is open:
 
 - **Row detail (click the row number).** Clicking a row's gutter number opens
   the WHOLE source record in the same collapsible tree overlay as the cell view
-  — the full, untruncated nested record (not the table's truncated preview
+  - the full, untruncated nested record (not the table's truncated preview
   cells), fetched by the row's absolute index so it is the true record
   regardless of the active projection, filter, search, or sort. Read-only, with
   a Copy button for the exact JSON.
 
 - **Help (the header's "?" button).** Opens an overlay explaining every feature
-  at a glance — grouped into getting-started, explore, shape-the-query, inspect,
+  at a glance - grouped into getting-started, explore, shape-the-query, inspect,
   edit-and-save, and reuse. It appears automatically the first time you launch
   the app (a one-line "seen" flag next to `views.json` remembers it), and the
   "?" reopens it anytime.
 
-- **Saved views (the header's Views menu).** Save the current query shape — the
+- **Saved views (the header's Views menu).** Save the current query shape - the
   visual filter, the global search, the column sort, and the reshape (which
-  columns are shown/reordered/renamed) — under a name, and re-apply it later. A
+  columns are shown/reordered/renamed) - under a name, and re-apply it later. A
   saved view is **global and file-independent**: it captures the query shape, not
   the open file, so the same view applies to whatever you open next
-  (best-effort — a filter condition on a column the new file lacks simply matches
+  (best-effort - a filter condition on a column the new file lacks simply matches
   nothing, and a reshape of an absent column shows empty cells). Views **persist
   across restarts** in a plain JSON file at `<user config dir>/shape/views.json`
   (`%AppData%\shape\views.json` on Windows), written atomically so a crash never
@@ -261,7 +261,7 @@ total * ROW_H` would, past ~600–800k rows (the cap divided by the display's
 DPR and the 28px row height), have the browser silently clamp the scrollable
 area and leave most of the file unreachable. `DataTable.svelte` avoids that:
 below the cap it scrolls 1:1 as usual; past it the scroll spacer is capped
-and the rows switch to a **scaled** mapping — the scrollbar still spans the
+and the rows switch to a **scaled** mapping - the scrollbar still spans the
 whole file and the true last row seats on-screen at the bottom of a drag,
 and the rows layer is natively `position: sticky` so it does not shear while
 scrolling. A **Go-to-row** box (the top-left corner cell) jumps to any exact
@@ -271,10 +271,10 @@ different scale.
 Two honest caveats past the cap: dragging the scrollbar is *coarse* (each
 pixel covers many rows, so land near your target and use Go-to-row for the
 exact one), and a very fast flick shows a brief content-lag as the visible
-rows catch up (the rows layer itself stays put — it does not shear).
+rows catch up (the rows layer itself stays put - it does not shear).
 
 ## Known limitations
 
-- **No keyboard PageUp/PageDown/Home/End yet** in the table — scroll,
+- **No keyboard PageUp/PageDown/Home/End yet** in the table - scroll,
   drag, and Go-to-row cover navigation; keyboard paging is a small
   follow-up.

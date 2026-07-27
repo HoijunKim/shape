@@ -1,4 +1,4 @@
-# shape — Data Explorer Product Spec (v3, pivot)
+# shape - Data Explorer Product Spec (v3, pivot)
 
 Date: 2026-07-17
 Status: Approved for planning (beyond-MVP / full product)
@@ -7,21 +7,21 @@ Author: hoijun (with Claude)
 ## 0. Why this pivot
 
 P1-P3 built a visual profiler dashboard. Cold review: a "pretty profiler" is a
-red-ocean local maximum — `ydata-profiling` (and DuckDB `SUMMARIZE`) already own
+red-ocean local maximum - `ydata-profiling` (and DuckDB `SUMMARIZE`) already own
 batch data-profiling, and prettiness is not differentiation. It did not produce
 "wow / I needed this." The real goal is **real user adoption** (stars follow),
 via a **broad developer pain**.
 
 New product: reuse shape's streaming any-format engine and the Wails/Svelte GUI
-as a **desktop data explorer** — "drag any data file → explore rows, filter,
+as a **desktop data explorer** - "drag any data file → explore rows, filter,
 transform, export, WITHOUT writing jq or SQL." The profiler becomes a supporting
 "structure map," not the product. The decisive missing piece in the old
-dashboard was that it showed profile *stats* but never the actual *rows* — an
+dashboard was that it showed profile *stats* but never the actual *rows* - an
 explorer shows and manipulates real data.
 
 ## 1. Positioning
 
-**"Any data file. Explore, filter, reshape, export — no jq, no SQL."**
+**"Any data file. Explore, filter, reshape, export - no jq, no SQL."**
 
 - **Audience:** the majority of developers/analysts/ML folks who work with data
   files but bounce off jq's syntax and don't want to spin up pandas/DuckDB just
@@ -38,11 +38,11 @@ explorer shows and manipulates real data.
 - **Name stays `shape`:** see the *shape* of your data + *shape* (reshape) it.
 
 ## 2. Success criteria
-- PRIMARY: real adoption — a dev reaches for `shape` instead of jq/pandas when
+- PRIMARY: real adoption - a dev reaches for `shape` instead of jq/pandas when
   they need to look at and slice an unfamiliar data file; installs it, uses it
   repeatedly. Stars follow use.
 - The "wow": drop a gnarly 500 MB JSON → instantly browse rows, click a field to
-  filter, extract the subset — without one line of jq — and get the jq/SQL for
+  filter, extract the subset - without one line of jq - and get the jq/SQL for
   free.
 
 ## 3. Full feature set (beyond-MVP)
@@ -53,11 +53,11 @@ explorer shows and manipulates real data.
    tree (nested paths) with type, presence/null, distinct, distribution, and
    drift/health flags. Clicking a field focuses/filters it. This is the profiler,
    demoted to a navigation sidebar.
-3. **Data view — the new core:**
+3. **Data view - the new core:**
    - **Table view:** virtualized rows × columns (flattened paths as columns),
      tabular for any input; cell values typed/aligned; huge-file scroll.
    - **Tree view:** nested JSON/record tree with expand/collapse for deep data.
-4. **Filter (visual, no jq):** a condition builder — field + type-aware operator
+4. **Filter (visual, no jq):** a condition builder - field + type-aware operator
    + value (numeric range, string contains/regex/equals, enum select, null/not-
    null, bool), combinable with AND/OR groups; plus a global search box. Live
    result count + updated rows.
@@ -65,7 +65,7 @@ explorer shows and manipulates real data.
    fields; (later: derive/compute, unnest arrays, group/aggregate). Output shape
    is what you export.
 6. **Export:** the filtered+transformed result to JSON/NDJSON/CSV/Parquet; AND
-   the **equivalent `jq` expression and SQL query** (codegen) — the power-user
+   the **equivalent `jq` expression and SQL query** (codegen) - the power-user
    hook and a jq/SQL learning aid.
 7. **Large files:** streaming/windowed reads, bounded memory; filtering/transform
    applied during scan, never a full in-RAM load. cgo-free; NO DuckDB.
@@ -80,7 +80,7 @@ rejoin as a "compare snapshots" tab.
 Reuse: `internal/readers`, `internal/pipeline`, `internal/profile`,
 `internal/visual`, the Wails app shell, and the Svelte chart/card components.
 
-**The one big new backend piece — a query engine over streaming data:** the
+**The one big new backend piece - a query engine over streaming data:** the
 current engine only *aggregates* (profiles); the explorer must *serve rows*,
 *filter*, and *project/transform* over files too large to hold in memory. This
 needs a design pass (its own detail-spec via a judge-panel workflow, like P2's
@@ -89,37 +89,37 @@ VisualModel). Constraints for that design:
   loading the whole file; re-scan or index as needed; bounded memory.
 - A **filter predicate** model (typed conditions → a compiled predicate applied
   during scan) and a **projection/transform** model (column select/rename/
-  flatten) — both pure, testable, deterministic.
+  flatten) - both pure, testable, deterministic.
 - A **codegen** module: the same filter+transform model → an equivalent `jq`
   expression and SQL string.
 - cgo-free, stdlib + existing internal packages only. No DuckDB.
 
 New frontend: a virtualized data table + tree view, a visual filter builder, a
-transform panel, and export UI — layered onto the existing GUI shell, with the
+transform panel, and export UI - layered onto the existing GUI shell, with the
 profiler moved into the structure-map sidebar.
 
 ## 5. Phasing (each phase shippable; build the full product across phases)
 
-- **E0 — Engine architecture** (judge-panel design → detail-spec): the row/query/
+- **E0 - Engine architecture** (judge-panel design → detail-spec): the row/query/
   filter/transform/codegen model.
-- **E1 — Query engine backend:** windowed row reader + filter predicate +
+- **E1 - Query engine backend:** windowed row reader + filter predicate +
   projection, over all readers; Go-tested. Wails bindings (`QueryRows`, etc.).
-- **E2 — Data table view:** virtualized rows×columns in the GUI, wired to E1;
+- **E2 - Data table view:** virtualized rows×columns in the GUI, wired to E1;
   structure-map sidebar (profiler reuse) drives column focus.
-- **E3 — Visual filter:** the condition builder (type-aware ops, AND/OR) → live
+- **E3 - Visual filter:** the condition builder (type-aware ops, AND/OR) → live
   filtered rows + count.
-- **E4 — Transform + export:** column select/rename/flatten + export data
+- **E4 - Transform + export:** column select/rename/flatten + export data
   (JSON/NDJSON/CSV/Parquet).
-- **E5 — Codegen:** equivalent jq + SQL for the current filter+transform; shown
+- **E5 - Codegen:** equivalent jq + SQL for the current filter+transform; shown
   and exportable.
-- **E6 — Tree view + search + polish:** nested tree, global search, dark-mode/
+- **E6 - Tree view + search + polish:** nested tree, global search, dark-mode/
   palette polish, README GIF/screenshots, launch.
 
 The existing CLI (`profile`/`schema`/`diff`) and the Action stay working
 throughout; the explorer is additive on the GUI side plus the new engine.
 
 ## 6. Risks
-- The query engine over huge files is the hard, novel part — accuracy + memory +
+- The query engine over huge files is the hard, novel part - accuracy + memory +
   speed must be tested (streaming re-scan vs indexing trade-off). Deferred to the
   E0 judge-panel.
 - Desktop GUI adoption still requires distribution (already have GoReleaser +

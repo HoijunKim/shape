@@ -113,7 +113,7 @@
         {#if card.array.present && card.array.elementTypes?.length}
           <TypeMixBar segments={card.array.elementTypes} />
         {:else}
-          <p class="empty-note">empty array — no elements</p>
+          <p class="empty-note">empty array - no elements</p>
         {/if}
       </div>
     {:else}
@@ -121,7 +121,7 @@
         <Meter {...card.meter} />
       </div>
       {#if card.form === "empty"}
-        <p class="empty-note">All null — no data to visualize.</p>
+        <p class="empty-note">All null - no data to visualize.</p>
       {/if}
     {/if}
   </section>
@@ -164,7 +164,7 @@
         {/each}
       </ul>
     {:else}
-      <p class="empty-note">No signals — field looks clean.</p>
+      <p class="empty-note">No signals - field looks clean.</p>
     {/if}
   </section>
 

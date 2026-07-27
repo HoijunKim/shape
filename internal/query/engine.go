@@ -390,7 +390,7 @@ func (e *Engine) OpenSource(ctx context.Context, req OpenRequest) (OpenResult, e
 	}
 	var warnings []string
 	if tier == "rescan" {
-		warnings = append(warnings, "large file — streaming mode (totals are estimates)")
+		warnings = append(warnings, "large file - streaming mode (totals are estimates)")
 	}
 
 	meta := sourceMeta{path: req.Path, format: cgFormat}

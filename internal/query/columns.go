@@ -203,7 +203,7 @@ type Row struct {
 //
 // toCell only classifies an actual value: an empty resolve() set (path
 // absent) is NOT represented here. Callers that resolve a path and get zero
-// values decide CellMissing themselves — that is how "missing" (0 values)
+// values decide CellMissing themselves - that is how "missing" (0 values)
 // is kept distinct from "present but null" (1 value, nil).
 func toCell(v any) Cell {
 	switch profile.KindOf(v) {

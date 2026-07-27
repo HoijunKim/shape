@@ -8,15 +8,15 @@
 
 **Tech Stack:** Go, standard library only.
 
-**AUTHORITATIVE SPEC:** `docs/superpowers/specs/2026-07-16-shape-p2-visualmodel-design.md`. Every task implements a named section of that doc verbatim — exact type definitions, thresholds, algorithms, and formulas. Each task below names its section; the design doc is the single source of exact values. Where a task shows code, it is the deliverable; where it names a design-doc section, transcribe that section exactly.
+**AUTHORITATIVE SPEC:** `docs/superpowers/specs/2026-07-16-shape-p2-visualmodel-design.md`. Every task implements a named section of that doc verbatim - exact type definitions, thresholds, algorithms, and formulas. Each task below names its section; the design doc is the single source of exact values. Where a task shows code, it is the deliverable; where it names a design-doc section, transcribe that section exactly.
 
 ## Global Constraints
 
 - Package `visual` at `internal/visual`; imports only `internal/profile`, `internal/diff`, and Go stdlib. No third-party deps. (Design "Package API".)
 - Pure data + deterministic: NO Go map is ever iterated into output; project `TypeDist` through the fixed `kindOrder` slice; `TopValues` are consumed in their existing `(count desc, value asc)` order. (Design "Determinism contract".)
 - All rounding/formatting happens in this package via the §7 helpers; geometry is emitted as fractions in 0..1. Views do `fraction × extent` only.
-- NaN/Inf are never emitted in any output field (skip them; `fmtNum` maps them to "—"). (Design §5, §7.)
-- Constant values are named consts exactly as in design §3 and §5.1 — no magic numbers inline.
+- NaN/Inf are never emitted in any output field (skip them; `fmtNum` maps them to "-"). (Design §5, §7.)
+- Constant values are named consts exactly as in design §3 and §5.1 - no magic numbers inline.
 - Existing CLI/GUI behavior is untouched by P2 (this package is new and not yet wired into any command; wiring is P3/P6).
 
 ---
@@ -75,7 +75,7 @@ func TestFmtNum(t *testing.T) {
 
 func TestFmtNumNonFinite(t *testing.T) {
 	for _, v := range []float64{nan(), inf(1), inf(-1)} {
-		if got := fmtNum(v); got != "—" {
+		if got := fmtNum(v); got != "-" {
 			t.Errorf("fmtNum(%v) = %q, want em-dash", v, got)
 		}
 	}
@@ -102,7 +102,7 @@ func TestSafeDiv(t *testing.T) {
 func TestDeriveFormat(t *testing.T) {
 	cases := map[string]string{
 		"a.csv": "CSV", "b.tsv": "TSV", "c.parquet": "Parquet", "d.sqlite": "SQLite",
-		"e.ndjson": "NDJSON", "f.jsonl": "NDJSON", "g.json": "JSON", "": "—",
+		"e.ndjson": "NDJSON", "f.jsonl": "NDJSON", "g.json": "JSON", "": "-",
 	}
 	for in, want := range cases {
 		if got := deriveFormat(in); got != want {
@@ -119,11 +119,11 @@ func inf(s int) float64 { z := 0.0; if s < 0 { return -1 / z }; return 1 / z }
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/visual/ -run 'TestFmt|TestSafeDiv|TestDeriveFormat' -v`
-Expected: FAIL — package/functions do not exist yet (build error).
+Expected: FAIL - package/functions do not exist yet (build error).
 
 - [ ] **Step 3: Transcribe the types** into `internal/visual/types.go`.
 
-Transcribe, verbatim, all Go type/const/var blocks from design doc sections: §1 (Severity, severityRank, severityIcon, kindOrder, Badge, Meter, TypeSegment, Stat), §2 (VisualModel, Summary, KPITile, FieldCard, ChartForm+consts, Histogram, HistBar, Categorical, CategoryBar, HighCardString, StrLenBar, ArrayBreakdown, SparkPoint), §3 const block (DisplayBins … NullSeriousBand), §5.1 (fieldPenalty, SkipPenaltyMax), and §6 (DiffVisualModel, DiffGroup, DiffRow, DiffDetail). Add the package clause and the `Options`, `FromProfile`, `FromDiff` signatures (bodies as `panic("not implemented")` stubs to be filled by later tasks — Task 7 fills `FromProfile`, Task 8 fills `FromDiff`). Do not add any field or const not in the design doc.
+Transcribe, verbatim, all Go type/const/var blocks from design doc sections: §1 (Severity, severityRank, severityIcon, kindOrder, Badge, Meter, TypeSegment, Stat), §2 (VisualModel, Summary, KPITile, FieldCard, ChartForm+consts, Histogram, HistBar, Categorical, CategoryBar, HighCardString, StrLenBar, ArrayBreakdown, SparkPoint), §3 const block (DisplayBins … NullSeriousBand), §5.1 (fieldPenalty, SkipPenaltyMax), and §6 (DiffVisualModel, DiffGroup, DiffRow, DiffDetail). Add the package clause and the `Options`, `FromProfile`, `FromDiff` signatures (bodies as `panic("not implemented")` stubs to be filled by later tasks - Task 7 fills `FromProfile`, Task 8 fills `FromDiff`). Do not add any field or const not in the design doc.
 
 - [ ] **Step 4: Write the formatting helpers** into `internal/visual/format.go`.
 
@@ -184,7 +184,7 @@ func trim1(x float64) string {
 // with trailing zeros trimmed.
 func fmtNum(f float64) string {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return "—"
+		return "-"
 	}
 	abs := math.Abs(f)
 	switch {
@@ -222,12 +222,12 @@ func deriveFormat(name string) string {
 	case strings.HasSuffix(l, ".json"):
 		return "JSON"
 	case name == "":
-		return "—"
+		return "-"
 	default:
 		if i := strings.LastIndex(name, "."); i >= 0 && i < len(name)-1 {
 			return strings.ToUpper(name[i+1:])
 		}
-		return "—"
+		return "-"
 	}
 }
 ```
@@ -257,7 +257,7 @@ git commit -m "feat(visual): package types, constants, formatting helpers"
 - Consumes: types from Task 1; `profile.FieldProfile`, `profile.IsTypeDrift`.
 - Produces: `selectForm(fp profile.FieldProfile) (ChartForm, string)` returning the form and the resolved `Kind` string; `enumLike(fp profile.FieldProfile) bool`; helper `dominantKind(fp profile.FieldProfile) string` (the single non-null folded kind, `""` if none/all-null).
 
-- [ ] **Step 1: Write the failing tests** — boundary cases from design §8.
+- [ ] **Step 1: Write the failing tests** - boundary cases from design §8.
 
 Create `internal/visual/form_test.go` with a table-driven test constructing `profile.FieldProfile` values and asserting `(form, kind)`. Cover exactly: empty (`Observations==0`), all-null (`NullRate>=1`), drift (two non-null kinds) -> `FormTypeMix`/"mixed", discrete numeric distinct 12 -> categorical, distinct 13 -> histogram, string distinct 25 -> categorical, distinct 26 -> highCard, promoted string (`DistinctExact=false`) -> highCard, numeric with empty `Histogram` -> meter, array -> array, bool -> meter. Plus `enumLike` true for a string with `DistinctExact`, distinct 3, `len(TopValues)==3`; false when distinct 11 or numeric.
 
@@ -387,7 +387,7 @@ func TestDisplayHistogramMaxClampsToLastBin(t *testing.T) {
 }
 ```
 
-(Requires `fptr` from Task 2's test file — both are package `visual` test files, so `fptr` is shared. If Task 3 runs before Task 2 in a fresh checkout it is not — but this plan runs tasks in order and both are in the same test package.)
+(Requires `fptr` from Task 2's test file - both are package `visual` test files, so `fptr` is shared. If Task 3 runs before Task 2 in a fresh checkout it is not - but this plan runs tasks in order and both are in the same test package.)
 
 - [ ] **Step 2: Run to verify fail.** -> FAIL (undefined `displayHistogram`).
 
@@ -405,7 +405,7 @@ git commit -m "feat(visual): equal-width histogram display re-binning"
 
 ---
 
-### Task 4: Base field geometry — type-mix, meter, sparkline, stats
+### Task 4: Base field geometry - type-mix, meter, sparkline, stats
 
 **Files:**
 - Create: `internal/visual/geometry.go`
@@ -457,7 +457,7 @@ git commit -m "feat(visual): type-mix, meter, stats, sparkline geometry"
 
 ---
 
-### Task 5: Hero payload builders — categorical, high-card, array
+### Task 5: Hero payload builders - categorical, high-card, array
 
 **Files:**
 - Create: `internal/visual/heroes.go`
@@ -493,7 +493,7 @@ git commit -m "feat(visual): categorical, high-card, and array hero payloads"
 
 **Interfaces:**
 - Consumes: Task 1 types (`Badge`, `Severity`, `severityRank`, `severityIcon`, `fieldPenalty`, `SkipPenaltyMax`); Task 2 `selectForm`; `profile` types + `IsTypeDrift`.
-- Produces: `fieldBadges(fp profile.FieldProfile, form ChartForm) []Badge` (sorted, never empty — Clean fallback); `fileBadges(res profile.ProfileResult) []Badge`; `worstSeverity([]Badge) Severity`; `healthScore(cards []FieldCard, records, skipped int) (score int, grade string, sev Severity)`.
+- Produces: `fieldBadges(fp profile.FieldProfile, form ChartForm) []Badge` (sorted, never empty - Clean fallback); `fileBadges(res profile.ProfileResult) []Badge`; `worstSeverity([]Badge) Severity`; `healthScore(cards []FieldCard, records, skipped int) (score int, grade string, sev Severity)`.
 
 - [ ] **Step 1: Write the failing tests** per design §5.1 + §8: each field trigger fires with the right severity (all_null/critical, type_drift/serious, null bands serious+warning, high_cardinality/warning via form, constant/warning, clean/good fallback); badge sort order; `healthScore` all-clean=100, all-critical=0, and a mixed case with a skip ratio asserting the exact integer score + grade band boundary (>=90 Excellent, 75/50/25 boundaries). Full assertions.
 
@@ -648,7 +648,7 @@ Plus `TestFromDiffGolden` using the same `goldenCheck`/`-update` helper (shared 
 
 - [ ] **Step 2: Run to verify fail.** -> FAIL.
 
-- [ ] **Step 3: Implement** `internal/visual/diff.go` per design §6 + §6.1: KPI tiles, verdict, group partition (fixed order, omit empty), row+detail mapping (`"—"` for empty old/new, severity rules), and `diffBadges` (`field_removed`; `type_narrowing` via strict-subset token-set comparison of `Detail.Old`/`Detail.New` split on `,`). Sort badges by (severity desc, path asc, code asc).
+- [ ] **Step 3: Implement** `internal/visual/diff.go` per design §6 + §6.1: KPI tiles, verdict, group partition (fixed order, omit empty), row+detail mapping (`"-"` for empty old/new, severity rules), and `diffBadges` (`field_removed`; `type_narrowing` via strict-subset token-set comparison of `Detail.Old`/`Detail.New` split on `,`). Sort badges by (severity desc, path asc, code asc).
 
 - [ ] **Step 4: Generate goldens + run to verify pass + full package suite.**
 
@@ -669,8 +669,8 @@ git commit -m "feat(visual): FromDiff mapping with diff-derived critical badges"
 
 **Spec coverage:** Design §1/§2/§3-consts/§5.1/§6 types -> Task 1. §3 selection + enum -> Task 2. §4 histogram -> Task 3. §5 type-mix/meter/stats/sparkline -> Task 4. §2.2 hero payloads -> Task 5. §5.1 badges+health -> Task 6. §2 assembly (Summary/KPIs/FieldCard) + §8 goldens -> Task 7. §6 diff -> Task 8. §7 helpers -> Task 1. §9 flags: (1) `Options.Format` in Task 1/7; (2) bool->meter in Task 2; (3) `StrLenBar` range in Task 5; (4) `mean` from centroids in Task 4; (5) array link in Task 5/7.
 
-**Placeholder scan:** The one intentional deferral is the stubbed `FromProfile`/`FromDiff` bodies created in Task 1 (`panic("not implemented")`), explicitly filled in Tasks 7/8 — this is a compile-ordering device, not a placeholder gap. All test bodies carry concrete assertions. No TBDs.
+**Placeholder scan:** The one intentional deferral is the stubbed `FromProfile`/`FromDiff` bodies created in Task 1 (`panic("not implemented")`), explicitly filled in Tasks 7/8 - this is a compile-ordering device, not a placeholder gap. All test bodies carry concrete assertions. No TBDs.
 
 **Type consistency:** `selectForm` returns `(ChartForm, string)` in Task 2 and is consumed that way in Tasks 6/7. `displayHistogram(fp) Histogram` (Task 3) matches its call in Task 7. Hero builders return pointers (`*Categorical` etc., Task 5) matching the optional `FieldCard` fields (Task 1). `healthScore(cards, records, skipped)` (Task 6) matches its call in Task 7's `buildSummary`. `fptr`/`num`/`hbins`/`goldenCheck` test helpers are defined once (Tasks 2/2/3/7) and reused across the shared `visual` test package.
 
-**Ordering note:** shared test helpers (`fptr` in Task 2, `hbins` in Task 3, `num` in Task 2, `goldenCheck`/`update` in Task 7) live in the single `package visual` test binary; tasks run in order so each helper exists before later tasks reference it. A reviewer running one task's tests in isolation on a partial tree may need earlier tasks present — expected under sequential execution.
+**Ordering note:** shared test helpers (`fptr` in Task 2, `hbins` in Task 3, `num` in Task 2, `goldenCheck`/`update` in Task 7) live in the single `package visual` test binary; tasks run in order so each helper exists before later tasks reference it. A reviewer running one task's tests in isolation on a partial tree may need earlier tasks present - expected under sequential execution.

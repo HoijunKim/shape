@@ -226,7 +226,7 @@
       </label>
 
       <p class="summary">
-        Exports the current filter and column selection — {rowSummary}, {$explorer.columns.length}
+        Exports the current filter and column selection - {rowSummary}, {$explorer.columns.length}
         column{$explorer.columns.length === 1 ? "" : "s"}.
       </p>
 

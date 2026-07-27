@@ -1,10 +1,10 @@
-# shape E8 — Column Statistics Implementation Plan
+# shape E8 - Column Statistics Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Expand a field in the structure-map sidebar to show that column's full profile (distribution histogram / top-values / type-mix / meters / quantiles / badges), fetched lazily from the profile the backend already retains.
 
-**Architecture:** A new lazy `Engine.ColumnStats(handle, path)` returns the `internal/visual.FieldCard` for one source field (built from `backend.Profile()` — no rescan), mirroring E6's per-cell `GetCell`. A new Wails binding + a `store.getColumnStats` wrapper feed a new `FieldStatsPanel.svelte`, which `TreeNode` mounts inline under a field row on a stats toggle, rendering the already-built (but currently unmounted) `FieldDetail` + `charts/*` components.
+**Architecture:** A new lazy `Engine.ColumnStats(handle, path)` returns the `internal/visual.FieldCard` for one source field (built from `backend.Profile()` - no rescan), mirroring E6's per-cell `GetCell`. A new Wails binding + a `store.getColumnStats` wrapper feed a new `FieldStatsPanel.svelte`, which `TreeNode` mounts inline under a field row on a stats toggle, rendering the already-built (but currently unmounted) `FieldDetail` + `charts/*` components.
 
 **Tech Stack:** Go 1.25 (`internal/query`, `internal/visual`, `internal/profile`), Wails v2.12.0 bindings, Svelte 3 + TypeScript, Vitest, `go test`.
 
@@ -97,7 +97,7 @@ func TestColumnStats_UnknownHandleErrors(t *testing.T) {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./internal/query/ -run TestColumnStats -count=1`
-Expected: FAIL — `eng.ColumnStats` undefined (does not compile).
+Expected: FAIL - `eng.ColumnStats` undefined (does not compile).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -155,7 +155,7 @@ Expected: PASS (3 tests).
 
 - [ ] **Step 5: Prove the mutations**
 
-Mutation A — ignore the path, return the first card. In `columnstats.go` replace the loop body's match with `if true {`:
+Mutation A - ignore the path, return the first card. In `columnstats.go` replace the loop body's match with `if true {`:
 ```go
 	for _, c := range model.Fields {
 		if true { // MUTATION
@@ -164,10 +164,10 @@ Mutation A — ignore the path, return the first card. In `columnstats.go` repla
 	}
 ```
 Run: `go test ./internal/query/ -run TestColumnStats -count=1`
-Expected: FAIL — `TestColumnStats_UnknownPathIsNotFound` (Found=true for a missing path). Restore.
+Expected: FAIL - `TestColumnStats_UnknownPathIsNotFound` (Found=true for a missing path). Restore.
 
-Mutation B — always Found. Change the final return to `return ColumnStatsResult{Card: model.Fields[0], Found: true}, nil`.
-Run: same. Expected: FAIL — `TestColumnStats_UnknownPathIsNotFound`. Restore.
+Mutation B - always Found. Change the final return to `return ColumnStatsResult{Card: model.Fields[0], Found: true}, nil`.
+Run: same. Expected: FAIL - `TestColumnStats_UnknownPathIsNotFound`. Restore.
 
 - [ ] **Step 6: gofmt + full package + commit**
 
@@ -229,7 +229,7 @@ func TestApp_ColumnStats_ForwardsAndReturnsACard(t *testing.T) {
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./gui/ -run TestApp_ColumnStats -count=1`
-Expected: FAIL — `a.ColumnStats` undefined.
+Expected: FAIL - `a.ColumnStats` undefined.
 
 - [ ] **Step 3: Add the interface method + the binding**
 
@@ -255,7 +255,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Prove the mutation**
 
-In `App.ColumnStats`, change the forwarded path: `req.Path = "does_not_exist"` before the call. Run Step 4 — expect FAIL (`Found=false`). Restore.
+In `App.ColumnStats`, change the forwarded path: `req.Path = "does_not_exist"` before the call. Run Step 4 - expect FAIL (`Found=false`). Restore.
 
 - [ ] **Step 6: Regenerate bindings**
 
@@ -285,12 +285,12 @@ git commit -m "feat(gui): App.ColumnStats binding for the sidebar stats view"
 
 - [ ] **Step 1: Add the type re-export**
 
-In `types.ts`, add a **type-only** import for the `visual` namespace (it is used only in a type position, so a value `import { visual }` fails `svelte-check` with TS1371 — `importsNotUsedAsValues: "error"` is set by the base `@tsconfig/svelte` config; `FieldDetail.svelte:2` already uses `import type { visual }` for the identical usage):
+In `types.ts`, add a **type-only** import for the `visual` namespace (it is used only in a type position, so a value `import { visual }` fails `svelte-check` with TS1371 - `importsNotUsedAsValues: "error"` is set by the base `@tsconfig/svelte` config; `FieldDetail.svelte:2` already uses `import type { visual }` for the identical usage):
 ```ts
 import type { visual } from "../../../wailsjs/go/models";
 export type FieldCard = visual.FieldCard;
 ```
-(Do NOT use a plain `import { visual }` here — unlike the existing `import { query }`, which is a value import only because `types.ts` uses `query.CellKind` at runtime; `visual` has no runtime use.)
+(Do NOT use a plain `import { visual }` here - unlike the existing `import { query }`, which is a value import only because `types.ts` uses `query.CellKind` at runtime; `visual` has no runtime use.)
 
 - [ ] **Step 2: Write the failing test**
 
@@ -303,7 +303,7 @@ it("getColumnStats forwards handle+path and returns the binding result", async (
 
   const out = await explorer.getColumnStats("user.age");
 
-  // Assert the HANDLE too (a dropped/hardcoded handle must fail this) — the
+  // Assert the HANDLE too (a dropped/hardcoded handle must fail this) - the
   // getCell sibling asserts handle+index+path the same way.
   expect(vi.mocked(ColumnStats).mock.calls.at(-1)![0]).toMatchObject({ handle: "h-search", path: "user.age" });
   // Mutation (Step 6): return a constant instead of the binding result -> this fails.
@@ -314,7 +314,7 @@ it("getColumnStats forwards handle+path and returns the binding result", async (
 - [ ] **Step 3: Run the test to verify it fails**
 
 Run: `cd gui/frontend && npx vitest run src/lib/explorer/store.test.ts -t "getColumnStats"`
-Expected: FAIL — `explorer.getColumnStats` is not a function.
+Expected: FAIL - `explorer.getColumnStats` is not a function.
 
 - [ ] **Step 4: Implement `getColumnStats`**
 
@@ -342,7 +342,7 @@ Expected: PASS.
 
 - [ ] **Step 6: Prove the mutation**
 
-In `getColumnStats`, replace the return with `return { card: { path: "" } as any, found: false };`. Run Step 5 — expect FAIL. Restore.
+In `getColumnStats`, replace the return with `return { card: { path: "" } as any, found: false };`. Run Step 5 - expect FAIL. Restore.
 
 - [ ] **Step 7: check + commit**
 
@@ -416,7 +416,7 @@ describe("FieldStatsPanel (E8)", () => {
 });
 ```
 
-> **Design note (folded in from the plan review):** an earlier draft carried a `curPath`/`alive` concurrency guard and a "ignores a response after destroy" test. The review proved both are inert here: TreeNode mounts one panel per field with a FIXED `path` and destroys it on collapse, so `path` never changes while mounted (no cross-column race like E6's single shared overlay), and a response that lands after `$destroy()` is already a silent no-op in Svelte 3 (the destroyed component's fragment is null — no DOM patch, no throw, no warning). The guard therefore protected nothing and its test was vacuous (it passed with the guard removed). The panel below fetches once in `onMount` — no guard.
+> **Design note (folded in from the plan review):** an earlier draft carried a `curPath`/`alive` concurrency guard and a "ignores a response after destroy" test. The review proved both are inert here: TreeNode mounts one panel per field with a FIXED `path` and destroys it on collapse, so `path` never changes while mounted (no cross-column race like E6's single shared overlay), and a response that lands after `$destroy()` is already a silent no-op in Svelte 3 (the destroyed component's fragment is null - no DOM patch, no throw, no warning). The guard therefore protected nothing and its test was vacuous (it passed with the guard removed). The panel below fetches once in `onMount` - no guard.
 
 Also create the stub `gui/frontend/src/lib/explorer/__fixtures__/CardStub.svelte`:
 ```svelte
@@ -427,7 +427,7 @@ Also create the stub `gui/frontend/src/lib/explorer/__fixtures__/CardStub.svelte
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cd gui/frontend && npx vitest run src/lib/explorer/FieldStatsPanel.test.ts`
-Expected: FAIL — component file does not exist.
+Expected: FAIL - component file does not exist.
 
 - [ ] **Step 3: Implement `FieldStatsPanel.svelte`**
 
@@ -497,7 +497,7 @@ Expected: PASS (3 tests).
 
 - [ ] **Step 5: Prove the mutation**
 
-In the template, change the not-found guard `{:else if !found || !card}` to `{:else if !card}` (render the card even when `found` is false). Run Step 4 — expect the not-found test to FAIL (a `.card-stub` renders where `.stats-empty` was expected). Restore.
+In the template, change the not-found guard `{:else if !found || !card}` to `{:else if !card}` (render the card even when `found` is false). Run Step 4 - expect the not-found test to FAIL (a `.card-stub` renders where `.stats-empty` was expected). Restore.
 
 - [ ] **Step 6: Theme audit of the revived components**
 
@@ -529,8 +529,8 @@ git commit -m "feat(gui): FieldStatsPanel fetches and renders a field's stats ca
 - [ ] **Step 1: Write the failing test**
 
 Two mocks must be added at the TOP of `StructureMap.test.ts` (it has none today, and mounts the real `StructureMap→TreeNode→FieldStatsPanel` chain):
-1. `vi.mock("./store", () => ({ explorer: { getColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true })) } }));` — the panel's only store dependency. (Neither `StructureMap.svelte` nor `TreeNode.svelte` imports `./store`, so this stubs only the panel.)
-2. `vi.mock("../FieldDetail.svelte", async () => ({ default: (await import("./__fixtures__/CardStub.svelte")).default }));` — **required**: without it the real `FieldDetail` renders the minimal `{ path: "n" }` card and `FieldDetail.svelte:69` (`card.observations.toLocaleString()`) throws a `TypeError` (unhandled rejection → the run fails and can poison sibling test files). Task 4's `CardStub` (`data-path={card.path}`) is reused.
+1. `vi.mock("./store", () => ({ explorer: { getColumnStats: vi.fn(() => Promise.resolve({ card: { path: "n" }, found: true })) } }));` - the panel's only store dependency. (Neither `StructureMap.svelte` nor `TreeNode.svelte` imports `./store`, so this stubs only the panel.)
+2. `vi.mock("../FieldDetail.svelte", async () => ({ default: (await import("./__fixtures__/CardStub.svelte")).default }));` - **required**: without it the real `FieldDetail` renders the minimal `{ path: "n" }` card and `FieldDetail.svelte:69` (`card.observations.toLocaleString()`) throws a `TypeError` (unhandled rejection → the run fails and can poison sibling test files). Task 4's `CardStub` (`data-path={card.path}`) is reused.
 
 Mount `StructureMap` with a profiled field `"n"` (this file's `f()` helper attaches a `FieldDTO`, e.g. `f("n", { types: [{ kind: "int", share: 1 }] })`) and include `"n"` in `columnPaths` so the row is not dimmed. Then:
 
@@ -561,7 +561,7 @@ it("toggling a field's stats affordance mounts the inline stats panel and fetche
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cd gui/frontend && npx vitest run src/lib/explorer/StructureMap.test.ts -t "stats"`
-Expected: FAIL — no `.stats-toggle`.
+Expected: FAIL - no `.stats-toggle`.
 
 - [ ] **Step 3: Wire the toggle into `TreeNode.svelte`**
 
@@ -572,7 +572,7 @@ Add the import + state (script section):
   let statsExpanded = false;
 ```
 
-In `onKeydown`, guard the new button the same way the seed button is guarded (so Enter/Space on it doesn't also activate the row) — extend the early-return:
+In `onKeydown`, guard the new button the same way the seed button is guarded (so Enter/Space on it doesn't also activate the row) - extend the early-return:
 ```ts
     if ((e.target as HTMLElement).closest(".seed, .stats-toggle")) return;
 ```
@@ -636,9 +636,9 @@ Expected: PASS.
 
 - [ ] **Step 5: Prove the mutations (two)**
 
-Mutation A (gate) — change the panel render guard from `{#if node.field && statsExpanded}` to `{#if node.field}` (always render). Run the test — the pre-click `expect(...".field-stats").toBeNull()` fails. Restore.
+Mutation A (gate) - change the panel render guard from `{#if node.field && statsExpanded}` to `{#if node.field}` (always render). Run the test - the pre-click `expect(...".field-stats").toBeNull()` fails. Restore.
 
-Mutation B (path forwarding) — change `<FieldStatsPanel path={node.path} />` to `path="__wrong__"`. Run the test — the `getColumnStats` call-arg assertion (`toBe("n")`) and the stub `data-path` assertion fail. Restore.
+Mutation B (path forwarding) - change `<FieldStatsPanel path={node.path} />` to `path="__wrong__"`. Run the test - the `getColumnStats` call-arg assertion (`toBe("n")`) and the stub `data-path` assertion fail. Restore.
 
 - [ ] **Step 6: full suite + check + commit**
 
@@ -671,10 +671,10 @@ Run each and record the result:
 
 Add a bullet to the Desktop GUI feature list (after **Expand**):
 ```markdown
-- **Column stats** — click a field in the structure map to expand its full
+- **Column stats** - click a field in the structure map to expand its full
   profile in place: a distribution histogram for numbers, a top-values chart for
   categorical fields, type mix, presence/null meters, quantiles and health flags
-  — all from the single profiling pass, no rescan.
+  - all from the single profiling pass, no rescan.
 ```
 
 - [ ] **Step 3: Document in `gui/README.md`**

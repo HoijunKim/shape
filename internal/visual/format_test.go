@@ -37,7 +37,7 @@ func TestFmtNum(t *testing.T) {
 
 func TestFmtNumNonFinite(t *testing.T) {
 	for _, v := range []float64{nan(), inf(1), inf(-1)} {
-		if got := fmtNum(v); got != "—" {
+		if got := fmtNum(v); got != "-" {
 			t.Errorf("fmtNum(%v) = %q, want em-dash", v, got)
 		}
 	}
@@ -64,7 +64,7 @@ func TestSafeDiv(t *testing.T) {
 func TestDeriveFormat(t *testing.T) {
 	cases := map[string]string{
 		"a.csv": "CSV", "b.tsv": "TSV", "c.parquet": "Parquet", "d.sqlite": "SQLite",
-		"e.ndjson": "NDJSON", "f.jsonl": "NDJSON", "g.json": "JSON", "": "—",
+		"e.ndjson": "NDJSON", "f.jsonl": "NDJSON", "g.json": "JSON", "": "-",
 	}
 	for in, want := range cases {
 		if got := deriveFormat(in); got != want {

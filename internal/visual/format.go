@@ -52,7 +52,7 @@ func trim1(x float64) string {
 // with trailing zeros trimmed.
 func fmtNum(f float64) string {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return "—"
+		return "-"
 	}
 	abs := math.Abs(f)
 	switch {
@@ -90,11 +90,11 @@ func deriveFormat(name string) string {
 	case strings.HasSuffix(l, ".json"):
 		return "JSON"
 	case name == "":
-		return "—"
+		return "-"
 	default:
 		if i := strings.LastIndex(name, "."); i >= 0 && i < len(name)-1 {
 			return strings.ToUpper(name[i+1:])
 		}
-		return "—"
+		return "-"
 	}
 }

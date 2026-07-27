@@ -47,7 +47,7 @@ describe("formatRowCount", () => {
 // rendering path from the unfiltered one above -- it must never regress the
 // byte-identical unfiltered strings pinned above (none of those fixtures
 // pass filterActive, so they exercise the untouched original branch).
-describe("formatRowCount — filtered (E3 Task 8)", () => {
+describe("formatRowCount - filtered (E3 Task 8)", () => {
   it("renders counting… while a filtered count is in flight, even over a stale exact total/matchCount", () => {
     const text = formatRowCount({
       total: 999, totalExact: true, rowsLoaded: true,

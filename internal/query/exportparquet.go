@@ -205,7 +205,7 @@ func (e *parquetEncoder) Warnings() []string {
 	}
 	sort.Strings(paths) // deterministic message, no map-iteration dependence
 	return []string{fmt.Sprintf(
-		"%d value(s) did not fit their Parquet column type and were written as null (%s) — export as JSON or NDJSON to keep them",
+		"%d value(s) did not fit their Parquet column type and were written as null (%s) - export as JSON or NDJSON to keep them",
 		total, strings.Join(paths, ", "),
 	)}
 }

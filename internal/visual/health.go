@@ -27,7 +27,7 @@ func fieldBadges(fp profile.FieldProfile, form ChartForm) []Badge {
 		})
 	}
 
-	// 1. all_null (critical) — mutually exclusive with the null bands below,
+	// 1. all_null (critical) - mutually exclusive with the null bands below,
 	// since NullRate>=1.0 falls outside [NullWarnBand, 1.0).
 	if fp.Observations > 0 && fp.NullRate >= 1.0 {
 		add(SevCritical, "all_null", "All null", "Every value is null.")
@@ -38,7 +38,7 @@ func fieldBadges(fp profile.FieldProfile, form ChartForm) []Badge {
 		add(SevSerious, "type_drift", "Mixed types", typeDriftDetail(fp))
 	}
 
-	// 3. null_high / null_elevated — mutually exclusive bands.
+	// 3. null_high / null_elevated - mutually exclusive bands.
 	switch {
 	case fp.NullRate >= NullSeriousBand && fp.NullRate < 1.0:
 		add(SevSerious, "null_high", "High null rate", fmtPct(fp.NullRate))

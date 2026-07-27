@@ -1,10 +1,10 @@
-# shape E10 — Row Detail View Implementation Plan
+# shape E10 - Row Detail View Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Click a row's gutter number to open the whole record as a collapsible tree (the row-level companion to E6's cell tree).
 
-**Architecture:** Pure reuse of E6 — `store.getCell(index, "")` returns the whole record (empty path → `resolve(record, [])` → `[record]`), rendered by the existing `ValueTreeOverlay`. DataTable's gutter dispatches `expandRow{index}`; Explorer's `onExpandRow` fetches into the shared overlay behind the existing `cellReq` guard. No new engine method, binding, or component.
+**Architecture:** Pure reuse of E6 - `store.getCell(index, "")` returns the whole record (empty path → `resolve(record, [])` → `[record]`), rendered by the existing `ValueTreeOverlay`. DataTable's gutter dispatches `expandRow{index}`; Explorer's `onExpandRow` fetches into the shared overlay behind the existing `cellReq` guard. No new engine method, binding, or component.
 
 **Tech Stack:** Svelte 3 + TypeScript, Vitest. (No Go change.)
 
@@ -82,7 +82,7 @@ describe("DataTable row detail (E10)", () => {
 });
 ```
 
-- [ ] **Step 2: Run — FAIL** (no `expandRow`). `cd gui/frontend && npx vitest run src/lib/explorer/DataTable.rowdetail.test.ts`
+- [ ] **Step 2: Run - FAIL** (no `expandRow`). `cd gui/frontend && npx vitest run src/lib/explorer/DataTable.rowdetail.test.ts`
 
 - [ ] **Step 3: Implement**
 
@@ -101,13 +101,13 @@ Add `expandRow: { index: number };` to the `createEventDispatcher<{...}>` type b
   on:keydown={(e) => { if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); dispatch("expandRow", { index: row.index }); } }}
 >
 ```
-(Keep the existing gutter contents — the edit-dot span + `{row.index}` / skeleton bar — unchanged inside.) Add `.gutter-cell.clickable { cursor: pointer; }` and a hover rule `.gutter-cell.clickable:hover { background: var(--surface-2); }` + a focus-visible outline, to the styles.
+(Keep the existing gutter contents - the edit-dot span + `{row.index}` / skeleton bar - unchanged inside.) Add `.gutter-cell.clickable { cursor: pointer; }` and a hover rule `.gutter-cell.clickable:hover { background: var(--surface-2); }` + a focus-visible outline, to the styles.
 
-- [ ] **Step 4: Run — PASS.**
+- [ ] **Step 4: Run - PASS.**
 
 - [ ] **Step 5: Prove the mutation**
 
-Change the dispatch to `dispatch("expandRow", { index: i })` (the render slot). Run Step 4 — the test fails (`{index:0}` ≠ `{index:7}`). Restore. (A second assertion for the skeleton no-op: add a row at a slot with `rowAt → {row:null}` and assert a click there dispatches nothing — optional, the `row &&` guard covers it.)
+Change the dispatch to `dispatch("expandRow", { index: i })` (the render slot). Run Step 4 - the test fails (`{index:0}` ≠ `{index:7}`). Restore. (A second assertion for the skeleton no-op: add a row at a slot with `rowAt → {row:null}` and assert a click there dispatches nothing - optional, the `row &&` guard covers it.)
 
 - [ ] **Step 6: check + commit**
 
@@ -158,7 +158,7 @@ it("opens the row detail overlay with the whole record on a gutter click (E10)",
 ```
 (Adjust the overlay selector to whatever `ValueTreeOverlay` renders; confirm by reading it. `rowSetFor` returns a row at index 0.)
 
-- [ ] **Step 2: Run — FAIL** (no `on:expandRow` handler; gutter click does nothing).
+- [ ] **Step 2: Run - FAIL** (no `on:expandRow` handler; gutter click does nothing).
 
 - [ ] **Step 3: Implement**
 
@@ -185,11 +185,11 @@ async function onExpandRow(e: CustomEvent<{ index: number }>): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Run — PASS.**
+- [ ] **Step 4: Run - PASS.**
 
 - [ ] **Step 5: Prove the mutation**
 
-Change the fetch to `explorer.getCell(index, "a")` (a non-root path). Run Step 4 — the `last.path === ""` assertion fails. Restore. (The `cellReq` guard is already proven by E6's onExpandCell tests; the row handler shares it verbatim.)
+Change the fetch to `explorer.getCell(index, "a")` (a non-root path). Run Step 4 - the `last.path === ""` assertion fails. Restore. (The `cellReq` guard is already proven by E6's onExpandCell tests; the row handler shares it verbatim.)
 
 - [ ] **Step 6: full suite + check + commit**
 
@@ -203,15 +203,15 @@ git commit -m "feat(gui): row detail overlay shows the whole record on a gutter 
 
 ### Task 3: verification + docs
 
-- [ ] **Step 1: Gates** — `cd gui/frontend && npx vitest run` (note the total); `npm run check` (0/0/1 pre-existing hint); `cd gui && wails build` (succeeds), revert build churn (`go.mod`, `dist/.gitkeep`, `wailsjs/runtime/*`), do NOT `git add -A`; `git diff --stat go.mod go.sum` empty (no Go change).
+- [ ] **Step 1: Gates** - `cd gui/frontend && npx vitest run` (note the total); `npm run check` (0/0/1 pre-existing hint); `cd gui && wails build` (succeeds), revert build churn (`go.mod`, `dist/.gitkeep`, `wailsjs/runtime/*`), do NOT `git add -A`; `git diff --stat go.mod go.sum` empty (no Go change).
 
-- [ ] **Step 2: Docs** — README.md: a bullet in the Desktop GUI list (near Expand/Column stats):
+- [ ] **Step 2: Docs** - README.md: a bullet in the Desktop GUI list (near Expand/Column stats):
 ```markdown
-- **Row detail** — click a row's number to open the whole record as a
-  collapsible tree (the full, untruncated nested value — the row-level companion
+- **Row detail** - click a row's number to open the whole record as a
+  collapsible tree (the full, untruncated nested value - the row-level companion
   to the cell view), with a Copy button for the exact JSON.
 ```
-gui/README.md: a short note next to the Cell value tree entry — clicking the row-number gutter opens the WHOLE source record (by absolute index, independent of projection/filter/sort) in the same tree overlay, read-only.
+gui/README.md: a short note next to the Cell value tree entry - clicking the row-number gutter opens the WHOLE source record (by absolute index, independent of projection/filter/sort) in the same tree overlay, read-only.
 
 - [ ] **Step 3: Commit** `docs: document the row detail view`.
 
@@ -221,6 +221,6 @@ gui/README.md: a short note next to the Cell value tree entry — clicking the r
 
 ## Self-review (against the spec)
 
-**Coverage:** gutter trigger + `expandRow` + a11y (T1); `onExpandRow` reusing overlay + `getCell(index,"")` + shared guard (T2); docs (T3). Read-only, no prev/next, source-record-by-index — all honored (no code adds them). ✓
+**Coverage:** gutter trigger + `expandRow` + a11y (T1); `onExpandRow` reusing overlay + `getCell(index,"")` + shared guard (T2); docs (T3). Read-only, no prev/next, source-record-by-index - all honored (no code adds them). ✓
 **Placeholders:** every step has concrete code; the two "confirm the overlay selector" / "adjust rowSetFor" notes point at real files to read. No TODO/TBD. ✓
 **Types:** `expandRow: { index: number }` dispatched (T1) == consumed by `onExpandRow(e: CustomEvent<{ index: number }>)` (T2); `getCell(index, "")` returns `{ value, found }` (E6 signature). ✓

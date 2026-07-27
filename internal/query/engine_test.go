@@ -202,7 +202,7 @@ func TestEngine_OpenSource_RescanTier_StreamingWarningExact(t *testing.T) {
 		t.Fatalf("Tier = %q, want \"rescan\" (20000 records must exceed a 1 MiB budget)", res.Tier)
 	}
 
-	const want = "large file — streaming mode (totals are estimates)" // U+2014 EM DASH, not '-' or U+2013
+	const want = "large file - streaming mode (totals are estimates)" // plain ASCII hyphen '-'
 	if len(res.Warnings) != 1 {
 		t.Fatalf("Warnings = %#v, want exactly one warning", res.Warnings)
 	}

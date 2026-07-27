@@ -18,20 +18,20 @@
     {
       title: "Getting started",
       items: [
-        { name: "Open a file", how: "drag a file onto the window, or the Open button", what: "JSON, NDJSON, CSV, TSV, Parquet or SQLite — big files stream, never fully loaded into memory." },
+        { name: "Open a file", how: "drag a file onto the window, or the Open button", what: "JSON, NDJSON, CSV, TSV, Parquet or SQLite - big files stream, never fully loaded into memory." },
       ],
     },
     {
       title: "Explore",
       items: [
-        { name: "The table", how: "scroll", what: "the real rows, virtualized — millions scroll smoothly. On huge files the Go-to-row box (top-left) jumps to any row." },
+        { name: "The table", how: "scroll", what: "the real rows, virtualized - millions scroll smoothly. On huge files the Go-to-row box (top-left) jumps to any row." },
         { name: "Structure map", how: "the left sidebar", what: "every field with its type, presence and distinct count. Click a field to focus its column in the table." },
       ],
     },
     {
       title: "Shape the query",
       items: [
-        { name: "Filter", how: "the Filter button (or a field's funnel icon)", what: "build type-aware AND/OR conditions by clicking — no jq or SQL. The count updates live." },
+        { name: "Filter", how: "the Filter button (or a field's funnel icon)", what: "build type-aware AND/OR conditions by clicking - no jq or SQL. The count updates live." },
         { name: "Search", how: "the box above the table", what: "type any value; rows narrow to those where any field contains it, case-insensitive." },
         { name: "Sort", how: "a column header's ▲/▼ caret", what: "cycle none → ascending → descending. Exact over the whole result, on any file size." },
         { name: "Reshape", how: "the Columns button", what: "choose, reorder and rename the output columns." },
@@ -42,7 +42,7 @@
       items: [
         { name: "Column stats", how: "a field's chart caret in the sidebar", what: "its full profile: a distribution histogram, top values, quantiles and health flags." },
         { name: "Cell value", how: "click a truncated object/array cell", what: "the cell's whole, untruncated value as a collapsible tree, with a Copy button." },
-        { name: "Row detail", how: "click a row's number", what: "the whole record as a collapsible tree — the row-level companion to the cell view." },
+        { name: "Row detail", how: "click a row's number", what: "the whole record as a collapsible tree - the row-level companion to the cell view." },
       ],
     },
     {
@@ -57,7 +57,7 @@
       items: [
         { name: "Export", how: "the Export button", what: "the full result (never just the window) to JSON, NDJSON, CSV, TSV or Parquet." },
         { name: "Code", how: "the Code button", what: "the equivalent jq expression and SQL query for whatever you built, ready to copy." },
-        { name: "Saved views", how: "the Views button", what: "save the current filter, search, sort and reshape under a name, and re-apply it anytime — across restarts." },
+        { name: "Saved views", how: "the Views button", what: "save the current filter, search, sort and reshape under a name, and re-apply it anytime - across restarts." },
       ],
     },
   ];
@@ -129,10 +129,10 @@
   <div class="backdrop opaque" on:click={close}></div>
   <div class="dialog" role="dialog" aria-modal="true" aria-label="Help" tabindex="-1" bind:this={dialogEl}>
     <div class="head">
-      <span class="title">shape — quick help</span>
+      <span class="title">shape - quick help</span>
       <button type="button" class="close" aria-label="Close" on:click={close}>✕</button>
     </div>
-    <p class="lead">Drop in any data file and explore the real rows — filter, reshape, edit and export, no jq or SQL. Here is every feature at a glance.</p>
+    <p class="lead">Drop in any data file and explore the real rows - filter, reshape, edit and export, no jq or SQL. Here is every feature at a glance.</p>
     <div class="body">
       {#each SECTIONS as sec (sec.title)}
         <section class="group">
@@ -141,7 +141,7 @@
             {#each sec.items as it (it.name)}
               <li>
                 <span class="name">{it.name}</span>
-                <span class="how">— {it.how}</span>
+                <span class="how">- {it.how}</span>
                 <span class="what">{it.what}</span>
               </li>
             {/each}

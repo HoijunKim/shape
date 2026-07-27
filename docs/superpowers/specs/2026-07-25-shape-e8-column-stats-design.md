@@ -1,4 +1,4 @@
-# shape E8 — column statistics in the explorer sidebar
+# shape E8 - column statistics in the explorer sidebar
 
 Status: design approved 2026-07-25. Next: implementation plan (writing-plans).
 
@@ -6,7 +6,7 @@ Status: design approved 2026-07-25. Next: implementation plan (writing-plans).
 
 Give the explorer a **per-column statistics view**: click a field in the
 structure-map sidebar and it expands in place to show that column's full
-profile — a distribution histogram for numbers, a top-values bar chart for
+profile - a distribution histogram for numbers, a top-values bar chart for
 categorical fields, a type-mix bar, presence/null meters, quantiles, and health
 badges. This is the single most-requested "tell me about this column" affordance,
 and it re-connects the explorer to `shape`'s profiler heritage without adding a
@@ -85,20 +85,20 @@ type ColumnStatsResult struct {
   column, or a path the sidebar shows but the profiler did not emit). `Card` is
   the zero value in that case; the GUI shows "No statistics for this column".
 - `req.Path` matches the profiler's field path grammar (the same `fields[].path`
-  the sidebar already renders), so no path re-parsing is needed — it is an exact
+  the sidebar already renders), so no path re-parsing is needed - it is an exact
   string match against `FieldCard.Path`.
 
 ### Binding
 
 `App.ColumnStats(req query.ColumnStatsRequest) (query.ColumnStatsResult, error)`
-— a `reqCtx` pass-through, identical in shape to `App.GetCell`. Regenerate the
+- a `reqCtx` pass-through, identical in shape to `App.GetCell`. Regenerate the
 Wails bindings (`wails generate module`), committed with the Go change. The
 `sourceEngine` interface gains `ColumnStats`; `gatedOpenEngine` embeds
 `*query.Engine` so it needs no change (same as every prior binding).
 
 ### Store
 
-`getColumnStats(path: string): Promise<{ card: FieldCard; found: boolean }>` —
+`getColumnStats(path: string): Promise<{ card: FieldCard; found: boolean }>` -
 a thin async wrapper over `App.ColumnStats`, owning no store state (the sidebar
 owns the expanded/loading/error state), rejecting on failure so the caller can
 show an error without disturbing anything else. Direct analog of `getCell`.
@@ -116,7 +116,7 @@ generated `visual` models.
 - On first expand, fetch `getColumnStats(path)`; show a loading state, then
   render `FieldDetail.svelte` fed the returned `FieldCard`, which dispatches to
   the `charts/*` components by `card.form` (histogram / categorical /
-  highCardString / typeMix / array / meter / empty) — exactly the dispatch the
+  highCardString / typeMix / array / meter / empty) - exactly the dispatch the
   P3 dashboard already used.
 - A concurrency guard (a request-id counter, the `cellReq` pattern from
   `Explorer.onExpandCell`) ensures a slow fetch for column A cannot land into
@@ -132,11 +132,11 @@ generated `visual` models.
 - **Approximate mode** (distinct via HyperLogLog past 16,384 values) → the card
   already carries the approximate distinct; render it with the existing "~"
   convention (`DistinctExact=false`), never as if exact.
-- **Theme tokens** — audit every P3 chart component for stale/undefined CSS
+- **Theme tokens** - audit every P3 chart component for stale/undefined CSS
   custom properties before shipping. Precedent: E6 shipped a `--surface-3`
   reference that resolved to nothing in both themes because the palette tops out
   at `--surface-2`. Each revived component must resolve in both light and dark.
-- **Container vs leaf** — object/array container rows: v1 shows stats for any row
+- **Container vs leaf** - object/array container rows: v1 shows stats for any row
   whose `path` has a `FieldCard` (arrays get `FieldCard.Array`); if a container
   path has no card, the toggle is absent.
 

@@ -10,15 +10,15 @@
 
 ## Global Constraints
 
-- Single streaming pass, bounded memory — never buffer the whole input; per-field histogram memory is capped at `histMaxBins` bins. (Copied from spec §2/§3.)
-- cgo-free; Go standard library only for sketches — no third-party deps. (Spec §1.)
-- Deterministic output — no per-process seed, no reliance on Go map-iteration order in results. Tie-breaks are explicit. (Matches existing `hll`/`spaceSaving` conventions.)
-- CLI output stays exactly as it is — do NOT modify `internal/render/json.go` or `internal/render/table.go`. Those use their own view structs, so adding fields to `FieldProfile` does not change CLI output. (Spec §1: "CLI stays exactly as it is.")
+- Single streaming pass, bounded memory - never buffer the whole input; per-field histogram memory is capped at `histMaxBins` bins. (Copied from spec §2/§3.)
+- cgo-free; Go standard library only for sketches - no third-party deps. (Spec §1.)
+- Deterministic output - no per-process seed, no reliance on Go map-iteration order in results. Tie-breaks are explicit. (Matches existing `hll`/`spaceSaving` conventions.)
+- CLI output stays exactly as it is - do NOT modify `internal/render/json.go` or `internal/render/table.go`. Those use their own view structs, so adding fields to `FieldProfile` does not change CLI output. (Spec §1: "CLI stays exactly as it is.")
 - Follow existing package conventions: unexported sketch struct, `newXxx` constructor, package `profile`, table-with-tolerance tests using `t.Errorf`/`t.Fatalf`.
 
 ---
 
-### Task 1: `numHistogram` sketch — add, bins, bounded merge
+### Task 1: `numHistogram` sketch - add, bins, bounded merge
 
 **Files:**
 - Create: `internal/profile/histogram.go`
@@ -109,7 +109,7 @@ func TestHistogramSnapshotIsCopy(t *testing.T) {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/profile/ -run TestHistogram -v`
-Expected: FAIL — `undefined: newNumHistogram` (build error).
+Expected: FAIL - `undefined: newNumHistogram` (build error).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -214,7 +214,7 @@ git commit -m "feat(profile): bounded streaming numeric histogram sketch"
 
 **Interfaces:**
 - Consumes: `numHistogram` from Task 1.
-- Produces: `func (h *numHistogram) quantile(q float64) float64` — returns the approximate q-quantile (q in 0..1); `math.NaN()` when empty; clamps q<=0 to the min centroid and q>=1 to the max centroid.
+- Produces: `func (h *numHistogram) quantile(q float64) float64` - returns the approximate q-quantile (q in 0..1); `math.NaN()` when empty; clamps q<=0 to the min centroid and q>=1 to the max centroid.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -275,7 +275,7 @@ func TestHistogramQuantileUniformAccuracy(t *testing.T) {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/profile/ -run TestHistogramQuantile -v`
-Expected: FAIL — `h.quantile undefined` (build error).
+Expected: FAIL - `h.quantile undefined` (build error).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -355,9 +355,9 @@ git commit -m "feat(profile): approximate quantiles from streaming histogram"
 **Interfaces:**
 - Consumes: `numHistogram`, `newNumHistogram`, `histMaxBins`, `HistBin` (Tasks 1–2).
 - Produces (on the exported `FieldProfile`):
-  - `Histogram []HistBin` — bins for numeric fields (nil for non-numeric).
-  - `Median *float64` — approximate 0.5 quantile (nil for non-numeric).
-  - `P95 *float64` — approximate 0.95 quantile (nil for non-numeric).
+  - `Histogram []HistBin` - bins for numeric fields (nil for non-numeric).
+  - `Median *float64` - approximate 0.5 quantile (nil for non-numeric).
+  - `P95 *float64` - approximate 0.95 quantile (nil for non-numeric).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -401,7 +401,7 @@ func TestAccumulatorNonNumericHasNoHistogram(t *testing.T) {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/profile/ -run TestAccumulatorNumericHistogram -v`
-Expected: FAIL — `fp.Histogram undefined` (build error).
+Expected: FAIL - `fp.Histogram undefined` (build error).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -456,12 +456,12 @@ with:
 - [ ] **Step 4: Run the full package test suite to verify pass + no regressions**
 
 Run: `go test ./internal/profile/ -v`
-Expected: PASS — the two new accumulator tests pass and every pre-existing profile test still passes.
+Expected: PASS - the two new accumulator tests pass and every pre-existing profile test still passes.
 
 - [ ] **Step 5: Verify the CLI output is unchanged**
 
 Run: `go build -o shape.exe . && ./shape.exe profile --json internal/cmd/testdata/sample.ndjson`
-Expected: identical JSON to before this plan — no `histogram`, `median`, or `p95` keys (the `--json` view struct in `internal/render/json.go` was not touched).
+Expected: identical JSON to before this plan - no `histogram`, `median`, or `p95` keys (the `--json` view struct in `internal/render/json.go` was not touched).
 
 - [ ] **Step 6: Commit**
 

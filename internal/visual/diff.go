@@ -181,12 +181,12 @@ func diffDetail(det diff.Detail) DiffDetail {
 	}
 }
 
-// dashIfEmpty renders an empty string as an em dash (—, U+2014) - matching
-// fmtNum's em dash NaN/Inf placeholder, so the same "missing value" glyph is
+// dashIfEmpty renders an empty string as a hyphen ("-") - matching
+// fmtNum's hyphen NaN/Inf placeholder, so the same "missing value" glyph is
 // used consistently across the VisualModel.
 func dashIfEmpty(s string) string {
 	if s == "" {
-		return "—"
+		return "-"
 	}
 	return s
 }

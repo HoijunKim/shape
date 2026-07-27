@@ -371,7 +371,7 @@ min/median/mean/max/p95.
 
 **Type-mix** (`[]TypeSegment`, always >=1; iterate `kindOrder`, never the map) over
 non-null observations. Fold `TypeDist` into `kindOrder` families (`number=int+float`;
-null excluded — it lives on the meter). For each family with folded share `s>0`:
+null excluded - it lives on the meter). For each family with folded share `s>0`:
 ```
 Frac = s / (1 - fp.NullRate)          // share of non-null; segments sum to ~1
 Count = round(s * fp.Observations)
@@ -415,7 +415,7 @@ File-level badges (`Path==""`): `no_records` (critical) when `Records==0`;
 field+file badges sorted by (severity desc, `Path` asc, `Code` asc); per-card
 `Badges` sorted by (severity desc, `Code` asc).
 
-**Health score (0-100)** — a field is as unhealthy as its worst badge (no stacking),
+**Health score (0-100)** - a field is as unhealthy as its worst badge (no stacking),
 averaged across fields, minus a bounded skip penalty:
 ```go
 var fieldPenalty = map[Severity]float64{
@@ -490,12 +490,12 @@ Mapping (`FromDiff`):
 - Row severity: `Breaking`->`SevCritical` (Label "Breaking"); else `added`->`SevGood`;
   else non-breaking removed/changed -> `SevWarning`. `Icon=severityIcon[Severity]`.
 - Details: map each `diff.Detail` 1:1; `Reason=string(Detail.Reason)`; empty
-  `Old`/`New`->"—"; `Severity = SevCritical if Breaking else SevWarning`.
+  `Old`/`New`->"-"; `Severity = SevCritical if Breaking else SevWarning`.
 
 ### 6.1 Diff-derived critical badges (from d.Changes only)
-- `field_removed` — critical, per `Change{Kind==Removed && Breaking}`:
+- `field_removed` - critical, per `Change{Kind==Removed && Breaking}`:
   detail "Always-present field '<path>' was removed."
-- `type_narrowing` — critical, per `Change` with a `Detail{Reason==ReasonType, Breaking}`
+- `type_narrowing` - critical, per `Change` with a `Detail{Reason==ReasonType, Breaking}`
   whose type set NARROWED: split `Detail.Old`/`Detail.New` on `,`; narrowing =
   `New ⊊ Old` (every New token in Old and `len(New) < len(Old)`). Detail
   "Field '<path>' narrowed its type set (<Old> -> <New>)."
@@ -506,7 +506,7 @@ Both carry `Path`, `Icon=severityIcon[SevCritical]`; sorted by (severity desc, p
 ```
 fmtPct(f)   -> strconv.Itoa(int(f*100+0.5)) + "%"        // matches diff.pct
 fmtInt(n)   -> thousands-grouped, "12,480" (manual, sign-prefixed)
-fmtNum(f)   -> NaN/Inf -> "—"; |v|>=1e12 T; >=1e9 B; >=1e6 M; >=1e4 K (trim1);
+fmtNum(f)   -> NaN/Inf -> "-"; |v|>=1e12 T; >=1e9 B; >=1e6 M; >=1e4 K (trim1);
                integer-valued -> FormatInt; else FormatFloat(f,'f',2,64) trailing-zeros trimmed
 fmtDistinct(n, exact) -> fmtInt(n) with "~" prefix when !exact
 safeDiv(a,b) -> 0 if b==0 else a/b
@@ -514,10 +514,10 @@ safeDiv(a,b) -> 0 if b==0 else a/b
 `trim1(x)` = `FormatFloat(x,'f',1,64)` minus a trailing `.0`. Compact suffixing
 starts at `1e4`.
 
-Format derivation (`Options.Format==""`): from the `Name`/`Source` extension —
+Format derivation (`Options.Format==""`): from the `Name`/`Source` extension -
 `.csv`->CSV, `.tsv`->TSV, `.parquet`/`.pqt`->Parquet,
 `.sqlite`/`.sqlite3`/`.db`->SQLite, `.ndjson`/`.jsonl`->NDJSON, `.json`->JSON,
-`""`->"—", else uppercased extension.
+`""`->"-", else uppercased extension.
 
 ## 8. Testing seams
 - `FromProfile` goldens: numeric-continuous, discrete-numeric, low-card/enum string,
@@ -534,24 +534,24 @@ Format derivation (`Options.Format==""`): from the `Name`/`Source` extension —
   non-nil `TypeMix` EXCEPT when `Form==FormEmpty` (all-null / no observations),
   where `TypeMix` is `nil` (JSON `null`) because there is no non-null mass to
   compose. **Renderer note (P3/P6):** gate type-mix rendering on
-  `Form !== "empty"` — a naive `card.typeMix.map(...)` would throw on the empty
+  `Form !== "empty"` - a naive `card.typeMix.map(...)` would throw on the empty
   card. The empty card is fully described by `Form:"empty"`, `Kind:"empty"`,
   `Status:"critical"`, and `Meter.nullRate==1`.
 
 ## 9. Flags carried for the plan author (all resolved; none blocking)
-1. `Options.Format` extends the spec signature — the pipeline/GUI must pass a label.
+1. `Options.Format` extends the spec signature - the pipeline/GUI must pass a label.
 2. Bool true/false split is unrecoverable from the current profiler -> bool = meter.
 3. String length is min/max only -> `StrLenBar` is a range track, not a histogram.
 4. `mean` is derived from centroids (no stored mean), approximate like median/p95.
 5. `[]` element fields render both as their own card and (via
-   `ArrayBreakdown.ElementPath`) nestable under the array container — link, never duplicate.
+   `ArrayBreakdown.ElementPath`) nestable under the array container - link, never duplicate.
 6. Per-bar / per-segment `Percent` is independently rounded, so a set can sum to
    99 or 101. It is display text only; geometry consumers use `Frac`/`Count`
    (exact). Do not assert `Σ Percent == 100`; if P3 needs pixel-perfect stacking,
    drive widths from `Frac` (or apply largest-remainder rounding in the view).
-7. Placeholder glyph for a missing value is EM DASH `—` (U+2014) everywhere
+7. Placeholder glyph for a missing value is EM DASH `-` (U+2014) everywhere
    (`fmtNum`, `deriveFormat`, empty diff `Old`/`New`); the EN DASH `–` (U+2013)
    appears only as a numeric-range separator (histogram bin labels, `StrLenBar`).
    Separately, the differ's own preformatted present/absent marker `-` (ASCII
-   hyphen) passes through diff detail text verbatim per §6 — a diff view may see
-   both `-` and `—`; normalize in the renderer if desired.
+   hyphen) passes through diff detail text verbatim per §6 - a diff view may see
+   both `-` and `-`; normalize in the renderer if desired.

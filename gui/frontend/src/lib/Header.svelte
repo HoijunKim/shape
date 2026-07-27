@@ -101,7 +101,7 @@
       on:click={() => dispatch("toggleHelp")}
       aria-pressed={helpOpen}
       aria-label="Help"
-      title="Help — what every feature does"
+      title="Help - what every feature does"
     >
       ?
     </button>

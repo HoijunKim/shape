@@ -91,10 +91,10 @@ describe("StatusBar", () => {
   it("renders a warning string verbatim, byte-for-byte, including the streaming-mode em dash", () => {
     const t = mount({
       total: 10, totalExact: false, sampled: true,
-      warnings: ["large file — streaming mode (totals are estimates)"],
+      warnings: ["large file - streaming mode (totals are estimates)"],
     });
     const warning = t.querySelector(".warning") as HTMLElement;
-    expect(warning.textContent).toBe("large file — streaming mode (totals are estimates)");
+    expect(warning.textContent).toBe("large file - streaming mode (totals are estimates)");
   });
 
   it("renders warnings even when NOT sampled (A3: the `sampled &&` gate was removed -- a future non-rescan warning must not be silently swallowed)", () => {

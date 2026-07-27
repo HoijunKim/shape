@@ -1,10 +1,10 @@
-# shape E11 — saved views
+# shape E11 - saved views
 
 Status: design approved 2026-07-27. Next: implementation plan (writing-plans).
 
 ## Goal
 
-Save the current query shape — filter + search + sort + column reshape — under a
+Save the current query shape - filter + search + sort + column reshape - under a
 name, and re-apply it later, across app restarts. The last of the four "explore
 harder" features; the app's FIRST persistence.
 
@@ -26,7 +26,7 @@ interface SavedView {
 The store already holds all four as `currentFilter` / `currentSearch` /
 `currentSort` / `currentTransform`, so a view is a snapshot of those.
 
-## Persistence — a config JSON file (user's choice)
+## Persistence - a config JSON file (user's choice)
 
 A new Go binding pair on `App`, storing an **opaque JSON string** (the view
 schema lives in the frontend; Go is a dumb, validated-by-the-frontend store):
@@ -39,7 +39,7 @@ func (a *App) SaveViews(payload string) error
 - Location: `filepath.Join(os.UserConfigDir(), "shape", "views.json")` (e.g.
   `%AppData%\shape\views.json` on Windows). `SaveViews` creates the `shape` dir
   if needed and writes **atomically** (temp file in the same dir + `os.Rename`,
-  mirroring `atomicWriteFile` in save.go — a rename is atomic on the same
+  mirroring `atomicWriteFile` in save.go - a rename is atomic on the same
   volume, so a crash mid-write never corrupts an existing views.json).
 - `LoadViews` returns `("", nil)` when the file is absent (a fresh install is not
   an error). A read error on an existing file IS returned.
@@ -60,20 +60,20 @@ func (a *App) SaveViews(payload string) error
   harmless (each cancels the previous in-flight; only the final completes).
   `setTransform` needs the projected `Column[]`, recomputed from the view's
   transform + the current file's `baseColumns` via the existing
-  `transformModel.projectedColumns` — so a view applies to whatever file is open.
+  `transformModel.projectedColumns` - so a view applies to whatever file is open.
 - `deleteView(name)`: remove + persist.
 - Applying to a DIFFERENT file is best-effort: a filter condition on a path the
   new file lacks zero-matches (the engine already handles an absent path), and a
   reshape selecting an absent column yields empty cells. Documented, not an error.
 
-## UI — a header "Views" menu
+## UI - a header "Views" menu
 
 The header row today is `theme | Columns | Filter | Open | Schema | Export |
 Code`. Add a **Views** button that toggles a small dropdown menu (a bindable
 `viewsOpen` prop, routed like `filterOpen`/`exportOpen`):
 
 - A "Save current view" row: a text input for the name + a Save button (disabled
-  when the name is blank or no file is open — a view of nothing is meaningless).
+  when the name is blank or no file is open - a view of nothing is meaningless).
 - A list of saved views: each row is the name (click → `applyView`) + a `×`
   delete button. An empty state ("No saved views yet").
 - Closes on Escape / outside click (mirror the existing dialogs' behaviour).
@@ -83,7 +83,7 @@ Code`. Add a **Views** button that toggles a small dropdown menu (a bindable
 - No per-file scoping, no import/export UI, no view for the open FILE itself (a
   view is a query shape, applied to whatever is open).
 - No rename (delete + re-save under the new name).
-- The Go side stores an opaque blob — it does not validate or migrate the view
+- The Go side stores an opaque blob - it does not validate or migrate the view
   schema (the frontend owns it).
 
 ## Edge cases
@@ -123,4 +123,4 @@ Code`. Add a **Views** button that toggles a small dropdown menu (a bindable
 tests per layer; docs (both READMEs, incl. the views.json location + the
 best-effort cross-file note). Branch `feat/e11-saved-views` off current master.
 This touches Go (a new binding + first config-file persistence), the store, and a
-new UI surface — comparable to E8 in size; the plan will decompose into ~6 tasks.
+new UI surface - comparable to E8 in size; the plan will decompose into ~6 tasks.

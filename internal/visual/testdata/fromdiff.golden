@@ -152,8 +152,8 @@
             {
               "reason": "presence",
               "message": "presence edge case",
-              "old": "—",
-              "new": "—",
+              "old": "-",
+              "new": "-",
               "breaking": false,
               "severity": "warning"
             }

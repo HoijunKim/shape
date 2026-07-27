@@ -1,11 +1,11 @@
-# shape E12 — in-app help / onboarding overlay
+# shape E12 - in-app help / onboarding overlay
 
 Status: design approved 2026-07-27. Next: implementation plan (writing-plans).
 
 ## Goal
 
 Give first-time users a way in: a **Help ("?") button** in the header that opens
-an **opaque overlay** explaining every feature, and — on the very first launch —
+an **opaque overlay** explaining every feature, and - on the very first launch -
 that overlay opens automatically once. Serves the launch/onboarding goal (the
 recorded GIF/screenshots remain a human task the recording environment can't do).
 
@@ -15,26 +15,26 @@ A modal `HelpOverlay.svelte`:
 
 - **Opaque backdrop** covering the whole app (a solid dim, not the transparent
   scrim the dropdowns use), so the help is the sole focus.
-- A **centered, scrollable panel** titled "shape — quick help", holding the
+- A **centered, scrollable panel** titled "shape - quick help", holding the
   feature explanations grouped into sections. Each item = a bold **name** + a
   one-line what + the **gesture** (how to reach it). Content (from the GUI
   feature set):
-  - **Getting started** — Open a file (drag a JSON/NDJSON/CSV/TSV/Parquet/SQLite
+  - **Getting started** - Open a file (drag a JSON/NDJSON/CSV/TSV/Parquet/SQLite
     file onto the window, or the Open button); big files stream, no full load.
-  - **Explore** — the virtualized table of real rows (Go-to-row jumps anywhere on
+  - **Explore** - the virtualized table of real rows (Go-to-row jumps anywhere on
     huge files); the structure-map sidebar (every field + type/presence/distinct;
     click a field to focus its column).
-  - **Shape the query** — Filter (the Filter button: type-aware AND/OR conditions
+  - **Shape the query** - Filter (the Filter button: type-aware AND/OR conditions
     by clicking; the funnel on a field seeds one); Search (the box above the
     table: any value, any field); Sort (a column header's ▲/▼ caret: none → asc →
     desc); Reshape (the Columns button: choose/reorder/rename output columns).
-  - **Inspect** — Column stats (the chart caret on a sidebar field: histogram /
+  - **Inspect** - Column stats (the chart caret on a sidebar field: histogram /
     top values / quantiles); Cell value (click a truncated object/array cell for
     the full tree); Row detail (click a row's number for the whole record).
-  - **Edit & save** — Edit (double-click a scalar cell; exact number literals;
+  - **Edit & save** - Edit (double-click a scalar cell; exact number literals;
     edited cells highlight, "Edited only" lists them); Save a copy (the whole file
     written back with your edits, original untouched).
-  - **Reuse & take away** — Export (the full result to 5 formats); Code (the
+  - **Reuse & take away** - Export (the full result to 5 formats); Code (the
     equivalent jq + SQL to copy); Saved views (the Views button: save
     filter+search+sort+reshape under a name).
 - Closes on `×` / Escape / backdrop click, with focus trap + restore (mirror the
@@ -51,13 +51,13 @@ A "?" button in the header (near the theme toggle / Views), dispatching
 On the very first launch the overlay opens once, then never again unless the user
 clicks "?". The "seen" flag persists to the config dir, like saved views:
 
-- `App.HelpSeen() (bool, error)` — true iff `<UserConfigDir>/shape/help-seen`
+- `App.HelpSeen() (bool, error)` - true iff `<UserConfigDir>/shape/help-seen`
   exists (an absent/unreadable flag → false, never an error that blocks startup).
-- `App.MarkHelpSeen() error` — creates the `shape` dir + writes the flag file
+- `App.MarkHelpSeen() error` - creates the `shape` dir + writes the flag file
   (`os.WriteFile`, content is irrelevant; write-once, so no atomic-rename needed).
 - A shared `configPath(name string) (string, error)` helper factors the
   `<UserConfigDir>/shape/<name>` join (E11's `viewsPath()` becomes
-  `configPath("views.json")` — a one-line change, no behaviour change).
+  `configPath("views.json")` - a one-line change, no behaviour change).
 - Frontend: in `App.svelte`'s `onMount`, `if (!(await HelpSeen())) { helpOpen =
   true; void MarkHelpSeen(); }`, wrapped so a persistence failure just skips the
   auto-open (never crashes startup). The button path is unaffected.
@@ -66,7 +66,7 @@ clicks "?". The "seen" flag persists to the config dir, like saved views:
 
 - No per-feature interactive coach-marks / spotlight on the real UI (a single
   static explanatory panel, not a guided tour).
-- No versioned "what's new" — `help-seen` is a single boolean, not a version.
+- No versioned "what's new" - `help-seen` is a single boolean, not a version.
 - The overlay content is static copy maintained in the component (not generated).
 
 ## Edge cases

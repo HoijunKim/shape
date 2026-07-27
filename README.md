@@ -20,7 +20,7 @@
 
 # shape
 
-**Drag in any data file — JSON, NDJSON, CSV, TSV, Parquet, SQLite — and explore
+**Drag in any data file - JSON, NDJSON, CSV, TSV, Parquet, SQLite - and explore
 the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 
 [![ci](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml/badge.svg)](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml)
@@ -29,14 +29,14 @@ the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 
 Most tools for poking at a data file assume you already know jq or SQL. `shape`
 is for everyone who bounces off them. Open a file and you get a fast, virtualized
-table of the actual rows beside a structure map of every field — then a
+table of the actual rows beside a structure map of every field - then a
 click-to-build visual filter, a global search, in-place cell editing, and a
 one-click export, with the **equivalent jq and SQL shown for whatever you built**
 so you can take the query with you.
 
 It reads in a single streaming pass with bounded memory, so a multi-gigabyte file
 opens without loading into RAM (past 16,384 distinct values per field it switches
-to an approximate mode — HyperLogLog cardinality + Space-Saving top-k). The same
+to an approximate mode - HyperLogLog cardinality + Space-Saving top-k). The same
 cgo-free core also ships as a command-line profiler (schema inference + breaking-
 change diffs) and a `hoijun-kim/shape@v1` GitHub Action for CI.
 
@@ -45,7 +45,7 @@ change diffs) and a `hoijun-kim/shape@v1` GitHub Action for CI.
 ## Install
 
 **Desktop app (the explorer).** Download the build for your platform from the
-[Releases page](https://github.com/hoijun-kim/shape/releases) and run it —
+[Releases page](https://github.com/hoijun-kim/shape/releases) and run it -
 `shape-gui_<version>_windows_amd64.zip`, `..._darwin_universal.zip`, or
 `..._linux_amd64.tar.gz`. The binaries are unsigned, so the first launch needs
 "Open anyway" (macOS Gatekeeper) or "More info → Run anyway" (Windows SmartScreen).
@@ -114,50 +114,50 @@ A Wails v2 desktop app under [`gui/`](gui/README.md) reuses the same Go core as
 a **data explorer**: drop in any supported file and browse the actual rows, no
 jq or SQL required.
 
-- **Explore** — a virtualized table over the real rows, with a structure map of
+- **Explore** - a virtualized table over the real rows, with a structure map of
   the file's fields alongside it. Files larger than memory stream instead of
   loading, and counts that are estimates say so.
-- **Filter** — a visual condition builder (type-aware operators, AND/OR),
+- **Filter** - a visual condition builder (type-aware operators, AND/OR),
   applied live, with a cancellable exact match count.
-- **Search** — a global search box: type any text and the rows narrow to those
+- **Search** - a global search box: type any text and the rows narrow to those
   where any field's value contains it (case-insensitive, no column to pick),
   combined with the filter and reflected in the count, the export and the code.
-- **Expand** — click a truncated object/array cell to open its full value as a
+- **Expand** - click a truncated object/array cell to open its full value as a
   collapsible tree, with a Copy button for the exact JSON.
-- **Row detail** — click a row's number to open the whole record as a
-  collapsible tree — the full, untruncated nested value (the row-level companion
+- **Row detail** - click a row's number to open the whole record as a
+  collapsible tree - the full, untruncated nested value (the row-level companion
   to Expand), with the same Copy button.
-- **Column stats** — expand a field in the structure map to see its full profile
+- **Column stats** - expand a field in the structure map to see its full profile
   in place: a distribution histogram for numbers, a top-values chart for
   categorical fields, type mix, presence/null meters, quantiles and health flags
-  — all from the single open-time profiling pass, fetched on demand, no rescan.
-- **Sort** — click a column header to sort by it (ascending → descending → off),
-  exact over the whole result on every tier — even a multi-gigabyte streaming
+  - all from the single open-time profiling pass, fetched on demand, no rescan.
+- **Sort** - click a column header to sort by it (ascending → descending → off),
+  exact over the whole result on every tier - even a multi-gigabyte streaming
   file, via a bounded keys-only index. Row numbers stay the true source ordinals
   (so they read non-contiguously under a sort), which keeps editing and cell
   lookups pointing at the right record.
-- **Reshape** — choose, reorder and rename the columns you want.
-- **Saved views** — save the current filter, search, sort and reshape under a
-  name from the header's Views menu, and re-apply it anytime — across restarts.
+- **Reshape** - choose, reorder and rename the columns you want.
+- **Saved views** - save the current filter, search, sort and reshape under a
+  name from the header's Views menu, and re-apply it anytime - across restarts.
   Views are global (they apply to whatever file is open) and live in a plain JSON
   file in your config dir.
-- **Edit** — double-click a scalar cell to change its value in place. Edited
+- **Edit** - double-click a scalar cell to change its value in place. Edited
   cells are highlighted (and the row flagged in the gutter); an "Edited only"
   toggle lists just the changes as *was → now*, each revertable. Number literals
   keep their exact text, so a 19-digit id never loses a digit. Editing is limited
   to unambiguous scalar columns (a single, non-array leaf), and it never touches
-  the file on disk — see **Save a copy** below.
-- **Save a copy** — write the whole file back out with your edits applied, as
+  the file on disk - see **Save a copy** below.
+- **Save a copy** - write the whole file back out with your edits applied, as
   JSON or NDJSON, to a *new* file. The original is left untouched, the nested
   structure is preserved (edits land at the source path, not a flattened one),
-  and every row is written — not the filtered/reshaped view. The dialog reports
+  and every row is written - not the filtered/reshaped view. The dialog reports
   how many edits applied and warns if any could not be. (Overwrite-in-place and
   CSV/Parquet saving are deliberately out of scope for now; object key order may
   change on rewrite.)
-- **Export** — write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
+- **Export** - write the filtered, reshaped result to JSON, NDJSON, CSV, TSV or
   Parquet. The export is always the complete result, never the windowed view,
   and it lands atomically: a cancelled or failed export leaves no partial file.
-- **Take the query with you** — the Code panel shows the equivalent `jq`
+- **Take the query with you** - the Code panel shows the equivalent `jq`
   expression and SQL query for whatever you built by clicking, ready to copy,
   with the places the three engines genuinely differ called out rather than
   glossed over. On a SQLite source shape also *runs* that SQL: a filter it can
@@ -181,13 +181,13 @@ Made by **Hoijun Kim** ([hoijun-kim](https://github.com/hoijun-kim)).
 ## License
 
 **PolyForm Noncommercial License 1.0.0.** shape is source-available and **free
-for any noncommercial purpose** — personal projects, research, teaching,
+for any noncommercial purpose** - personal projects, research, teaching,
 evaluation, and use by nonprofits or government. You may run, read, modify, fork
 and redistribute it for those uses.
 
 **Commercial use is not permitted under this license.** Using shape in or for a
 business's paid product, service, or operations needs a separate commercial
-license — contact **Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;**.
+license - contact **Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;**.
 
-Full terms — including the precise definitions of "noncommercial" and "permitted
-purpose" — are in [LICENSE](LICENSE).
+Full terms - including the precise definitions of "noncommercial" and "permitted
+purpose" - are in [LICENSE](LICENSE).

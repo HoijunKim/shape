@@ -1,4 +1,4 @@
-# shape E12 — Help Overlay Implementation Plan
+# shape E12 - Help Overlay Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - No new deps. cgo-free. Conventional Commits, lowercase imperative, NO co-author trailer. Every test carries a mutation proof.
-- Go tests MUST NOT touch the real profile — redirect the config dir (`t.Setenv` APPDATA + XDG_CONFIG_HOME + HOME to one temp dir).
+- Go tests MUST NOT touch the real profile - redirect the config dir (`t.Setenv` APPDATA + XDG_CONFIG_HOME + HOME to one temp dir).
 - After `wails build` never `git add -A`; revert build churn; bindings committed with the Go change (final `wails generate module` diff empty).
 - User performs the `--no-ff` merge. Branch: `feat/e12-help-overlay` off current master.
 
@@ -37,7 +37,7 @@ func configPath(name string) (string, error) {
 	return filepath.Join(dir, "shape", name), nil
 }
 ```
-Replace the body of `viewsPath()` with `return configPath("views.json")` (or delete `viewsPath` and change its two call sites in LoadViews/SaveViews to `configPath("views.json")`). Run `go test ./gui/ -run TestApp_Views -count=1` — the existing E11 round-trip test MUST still pass (this is the refactor's regression net).
+Replace the body of `viewsPath()` with `return configPath("views.json")` (or delete `viewsPath` and change its two call sites in LoadViews/SaveViews to `configPath("views.json")`). Run `go test ./gui/ -run TestApp_Views -count=1` - the existing E11 round-trip test MUST still pass (this is the refactor's regression net).
 
 - [ ] **Step 2: Write the failing test**
 
@@ -64,7 +64,7 @@ func TestApp_HelpSeen(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run — FAIL** (`a.HelpSeen` undefined). `go test ./gui/ -run TestApp_HelpSeen -count=1`
+- [ ] **Step 3: Run - FAIL** (`a.HelpSeen` undefined). `go test ./gui/ -run TestApp_HelpSeen -count=1`
 
 - [ ] **Step 4: Implement**
 
@@ -97,9 +97,9 @@ func (a *App) MarkHelpSeen() error {
 }
 ```
 
-- [ ] **Step 5: Run — PASS. Prove the mutation** — make `HelpSeen` `return true, nil` unconditionally → the absent-flag assertion fails. Restore.
+- [ ] **Step 5: Run - PASS. Prove the mutation** - make `HelpSeen` `return true, nil` unconditionally → the absent-flag assertion fails. Restore.
 
-- [ ] **Step 6: Regenerate bindings + commit** — `cd gui && wails generate module`; revert runtime churn; `gofmt -l gui/app.go` clean; `go test ./gui/`.
+- [ ] **Step 6: Regenerate bindings + commit** - `cd gui && wails generate module`; revert runtime churn; `gofmt -l gui/app.go` clean; `go test ./gui/`.
 ```bash
 git add gui/app.go gui/app_test.go gui/frontend/wailsjs/go/main/App.d.ts gui/frontend/wailsjs/go/main/App.js
 git commit -m "feat(gui): HelpSeen/MarkHelpSeen persist the first-launch flag"
@@ -116,13 +116,13 @@ git commit -m "feat(gui): HelpSeen/MarkHelpSeen persist the first-launch flag"
 
 - [ ] **Step 1: Write the failing test** (mirror SaveDialog.test's harness): renders nothing when `open=false`; when open, renders the section headings (e.g. "Getting started", "Shape the query", "Reuse & take away") and a feature name (e.g. "Saved views"); `×` and Escape each dispatch `close`; the backdrop has an `.opaque` class (not the transparent scrim). Mutation: Escape doesn't dispatch close.
 
-- [ ] **Step 2: Run — FAIL.**
+- [ ] **Step 2: Run - FAIL.**
 
-- [ ] **Step 3: Implement** — model the structure on `SaveDialog.svelte` (backdrop + dialog + Escape/focus-trap), but: the backdrop is `.backdrop.opaque` with a solid dim (`background: color-mix(in srgb, var(--surface-1) 88%, transparent)` or a solid rgba), the panel is wider + `max-height: 85vh; overflow-y: auto`, and the body is the grouped content from the spec: a `<section>` per group with an `<h3>` heading and a `<dl>`/list of `{name, description}` items. Keep the copy from the spec verbatim. Add a favicon-free, self-contained layout (no external assets).
+- [ ] **Step 3: Implement** - model the structure on `SaveDialog.svelte` (backdrop + dialog + Escape/focus-trap), but: the backdrop is `.backdrop.opaque` with a solid dim (`background: color-mix(in srgb, var(--surface-1) 88%, transparent)` or a solid rgba), the panel is wider + `max-height: 85vh; overflow-y: auto`, and the body is the grouped content from the spec: a `<section>` per group with an `<h3>` heading and a `<dl>`/list of `{name, description}` items. Keep the copy from the spec verbatim. Add a favicon-free, self-contained layout (no external assets).
 
-- [ ] **Step 4: Run — PASS. Prove the mutation** — remove the Escape branch → the Escape-close test fails. Restore.
+- [ ] **Step 4: Run - PASS. Prove the mutation** - remove the Escape branch → the Escape-close test fails. Restore.
 
-- [ ] **Step 5: check + commit** — `npm run check`; the test file.
+- [ ] **Step 5: check + commit** - `npm run check`; the test file.
 ```bash
 git add gui/frontend/src/lib/HelpOverlay.svelte gui/frontend/src/lib/HelpOverlay.test.ts
 git commit -m "feat(gui): HelpOverlay explains every feature in an opaque modal"
@@ -138,9 +138,9 @@ git commit -m "feat(gui): HelpOverlay explains every feature in an opaque modal"
 - Consumes: `HelpSeen`/`MarkHelpSeen` (generated); `HelpOverlay`.
 - Produces: a header "?" button toggling `helpOpen`; `HelpOverlay open={helpOpen}` mounted in App; first-run auto-open.
 
-- [ ] **Step 1: Header button** — TDD the "?" button in Header.test.ts (dispatches `toggleHelp`, `aria-pressed` reflects `helpOpen`), mirroring the Views-button test. Add `export let helpOpen = false;` + `toggleHelp: void;` to Header, and the button (a "?" glyph, `title="Help"`). Mutation: the button dispatches the wrong event.
+- [ ] **Step 1: Header button** - TDD the "?" button in Header.test.ts (dispatches `toggleHelp`, `aria-pressed` reflects `helpOpen`), mirroring the Views-button test. Add `export let helpOpen = false;` + `toggleHelp: void;` to Header, and the button (a "?" glyph, `title="Help"`). Mutation: the button dispatches the wrong event.
 
-- [ ] **Step 2: App wiring** — in `App.svelte`: `let helpOpen = false;`; import `HelpOverlay` + `HelpSeen, MarkHelpSeen` from the App bindings; pass `{helpOpen}` to Header + `on:toggleHelp={() => (helpOpen = !helpOpen)}`; mount `<HelpOverlay open={helpOpen} on:close={() => (helpOpen = false)} />` at App level (sibling of ViewsMenu). In `onMount`, wrapped in try/catch:
+- [ ] **Step 2: App wiring** - in `App.svelte`: `let helpOpen = false;`; import `HelpOverlay` + `HelpSeen, MarkHelpSeen` from the App bindings; pass `{helpOpen}` to Header + `on:toggleHelp={() => (helpOpen = !helpOpen)}`; mount `<HelpOverlay open={helpOpen} on:close={() => (helpOpen = false)} />` at App level (sibling of ViewsMenu). In `onMount`, wrapped in try/catch:
 ```ts
 try {
   if (!(await HelpSeen())) {
@@ -150,9 +150,9 @@ try {
 } catch { /* persistence failure -> just skip the auto-open, never block startup */ }
 ```
 
-- [ ] **Step 3: First-run test** — if App.test.ts exists, TDD there: mock `HelpSeen` → false → after mount `helpOpen` is true + `MarkHelpSeen` called; `HelpSeen` → true → `helpOpen` stays false (mutation: auto-open ignores HelpSeen → the seen case fails). If App.svelte has no test harness, add one modeled on the existing component tests (mock the App bindings + mount App), OR — if mounting App is impractical — extract the first-run decision into a tiny pure helper `shouldAutoOpenHelp(seen: boolean): boolean { return !seen; }` and unit-test that + assert the onMount calls it. Prefer the real App-mount test if the harness allows.
+- [ ] **Step 3: First-run test** - if App.test.ts exists, TDD there: mock `HelpSeen` → false → after mount `helpOpen` is true + `MarkHelpSeen` called; `HelpSeen` → true → `helpOpen` stays false (mutation: auto-open ignores HelpSeen → the seen case fails). If App.svelte has no test harness, add one modeled on the existing component tests (mock the App bindings + mount App), OR - if mounting App is impractical - extract the first-run decision into a tiny pure helper `shouldAutoOpenHelp(seen: boolean): boolean { return !seen; }` and unit-test that + assert the onMount calls it. Prefer the real App-mount test if the harness allows.
 
-- [ ] **Step 4: full suite + check + commit** — `npx vitest run`; `npm run check`.
+- [ ] **Step 4: full suite + check + commit** - `npx vitest run`; `npm run check`.
 ```bash
 git add gui/frontend/src/lib/Header.svelte gui/frontend/src/lib/Header.test.ts gui/frontend/src/App.svelte  # + any App test
 git commit -m "feat(gui): Help button + first-launch auto-open of the help overlay"
@@ -162,8 +162,8 @@ git commit -m "feat(gui): Help button + first-launch auto-open of the help overl
 
 ### Task 4: verification + docs
 
-- [ ] **Step 1: Gates** — `go test ./...`; `CGO_ENABLED=0 go build`; `npm run check` (0 errors); `npx vitest run`; `git diff --stat go.mod go.sum` empty; `wails build` (revert churn, no `git add -A`); `wails generate module` empty diff.
-- [ ] **Step 2: Docs** — gui/README.md: a short note that the header "?" opens a help overlay covering every feature, shown automatically on first launch. (README.md optional — a one-liner in the GUI list if it fits.)
+- [ ] **Step 1: Gates** - `go test ./...`; `CGO_ENABLED=0 go build`; `npm run check` (0 errors); `npx vitest run`; `git diff --stat go.mod go.sum` empty; `wails build` (revert churn, no `git add -A`); `wails generate module` empty diff.
+- [ ] **Step 2: Docs** - gui/README.md: a short note that the header "?" opens a help overlay covering every feature, shown automatically on first launch. (README.md optional - a one-liner in the GUI list if it fits.)
 - [ ] **Step 3: Commit** `docs: document the help overlay`.
 - [ ] **Step 4: Hand off** for the whole-branch review, then the user's merge.
 

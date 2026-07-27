@@ -1,4 +1,4 @@
-# shape E11 — Saved Views Implementation Plan
+# shape E11 - Saved Views Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
@@ -13,7 +13,7 @@
 - cgo-free; no new runtime deps (go.mod/go.sum unchanged; no `dependencies` growth).
 - Conventional Commits, lowercase imperative, NO `Co-Authored-By` trailer.
 - Every test carries a mutation proof.
-- Go tests MUST NOT touch the real user profile — redirect the config dir with `t.Setenv` (Windows: `APPDATA`; the test asserts via the returned path).
+- Go tests MUST NOT touch the real user profile - redirect the config dir with `t.Setenv` (Windows: `APPDATA`; the test asserts via the returned path).
 - After `wails build` never `git add -A`; revert build churn. `wails generate module` output committed WITH the Go change; final generate diff empty.
 - User performs the `--no-ff` merge. Branch: `feat/e11-saved-views` off current master.
 
@@ -27,7 +27,7 @@
 - Regenerate: `gui/frontend/wailsjs/go/main/App.d.ts`, `App.js`
 
 **Interfaces:**
-- Produces: `func (a *App) LoadViews() (string, error)` (returns `("", nil)` if the file is absent), `func (a *App) SaveViews(payload string) error` (atomic, creates the dir). Both are pure persistence — they neither parse nor validate the payload.
+- Produces: `func (a *App) LoadViews() (string, error)` (returns `("", nil)` if the file is absent), `func (a *App) SaveViews(payload string) error` (atomic, creates the dir). Both are pure persistence - they neither parse nor validate the payload.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -72,9 +72,9 @@ func TestApp_ViewsRoundTripAndAbsent(t *testing.T) {
 }
 ```
 
-(`viewsPathForTest` is a tiny test helper calling the same `viewsPath()`; or assert `os.Stat` on `filepath.Join(os.UserConfigDir(), "shape", "views.json")` — which resolves inside `tmp` on every platform thanks to the three `t.Setenv` above, all pointing at ONE shared temp dir so `viewsPath()` is consistent across calls.)
+(`viewsPathForTest` is a tiny test helper calling the same `viewsPath()`; or assert `os.Stat` on `filepath.Join(os.UserConfigDir(), "shape", "views.json")` - which resolves inside `tmp` on every platform thanks to the three `t.Setenv` above, all pointing at ONE shared temp dir so `viewsPath()` is consistent across calls.)
 
-- [ ] **Step 2: Run — FAIL** (`a.LoadViews` undefined). `go test ./gui/ -run TestApp_Views -count=1`
+- [ ] **Step 2: Run - FAIL** (`a.LoadViews` undefined). `go test ./gui/ -run TestApp_Views -count=1`
 
 - [ ] **Step 3: Implement in `gui/app.go`**
 
@@ -137,13 +137,13 @@ func (a *App) SaveViews(payload string) error {
 	return nil
 }
 ```
-Add imports `errors`, `os`, `path/filepath` to `gui/app.go` if missing. (These are NOT on the `sourceEngine` interface — they are pure App methods, no engine involvement.)
+Add imports `errors`, `os`, `path/filepath` to `gui/app.go` if missing. (These are NOT on the `sourceEngine` interface - they are pure App methods, no engine involvement.)
 
-- [ ] **Step 4: Run — PASS.**
+- [ ] **Step 4: Run - PASS.**
 
 - [ ] **Step 5: Prove the mutation**
 
-In `SaveViews`, replace the temp+rename with a direct `os.WriteFile(path, []byte(payload), 0o644)` AND change the loop's temp-file guard... simpler: mutate `LoadViews`'s absent-file branch to `return "", err` (drop the `errors.Is(os.ErrNotExist)` special-case). Run Step 4 — the absent-file assertion fails (LoadViews returns an error instead of ""). Restore. (Atomicity is covered by the "no stray temp file" assertion; a mutation dropping `os.Remove(tmpName)` on the error paths leaves a stray tmp — but those paths need a write failure to reach, so the primary mutation is the absent-file one.)
+In `SaveViews`, replace the temp+rename with a direct `os.WriteFile(path, []byte(payload), 0o644)` AND change the loop's temp-file guard... simpler: mutate `LoadViews`'s absent-file branch to `return "", err` (drop the `errors.Is(os.ErrNotExist)` special-case). Run Step 4 - the absent-file assertion fails (LoadViews returns an error instead of ""). Restore. (Atomicity is covered by the "no stray temp file" assertion; a mutation dropping `os.Remove(tmpName)` on the error paths leaves a stray tmp - but those paths need a write failure to reach, so the primary mutation is the absent-file one.)
 
 - [ ] **Step 6: Regenerate bindings + commit**
 
@@ -193,9 +193,9 @@ let views: SavedView[] = [];
 ```
 `import { LoadViews, SaveViews } from "../../../wailsjs/go/main/App";` and `SavedView` from `./types`.
 
-NOTE (cross-test safety): the init IIFE runs at store-module load, so EVERY real-store test triggers `LoadViews()`. Test files whose App mock lacks `LoadViews`/`SaveViews` will call `undefined()` — but the `try/catch` here (and `persistViews`'s `.catch`) swallow it into a `console.warn`, so no test breaks (only `store.test.ts` needs the mock entries, to assert the payloads). This is deliberate: a missing/failed persistence layer must never crash the explorer.
+NOTE (cross-test safety): the init IIFE runs at store-module load, so EVERY real-store test triggers `LoadViews()`. Test files whose App mock lacks `LoadViews`/`SaveViews` will call `undefined()` - but the `try/catch` here (and `persistViews`'s `.catch`) swallow it into a `console.warn`, so no test breaks (only `store.test.ts` needs the mock entries, to assert the payloads). This is deliberate: a missing/failed persistence layer must never crash the explorer.
 
-**CRITICAL (plan-review): views must SURVIVE open()/close().** Both reset the whole state with `set({ ...empty, ... })` (store.ts:220 open, :409 close), which would wipe `state.views` to `[]` the moment a file is opened — saved views vanish from the menu. Carry the module `views` var through BOTH resets: `set({ ...empty, status: "opening", path, views })` (open) and `set({ ...empty, views })` (close). (The `views` module var is the source of truth; the state slice is just its mirror for the UI.)
+**CRITICAL (plan-review): views must SURVIVE open()/close().** Both reset the whole state with `set({ ...empty, ... })` (store.ts:220 open, :409 close), which would wipe `state.views` to `[]` the moment a file is opened - saved views vanish from the menu. Carry the module `views` var through BOTH resets: `set({ ...empty, status: "opening", path, views })` (open) and `set({ ...empty, views })` (close). (The `views` module var is the source of truth; the state slice is just its mirror for the UI.)
 
 In `transformModel.ts`, add the Transform→draft reconstructor `applyView` needs (there is NO existing Transform→Column[] mapping; `buildTransform` only ever emits `select`, never `drop`):
 ```ts
@@ -246,7 +246,7 @@ it("deleteView removes and persists; saveView upserts by name", async () => {
 });
 ```
 
-- [ ] **Step 3: Run — FAIL** (`saveView` not a function).
+- [ ] **Step 3: Run - FAIL** (`saveView` not a function).
 
 - [ ] **Step 4: Implement**
 
@@ -286,11 +286,11 @@ function deleteView(name: string): void {
   persistViews();
 }
 ```
-Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `saveView, applyView, deleteView` in the returned object. (`projectedColumns(draft, cols)` and `draftFromTransform(transform, cols)` — the signatures confirmed above. If `setSearch("")` on an empty search is a wasteful no-op requery, it is still correct — requery supersedes.)
+Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `saveView, applyView, deleteView` in the returned object. (`projectedColumns(draft, cols)` and `draftFromTransform(transform, cols)` - the signatures confirmed above. If `setSearch("")` on an empty search is a wasteful no-op requery, it is still correct - requery supersedes.)
 
-- [ ] **Step 5: Run — PASS. Prove the mutations** — (a) omit `sort` from the `saveView` snapshot → the persist test fails; (b) drop the `setSort(v.sort)` line in `applyView` → the restore test's `q.sort` fails; (c) `views.push(v)` unconditionally (no upsert) → the upsert test finds two. Restore each. ALSO add a **views-survive-open** test: `saveView("v1")`, then `await openMemory()`, then assert `get(explorer).views` still contains `v1` (mutation: reset with `set({ ...empty })` instead of `set({ ...empty, ..., views })` → the view vanishes and this fails).
+- [ ] **Step 5: Run - PASS. Prove the mutations** - (a) omit `sort` from the `saveView` snapshot → the persist test fails; (b) drop the `setSort(v.sort)` line in `applyView` → the restore test's `q.sort` fails; (c) `views.push(v)` unconditionally (no upsert) → the upsert test finds two. Restore each. ALSO add a **views-survive-open** test: `saveView("v1")`, then `await openMemory()`, then assert `get(explorer).views` still contains `v1` (mutation: reset with `set({ ...empty })` instead of `set({ ...empty, ..., views })` → the view vanishes and this fails).
 
-- [ ] **Step 6: check + commit** — `npm run check` 0 errors; full `store.test.ts`. Commit `feat(gui): store saveView/applyView/deleteView over a persisted views slice`.
+- [ ] **Step 6: check + commit** - `npm run check` 0 errors; full `store.test.ts`. Commit `feat(gui): store saveView/applyView/deleteView over a persisted views slice`.
 
 ---
 
@@ -321,17 +321,17 @@ Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `s
 **Interfaces:**
 - Produces: a header **Views** button toggling `viewsOpen`; `ViewsMenu` mounted with `open={viewsOpen}` **in App.svelte, always rendered** (outside any status gate).
 
-**CRITICAL (plan-review): mount ViewsMenu in App.svelte, NOT inside Explorer's `status === "ready"` branch.** Saved views are global — the menu must work before any file is opened (the header Views button is always visible). If the menu mounts only in Explorer's ready branch, the button is dead on the idle/opening screens. So: App owns `viewsOpen` and renders `<ViewsMenu open={viewsOpen} on:close={() => (viewsOpen = false)} />` as a sibling of `<Header>` / `<Explorer>` (not routed through Explorer like ExportDialog). Pass `{viewsOpen}` to Header for `aria-pressed` (mirror how `codeOpen` is passed), and toggle it from Header's `toggleViews` dispatch.
+**CRITICAL (plan-review): mount ViewsMenu in App.svelte, NOT inside Explorer's `status === "ready"` branch.** Saved views are global - the menu must work before any file is opened (the header Views button is always visible). If the menu mounts only in Explorer's ready branch, the button is dead on the idle/opening screens. So: App owns `viewsOpen` and renders `<ViewsMenu open={viewsOpen} on:close={() => (viewsOpen = false)} />` as a sibling of `<Header>` / `<Explorer>` (not routed through Explorer like ExportDialog). Pass `{viewsOpen}` to Header for `aria-pressed` (mirror how `codeOpen` is passed), and toggle it from Header's `toggleViews` dispatch.
 
-- [ ] **Steps:** Read `Header.svelte` + `Header.test.ts` + `App.svelte` for the EXACT existing button/toggle pattern (Export/Code: a dispatched event `App` binds, driving a bindable prop for `aria-pressed`). TDD the Header **Views** button (toggles `viewsOpen`, `aria-pressed` reflects it — mirror the Code button's test). Mount `ViewsMenu` at App level. Mutation: the Views button toggles the wrong flag (e.g. `codeOpen`) → the aria-pressed/toggle test fails. Commit `feat(gui): Views button in the header opens the saved-views menu`.
+- [ ] **Steps:** Read `Header.svelte` + `Header.test.ts` + `App.svelte` for the EXACT existing button/toggle pattern (Export/Code: a dispatched event `App` binds, driving a bindable prop for `aria-pressed`). TDD the Header **Views** button (toggles `viewsOpen`, `aria-pressed` reflects it - mirror the Code button's test). Mount `ViewsMenu` at App level. Mutation: the Views button toggles the wrong flag (e.g. `codeOpen`) → the aria-pressed/toggle test fails. Commit `feat(gui): Views button in the header opens the saved-views menu`.
 
 ---
 
 ### Task 5: verification + docs
 
-- [ ] **Step 1: Gates** — `go test ./... -count=1`; `CGO_ENABLED=0 go build -o /dev/null .`; `cd gui/frontend && npm run check` (0 errors); `npx vitest run` (note the total); `git diff --stat go.mod go.sum` empty; `cd gui && wails build` (succeeds), revert build churn, do NOT `git add -A`; `wails generate module` empty diff vs committed.
+- [ ] **Step 1: Gates** - `go test ./... -count=1`; `CGO_ENABLED=0 go build -o /dev/null .`; `cd gui/frontend && npm run check` (0 errors); `npx vitest run` (note the total); `git diff --stat go.mod go.sum` empty; `cd gui && wails build` (succeeds), revert build churn, do NOT `git add -A`; `wails generate module` empty diff vs committed.
 
-- [ ] **Step 2: Docs** — README.md: a "Saved views" bullet in the Desktop GUI list (save the current filter/search/sort/reshape under a name, re-apply anytime). gui/README.md: a section — what a view captures, that it is global/best-effort across files, and that it persists to `<user config dir>/shape/views.json`.
+- [ ] **Step 2: Docs** - README.md: a "Saved views" bullet in the Desktop GUI list (save the current filter/search/sort/reshape under a name, re-apply anytime). gui/README.md: a section - what a view captures, that it is global/best-effort across files, and that it persists to `<user config dir>/shape/views.json`.
 
 - [ ] **Step 3: Commit** `docs: document saved views`.
 
@@ -341,6 +341,6 @@ Import `projectedColumns, draftFromTransform` from `./transformModel`. Export `s
 
 ## Self-review (against the spec)
 
-**Coverage:** config-file persistence with atomic write + absent-file handling (T1); the `SavedView` type + views slice + save/apply/delete + init load + upsert + best-effort apply (T2); the header dropdown UI (T3); the Views toggle wiring (T4); docs incl. the file location (T5). Non-goals (no per-file scoping, no rename, opaque Go blob) honored — no task adds them. ✓
+**Coverage:** config-file persistence with atomic write + absent-file handling (T1); the `SavedView` type + views slice + save/apply/delete + init load + upsert + best-effort apply (T2); the header dropdown UI (T3); the Views toggle wiring (T4); docs incl. the file location (T5). Non-goals (no per-file scoping, no rename, opaque Go blob) honored - no task adds them. ✓
 **Placeholders:** every step has concrete code or an exact file:line pattern to mirror; the two "confirm `projectedColumns` signature" / "read Header pattern" notes point at real files. No TODO/TBD. ✓
 **Types:** `SavedView { name, filter, search, sort, transform }` used identically T2↔T3; the Go blob is opaque (T1) and the frontend serialises `SavedView[]` (T2); `applyView` reuses the four existing setters with their known signatures. ✓
