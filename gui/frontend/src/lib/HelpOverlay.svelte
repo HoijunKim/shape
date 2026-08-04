@@ -4,6 +4,11 @@
   // sections. Opened by the header "?" button and once automatically on first
   // launch. Escape / × / backdrop close, with focus trap + restore.
   import { createEventDispatcher, tick } from "svelte";
+  import { BrowserOpenURL } from "../../wailsjs/runtime/runtime";
+
+  function openURL(url: string) {
+    BrowserOpenURL(url);
+  }
 
   export let open = false;
 
@@ -150,6 +155,10 @@
       {/each}
     </div>
     <div class="foot">
+      <span class="credit">shape <span class="v">v0.1.0</span> &middot; Made by <b>H.K</b> &middot;
+        <button type="button" class="creditlink" on:click={() => openURL("https://github.com/hoijun-kim/shape")}>GitHub</button> &middot;
+        <button type="button" class="creditlink" on:click={() => openURL("https://github.com/hoijun-kim/shape/blob/master/LICENSE")}>PolyForm NC 1.0.0</button>
+      </span>
       <button type="button" class="primary" on:click={close}>Got it</button>
     </div>
   </div>
@@ -193,4 +202,10 @@
     display: flex; justify-content: flex-end; padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border);
   }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .credit { font-size: 12px; color: var(--text-muted, var(--text-secondary)); }
+  .credit b { color: var(--text-primary, var(--text)); }
+  .credit .v { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .creditlink { background: 0; border: 0; padding: 0; font: inherit; font-size: 12px; color: var(--accent, var(--text-primary)); cursor: pointer; }
+  .creditlink:hover { text-decoration: underline; }
 </style>
