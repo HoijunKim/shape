@@ -32,6 +32,8 @@ the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 [![release](https://img.shields.io/github/v/release/hoijun-kim/shape?sort=semver)](https://github.com/hoijun-kim/shape/releases)
 [![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
 
+![shape](gui/docs/screenshot.png)
+
 Most tools for poking at a data file assume you already know jq or SQL. `shape`
 is for everyone who bounces off them. Open a file and you get a fast, virtualized
 table of the actual rows beside a structure map of every field - then a
