@@ -15,7 +15,7 @@
 
   A design MOCK-UP landing page (stylized UI, fictional data, not screen
   captures) lives at docs/index.html and is served via GitHub Pages at
-  https://hoijun-kim.github.io/shape/ -- it is labeled as a mock-up in-page and
+  https://hoijunkim.github.io/shape/ -- it is labeled as a mock-up in-page and
   is NOT a substitute for the real stills above.
 
   That page's favicon, touch icon and Open Graph card are generated from
@@ -28,8 +28,8 @@
 **Drag in any data file - JSON, NDJSON, CSV, TSV, Parquet, SQLite - and explore
 the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 
-[![ci](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml/badge.svg)](https://github.com/hoijun-kim/shape/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/hoijun-kim/shape?sort=semver)](https://github.com/hoijun-kim/shape/releases)
+[![ci](https://github.com/hoijunkim/shape/actions/workflows/ci.yml/badge.svg)](https://github.com/hoijunkim/shape/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/hoijunkim/shape?sort=semver)](https://github.com/hoijunkim/shape/releases)
 [![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
 
 ![shape](gui/docs/screenshot.png)
@@ -45,14 +45,14 @@ It reads in a single streaming pass with bounded memory, so a multi-gigabyte fil
 opens without loading into RAM (past 16,384 distinct values per field it switches
 to an approximate mode - HyperLogLog cardinality + Space-Saving top-k). The same
 cgo-free core also ships as a command-line profiler (schema inference + breaking-
-change diffs) and a `hoijun-kim/shape@v1` GitHub Action for CI.
+change diffs) and a `hoijunkim/shape@v1` GitHub Action for CI.
 
 → [What the desktop app does](#desktop-gui) · [Install](#install)
 
 ## Install
 
 **Desktop app (the explorer).** Download the build for your platform from the
-[Releases page](https://github.com/hoijun-kim/shape/releases) and run it -
+[Releases page](https://github.com/hoijunkim/shape/releases) and run it -
 `shape-gui_<version>_windows_amd64.zip`, `..._darwin_universal.zip`, or
 `..._linux_amd64.tar.gz`. The binaries are unsigned, so the first launch needs
 "Open anyway" (macOS Gatekeeper) or "More info → Run anyway" (Windows SmartScreen).
@@ -60,12 +60,12 @@ change diffs) and a `hoijun-kim/shape@v1` GitHub Action for CI.
 **CLI (`shape`).** The command-line profiler ships separately:
 
 ```
-go install github.com/hoijun-kim/shape@latest        # any platform with Go
-brew install --cask hoijun-kim/tap/shape             # macOS / Linux
+go install github.com/hoijunkim/shape@latest        # any platform with Go
+brew install --cask hoijunkim/tap/shape             # macOS / Linux
 ```
 
 or grab a `shape_<version>_<os>_<arch>` archive from the same
-[Releases page](https://github.com/hoijun-kim/shape/releases).
+[Releases page](https://github.com/hoijunkim/shape/releases).
 
 ## Usage
 
@@ -106,7 +106,7 @@ output.
 Gate a pull request on breaking data-shape changes:
 
 ```yaml
-- uses: hoijun-kim/shape@v1
+- uses: hoijunkim/shape@v1
   with:
     old: baseline.ndjson
     new: current.ndjson
@@ -183,7 +183,7 @@ JSON, NDJSON, CSV, TSV, Parquet, SQLite.
 
 ## Author
 
-Made by **Hoijun Kim** ([hoijun-kim](https://github.com/hoijun-kim)).
+Made by **Hoijun Kim** ([hoijunkim](https://github.com/hoijunkim)).
 
 ## License
 
