@@ -1,12 +1,12 @@
 PackageIdentifier: hoijunkim.shape
-PackageVersion: 0.1.1
+PackageVersion: 0.1.2
 PackageLocale: en-US
 Publisher: H.K
 PublisherUrl: https://github.com/hoijunkim
 PublisherSupportUrl: https://github.com/hoijunkim/shape/issues
 PackageName: shape
 PackageUrl: https://github.com/hoijunkim/shape
-License: PolyForm Noncommercial 1.0.0
+License: AGPL-3.0-only
 LicenseUrl: https://github.com/hoijunkim/shape/blob/master/LICENSE
 ShortDescription: Explore any data file by clicking - and read off the jq and SQL your clicks wrote.
 Description: >-
