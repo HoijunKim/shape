@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 	"github.com/parquet-go/parquet-go"
 )
 

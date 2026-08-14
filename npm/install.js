@@ -3,7 +3,7 @@ const path = require("path");
 const https = require("https");
 const { execSync } = require("child_process");
 
-const REPO = "hoijun-kim/shape";
+const REPO = "hoijunkim/shape";
 const version = require("./package.json").version;
 
 const platform = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform];

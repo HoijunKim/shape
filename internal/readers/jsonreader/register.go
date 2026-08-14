@@ -1,6 +1,6 @@
 package jsonreader
 
-import "github.com/hoijun-kim/shape/internal/readers"
+import "github.com/hoijunkim/shape/internal/readers"
 
 // compile-time proof that Stream satisfies the shared reader contract.
 var _ readers.RecordStream = (*Stream)(nil)

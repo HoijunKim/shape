@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // Engine is the handle registry behind the shape data-explorer's query

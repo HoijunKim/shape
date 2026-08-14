@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // ChangeKind categorizes a path-level change.

@@ -77,7 +77,7 @@ brews:
       owner: hoijun-kim
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://github.com/hoijun-kim/shape"
+    homepage: "https://github.com/hoijunkim/shape"
     description: "See the real shape of your structured data files"
     license: "MIT"
     test: |
@@ -304,7 +304,7 @@ git commit -m "feat: reusable GitHub Action for the shape diff CI gate"
   "scripts": { "postinstall": "node install.js" },
   "os": ["linux", "darwin", "win32"],
   "cpu": ["x64", "arm64"],
-  "repository": { "type": "git", "url": "https://github.com/hoijun-kim/shape" },
+  "repository": { "type": "git", "url": "https://github.com/hoijunkim/shape" },
   "license": "MIT",
   "files": ["bin/", "install.js"]
 }

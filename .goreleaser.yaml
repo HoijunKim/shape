@@ -15,7 +15,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w -X github.com/hoijun-kim/shape/internal/cmd.Version={{ .Version }}
+      - -s -w -X github.com/hoijunkim/shape/internal/cmd.Version={{ .Version }}
 
 archives:
   - id: shape
@@ -35,16 +35,16 @@ homebrew_casks:
     binaries:
       - shape
     repository:
-      owner: hoijun-kim
+      owner: hoijunkim
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://github.com/hoijun-kim/shape"
+    homepage: "https://github.com/hoijunkim/shape"
     description: "See the real shape of your structured data files"
     license: "PolyForm-Noncommercial-1.0.0"
 
 release:
   github:
-    owner: hoijun-kim
+    owner: hoijunkim
     name: shape
 
 changelog:

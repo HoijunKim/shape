@@ -3,7 +3,7 @@ package visual
 import (
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 func num(kinds ...profile.JSONKind) map[profile.JSONKind]float64 {

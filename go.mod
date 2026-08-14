@@ -1,4 +1,4 @@
-module github.com/hoijun-kim/shape
+module github.com/hoijunkim/shape
 
 go 1.25.0
 

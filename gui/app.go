@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hoijun-kim/shape/internal/diff"
-	"github.com/hoijun-kim/shape/internal/pipeline"
-	"github.com/hoijun-kim/shape/internal/query"
-	"github.com/hoijun-kim/shape/internal/visual"
+	"github.com/hoijunkim/shape/internal/diff"
+	"github.com/hoijunkim/shape/internal/pipeline"
+	"github.com/hoijunkim/shape/internal/query"
+	"github.com/hoijunkim/shape/internal/visual"
 	wr "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

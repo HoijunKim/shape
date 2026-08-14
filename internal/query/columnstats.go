@@ -3,7 +3,7 @@ package query
 import (
 	"context"
 
-	"github.com/hoijun-kim/shape/internal/visual"
+	"github.com/hoijunkim/shape/internal/visual"
 )
 
 // ColumnStatsRequest asks for the rich profile of ONE source field.

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hoijun-kim/shape/internal/query"
+	"github.com/hoijunkim/shape/internal/query"
 )
 
 const sampleNDJSON = "../internal/cmd/testdata/sample.ndjson"

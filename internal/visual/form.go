@@ -1,6 +1,6 @@
 package visual
 
-import "github.com/hoijun-kim/shape/internal/profile"
+import "github.com/hoijunkim/shape/internal/profile"
 
 // dominantKind returns the single non-null folded kind ("number", "string",
 // "bool", "array", "object") observed in fp.TypeDist. Int and float fold to

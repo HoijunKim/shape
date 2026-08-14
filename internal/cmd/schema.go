@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/hoijun-kim/shape/internal/schema"
+	"github.com/hoijunkim/shape/internal/schema"
 	"github.com/spf13/cobra"
 )
 

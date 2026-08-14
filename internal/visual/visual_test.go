@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 var update = flag.Bool("update", false, "update golden files")

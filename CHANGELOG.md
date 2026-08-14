@@ -62,7 +62,7 @@ Drag any data file in and work with the actual rows - no jq or SQL.
 - **schema** - infer a JSON Schema (Draft 2020-12).
 - **diff** - compare two snapshots and flag breaking changes before they reach
   downstream consumers.
-- **GitHub Action** - `hoijun-kim/shape@v1` for CI.
+- **GitHub Action** - `hoijunkim/shape@v1` for CI.
 
 ### Engineering
 
@@ -70,5 +70,5 @@ Drag any data file in and work with the actual rows - no jq or SQL.
   (bounded in-memory, streaming re-scan, native SQLite, native Parquet) returning
   byte-identical rows, so results are the same whatever the source or size.
 
-[Unreleased]: https://github.com/hoijun-kim/shape/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hoijun-kim/shape/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hoijunkim/shape/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/hoijunkim/shape/releases/tag/v0.1.0

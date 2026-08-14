@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/diff"
+	"github.com/hoijunkim/shape/internal/diff"
 )
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ package visual
 import (
 	"strings"
 
-	"github.com/hoijun-kim/shape/internal/diff"
+	"github.com/hoijunkim/shape/internal/diff"
 )
 
 // diffGroupOrder fixes the DiffGroup partition/display order, per design §6:

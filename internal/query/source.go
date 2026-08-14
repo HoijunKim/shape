@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/hoijun-kim/shape/internal/pipeline"
-	"github.com/hoijun-kim/shape/internal/profile"
-	"github.com/hoijun-kim/shape/internal/readers"
-	"github.com/hoijun-kim/shape/internal/readers/jsonreader"
+	"github.com/hoijunkim/shape/internal/pipeline"
+	"github.com/hoijunkim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers/jsonreader"
 )
 
 // DefaultMemBudgetBytes is OpenSource's default ingest budget (spec §4):

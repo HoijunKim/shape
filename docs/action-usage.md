@@ -7,7 +7,7 @@ when a data-shape change breaks consumers of the old snapshot.
 ## Usage
 
 ```yaml
-- uses: hoijun-kim/shape@v1
+- uses: hoijunkim/shape@v1
   with:
     old: baseline.ndjson
     new: current.ndjson
@@ -37,7 +37,7 @@ The action's single step runs on `bash` and:
    uses the given tag directly.
 3. Downloads the matching release archive
    (`shape_<version>_<os>_<arch>.tar.gz`) from
-   `https://github.com/hoijun-kim/shape/releases/...` and extracts the
+   `https://github.com/hoijunkim/shape/releases/...` and extracts the
    `shape` binary.
 4. Runs `shape diff --fail-on <fail-on> <old> <new>`, so the step's exit code
    is `shape diff`'s exit code.
@@ -47,7 +47,7 @@ This only supports Linux and macOS runners (the download step extracts a
 
 ## Requirements
 
-- The `hoijun-kim/shape` repository must be public and have at least one
+- The `hoijunkim/shape` repository must be public and have at least one
   GitHub release with the standard GoReleaser archive naming
   (`shape_<version>_<os>_<arch>.tar.gz`) for this action to find a binary to
   download.

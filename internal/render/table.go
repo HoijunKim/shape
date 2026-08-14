@@ -5,7 +5,7 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // Table writes a human-readable profile table to w.

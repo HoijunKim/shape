@@ -7,14 +7,14 @@ import (
 	"io"
 	"os"
 
-	"github.com/hoijun-kim/shape/internal/diff"
-	"github.com/hoijun-kim/shape/internal/profile"
-	"github.com/hoijun-kim/shape/internal/readers"
-	_ "github.com/hoijun-kim/shape/internal/readers/csvreader"     // register csv
-	_ "github.com/hoijun-kim/shape/internal/readers/jsonreader"    // register json
-	_ "github.com/hoijun-kim/shape/internal/readers/parquetreader" // register parquet
-	_ "github.com/hoijun-kim/shape/internal/readers/sqlitereader"  // register sqlite
-	"github.com/hoijun-kim/shape/internal/schema"
+	"github.com/hoijunkim/shape/internal/diff"
+	"github.com/hoijunkim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/readers"
+	_ "github.com/hoijunkim/shape/internal/readers/csvreader"     // register csv
+	_ "github.com/hoijunkim/shape/internal/readers/jsonreader"    // register json
+	_ "github.com/hoijunkim/shape/internal/readers/parquetreader" // register parquet
+	_ "github.com/hoijunkim/shape/internal/readers/sqlitereader"  // register sqlite
+	"github.com/hoijunkim/shape/internal/schema"
 )
 
 // Options carries every knob the CLI flags expose, so the CLI and GUI share one

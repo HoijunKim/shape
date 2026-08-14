@@ -67,7 +67,7 @@ def make_og():
     d.text((96, 556), "Free for noncommercial use.", font=font("segoeui.ttf", 26), fill=MUTED, anchor="ls")
     d.text(
         (1104, 556),
-        "hoijun-kim.github.io/shape",
+        "hoijunkim.github.io/shape",
         font=font("CascadiaCode-Regular.ttf", 24),
         fill=MUTED,
         anchor="rs",

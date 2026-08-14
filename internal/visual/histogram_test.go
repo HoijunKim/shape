@@ -3,7 +3,7 @@ package visual
 import (
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 func hbins(pairs ...float64) []profile.HistBin { // value,count,value,count,...

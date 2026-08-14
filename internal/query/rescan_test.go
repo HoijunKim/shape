@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 // manyNumberedRecords returns records with a numeric "n" (shuffled, so sorted

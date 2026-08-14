@@ -3,7 +3,7 @@ package schema
 import (
 	"sort"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 const draft = "https://json-schema.org/draft/2020-12/schema"

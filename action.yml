@@ -37,7 +37,7 @@ runs:
           aarch64|arm64) arch=arm64 ;;
           *) echo "unsupported arch: $arch" >&2; exit 2 ;;
         esac
-        repo="hoijun-kim/shape"
+        repo="hoijunkim/shape"
         if [ "$SHAPE_VERSION" = "latest" ]; then
           base="https://github.com/$repo/releases/latest/download"
           ver="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's#.*/tag/##')"

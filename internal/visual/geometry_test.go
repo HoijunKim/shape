@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 func almostEqual(a, b float64) bool {

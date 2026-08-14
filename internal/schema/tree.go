@@ -3,7 +3,7 @@ package schema
 import (
 	"strings"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 type step struct {

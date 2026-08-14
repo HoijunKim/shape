@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 func makeDB(t *testing.T, stmts ...string) string {

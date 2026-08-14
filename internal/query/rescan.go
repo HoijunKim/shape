@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hoijun-kim/shape/internal/pipeline"
-	"github.com/hoijun-kim/shape/internal/profile"
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/pipeline"
+	"github.com/hoijunkim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 // var _ Backend ensures rescanBackend satisfies the Backend interface at

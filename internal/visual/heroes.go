@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // clamp restricts f to the closed interval [lo, hi].

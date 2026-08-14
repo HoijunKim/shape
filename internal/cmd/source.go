@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"github.com/hoijun-kim/shape/internal/pipeline"
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/pipeline"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // profileSource is the CLI's adapter over the shared pipeline.

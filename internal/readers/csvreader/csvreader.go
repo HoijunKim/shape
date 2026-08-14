@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 var _ readers.RecordStream = (*stream)(nil)

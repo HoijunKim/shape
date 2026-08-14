@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/hoijun-kim/shape/internal/render"
+	"github.com/hoijunkim/shape/internal/render"
 	"github.com/spf13/cobra"
 )
 

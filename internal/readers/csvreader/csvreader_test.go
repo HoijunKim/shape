@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 func drain(t *testing.T, s readers.RecordStream) []map[string]any {

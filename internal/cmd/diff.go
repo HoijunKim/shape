@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hoijun-kim/shape/internal/diff"
+	"github.com/hoijunkim/shape/internal/diff"
 	"github.com/spf13/cobra"
 )
 

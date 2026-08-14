@@ -1,6 +1,6 @@
 package visual
 
-import "github.com/hoijun-kim/shape/internal/profile"
+import "github.com/hoijunkim/shape/internal/profile"
 
 // displayHistogram re-bins fp.Histogram (<=64 variable-width streaming
 // centroids) into DisplayBins=20 equal-width bars using point-mass at each

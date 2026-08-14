@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 // maxMatchCacheEntries caps how many distinct match bitsets one memBackend

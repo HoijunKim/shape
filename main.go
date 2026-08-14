@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hoijun-kim/shape/internal/cmd"
+	"github.com/hoijunkim/shape/internal/cmd"
 )
 
 func main() {

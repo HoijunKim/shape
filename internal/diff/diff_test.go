@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/profile"
+	"github.com/hoijunkim/shape/internal/profile"
 )
 
 func fp(path string, mut func(*profile.FieldProfile)) profile.FieldProfile {

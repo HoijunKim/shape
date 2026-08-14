@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver (cgo-free)
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hoijun-kim/shape/internal/readers"
+	"github.com/hoijunkim/shape/internal/readers"
 )
 
 func TestRegisteredJSONFactory(t *testing.T) {

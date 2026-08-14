@@ -1,13 +1,13 @@
-# @hoijun-kim/shape
+# @hoijunkim/shape
 
-npm wrapper for [shape](https://github.com/hoijun-kim/shape), a CLI that profiles
+npm wrapper for [shape](https://github.com/hoijunkim/shape), a CLI that profiles
 structured data files, infers a JSON Schema, and diffs snapshots for breaking
 changes.
 
 ## Install
 
 ```
-npm install -g @hoijun-kim/shape
+npm install -g @hoijunkim/shape
 ```
 
 The `postinstall` script downloads the matching `shape` release binary for
@@ -16,7 +16,7 @@ compiler or Go toolchain required.
 
 ## Usage
 
-See the main [README](https://github.com/hoijun-kim/shape#readme) for the
+See the main [README](https://github.com/hoijunkim/shape#readme) for the
 full command reference (`shape profile`, `shape schema`, `shape diff`).
 
 ```
