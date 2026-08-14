@@ -20,7 +20,7 @@
     <p class="drop-hint">Supports JSON, NDJSON, CSV, TSV, Parquet and SQLite</p>
   </div>
   <p class="credit">
-    by Hoijun Kim · PolyForm Noncommercial 1.0.0 (no commercial use)
+    by Hoijun Kim · AGPL-3.0 · commercial licence on request
   </p>
 </div>
 

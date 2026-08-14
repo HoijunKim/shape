@@ -40,7 +40,7 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://github.com/hoijunkim/shape"
     description: "See the real shape of your structured data files"
-    license: "PolyForm-Noncommercial-1.0.0"
+    license: "AGPL-3.0-only"
 
 release:
   github:

@@ -155,9 +155,9 @@
       {/each}
     </div>
     <div class="foot">
-      <span class="credit">shape <span class="v">v0.1.1</span> &middot; Made by <b>H.K</b> &middot;
+      <span class="credit">shape <span class="v">v0.1.2</span> &middot; Made by <b>H.K</b> &middot;
         <button type="button" class="creditlink" on:click={() => openURL("https://github.com/hoijunkim/shape")}>GitHub</button> &middot;
-        <button type="button" class="creditlink" on:click={() => openURL("https://github.com/hoijunkim/shape/blob/master/LICENSE")}>PolyForm NC 1.0.0</button>
+        <button type="button" class="creditlink" on:click={() => openURL("https://github.com/hoijunkim/shape/blob/master/LICENSE")}>AGPL-3.0</button>
       </span>
       <button type="button" class="primary" on:click={close}>Got it</button>
     </div>

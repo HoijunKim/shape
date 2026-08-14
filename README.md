@@ -30,7 +30,7 @@ the real rows. Filter, reshape, edit, export. No jq. No SQL.**
 
 [![ci](https://github.com/hoijunkim/shape/actions/workflows/ci.yml/badge.svg)](https://github.com/hoijunkim/shape/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/hoijunkim/shape?sort=semver)](https://github.com/hoijunkim/shape/releases)
-[![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 ![shape](gui/docs/screenshot.png)
 
@@ -187,14 +187,17 @@ Made by **Hoijun Kim** ([hoijunkim](https://github.com/hoijunkim)).
 
 ## License
 
-**PolyForm Noncommercial License 1.0.0.** shape is source-available and **free
-for any noncommercial purpose** - personal projects, research, teaching,
-evaluation, and use by nonprofits or government. You may run, read, modify, fork
-and redistribute it for those uses.
+Copyright © Hoijun Kim.
 
-**Commercial use is not permitted under this license.** Using shape in or for a
-business's paid product, service, or operations needs a separate commercial
-license - contact **Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;**.
+**Open source: AGPL-3.0.** Run it, read it, modify it, fork it, redistribute
+it - commercial use included. The condition that matters in practice: if you
+modify shape and let others use it over a network, you owe them the modified
+source. Full terms in [LICENSE](LICENSE).
 
-Full terms - including the precise definitions of "noncommercial" and "permitted
-purpose" - are in [LICENSE](LICENSE).
+**Commercial licensing:** contact the copyright holder,
+**Hoijun Kim &lt;hoijun.kim00@gmail.com&gt;** - for shipping shape inside a
+closed-source product, or running a modified version as a service without
+publishing the changes. See [LICENSING.md](LICENSING.md).
+
+Releases up to 0.1.1 were published under the PolyForm Noncommercial License
+1.0.0 and keep it; 0.1.2 onward is AGPL-3.0.

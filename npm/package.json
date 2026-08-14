@@ -7,6 +7,6 @@
   "os": ["linux", "darwin", "win32"],
   "cpu": ["x64", "arm64"],
   "repository": { "type": "git", "url": "https://github.com/hoijunkim/shape" },
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "files": ["bin/", "install.js"]
 }

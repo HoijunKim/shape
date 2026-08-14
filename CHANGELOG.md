@@ -8,6 +8,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Nothing yet._
 
+## [0.1.2] - 2026-08-14
+
+### Changed
+
+- **Relicensed to AGPL-3.0.** shape was source-available under the PolyForm
+  Noncommercial License 1.0.0, which barred commercial use outright. It is now
+  open source: run it, read it, modify it, fork it, redistribute it, commercial
+  use included. The obligation that replaces the old prohibition is the AGPL's -
+  modify shape and let others use it over a network, and you owe them the
+  modified source.
+- **Commercial licensing** covers the cases the AGPL does not: shipping shape
+  inside a closed-source product, or running a modified version as a service
+  without publishing the changes. Contact the copyright holder. See
+  [LICENSING.md](LICENSING.md).
+- `npm/package.json` declared `MIT`, which was never the licence. It declares
+  `AGPL-3.0-only` with everything else.
+
+### Note
+
+Releases up to and including 0.1.1 shipped under PolyForm and keep it - the
+artifacts published then carry the licence they were published under. The
+relicence applies from this version. Every line is the copyright holder's own
+work, and the dependencies (Apache-2.0, MIT, BSD-3-Clause) are all compatible
+with an AGPL-3.0 outbound licence.
+
 ## [0.1.1] - 2026-08-14
 
 The author's GitHub account was renamed from `hoijun-kim` to `hoijunkim`, which
@@ -94,6 +119,7 @@ Drag any data file in and work with the actual rows - no jq or SQL.
   (bounded in-memory, streaming re-scan, native SQLite, native Parquet) returning
   byte-identical rows, so results are the same whatever the source or size.
 
-[Unreleased]: https://github.com/hoijunkim/shape/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/hoijunkim/shape/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/hoijunkim/shape/releases/tag/v0.1.2
 [0.1.1]: https://github.com/hoijunkim/shape/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hoijunkim/shape/releases/tag/v0.1.0
