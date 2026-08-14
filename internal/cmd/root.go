@@ -3,7 +3,7 @@ package cmd
 import "github.com/spf13/cobra"
 
 // Version is the CLI version string, overridable at build time via -ldflags.
-var Version = "0.1.0-dev"
+var Version = "0.1.1-dev"
 
 // NewRootCmd builds the root `shape` command.
 func NewRootCmd() *cobra.Command {

@@ -8,6 +8,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Nothing yet._
 
+## [0.1.1] - 2026-08-14
+
+The author's GitHub account was renamed from `hoijun-kim` to `hoijunkim`, which
+moves everything that names it. No behaviour changed; this release exists so
+the new paths have a version to resolve to.
+
+### Changed
+
+- **Module path** is `github.com/hoijunkim/shape`. A module has to declare the
+  path it is fetched from, so `go install github.com/hoijunkim/shape@latest`
+  needs a tag cut after the move - 0.1.0 still declares the old path and cannot
+  be installed under the new one.
+- **Install paths** follow the account: the cask is `hoijunkim/tap/shape`, the
+  npm package `@hoijunkim/shape`, the Action `hoijunkim/shape@v1`, and the
+  winget package `hoijunkim.shape`.
+- **Links** in the README, the landing page and the docs point at
+  `github.com/hoijunkim/shape` and `hoijunkim.github.io/shape`.
+
+### Note
+
+`github.com/hoijun-kim/shape` keeps working only while GitHub redirects the old
+account name, which it stops doing if someone else claims it. Prefer the new
+path.
+
 ## [0.1.0] - 2026-07-27
 
 First release. shape is a cgo-free Go tool for structured data - a command-line
@@ -70,5 +94,6 @@ Drag any data file in and work with the actual rows - no jq or SQL.
   (bounded in-memory, streaming re-scan, native SQLite, native Parquet) returning
   byte-identical rows, so results are the same whatever the source or size.
 
-[Unreleased]: https://github.com/hoijunkim/shape/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hoijunkim/shape/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/hoijunkim/shape/releases/tag/v0.1.1
 [0.1.0]: https://github.com/hoijunkim/shape/releases/tag/v0.1.0
