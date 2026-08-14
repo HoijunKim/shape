@@ -1,5 +1,5 @@
 PackageIdentifier: hoijunkim.shape
-PackageVersion: 0.1.0
+PackageVersion: 0.1.1
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -7,7 +7,7 @@ NestedInstallerFiles:
     PortableCommandAlias: shape
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/hoijunkim/shape/releases/download/v0.1.0/shape-gui_v0.1.0_windows_amd64.zip
-    InstallerSha256: C8CBA58CBBA4B0C34F23AACE4F3F632A2E33FB76EDC20E157EC536B924BDBFBB
+    InstallerUrl: https://github.com/hoijunkim/shape/releases/download/v0.1.1/shape-gui_v0.1.1_windows_amd64.zip
+    InstallerSha256: A2291CFFACDE9B76BB1FE7BE344F90E342A46082EE355FB19311E97C5CD41E59
 ManifestType: installer
 ManifestVersion: 1.6.0
