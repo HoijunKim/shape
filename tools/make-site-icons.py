@@ -64,7 +64,7 @@ def make_og():
         fill=INK_2,
         anchor="ls",
     )
-    d.text((96, 556), "Free for noncommercial use.", font=font("segoeui.ttf", 26), fill=MUTED, anchor="ls")
+    d.text((96, 556), "Open source, AGPL-3.0.", font=font("segoeui.ttf", 26), fill=MUTED, anchor="ls")
     d.text(
         (1104, 556),
         "hoijunkim.github.io/shape",
